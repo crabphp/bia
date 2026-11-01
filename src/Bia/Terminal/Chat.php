@@ -33,7 +33,10 @@ use Crab\Engine\Suspension;
  */
 final class Chat
 {
-    private const PLACEHOLDER = 'Ask anything · / for commands · @ for files';
+    private const PLACEHOLDER = 'Ask anything · / commands · @ files';
+
+    /** Bia, the fat cat this is named for. */
+    private const MASCOT = ['▙▄▄▄▄▄▟', '█▙███▟█'];
 
     private readonly Editor $editor;
     private readonly Commands $commands;
@@ -90,21 +93,20 @@ final class Chat
             },
         );
         $this->commands = (new Commands())
-            ->add('model', 'Switch model; without a name, pick from your providers', $this->model(...), '[provider/model]')
-            ->add('resume', 'Resume a session; without an id, pick one of this folder\'s', $this->resume(...), '[session-id]')
+            ->add('model', 'Switch model', $this->model(...), '[provider/model]')
+            ->add('resume', 'Resume a session', $this->resume(...), '[session-id]')
             ->add('new', 'Start a new session', $this->newSession(...))
-            ->add('compact', 'Summarize the conversation so far', function (string $_): void {
+            ->add('compact', 'Summarize the conversation', function (string $_): void {
                 if ($this->sessionId === null) {
-                    $this->say('Nothing to compact yet');
+                    $this->say('Nothing to compact');
                     return;
                 }
                 $this->work('Compacting', fn (Cancellation $c) => $this->agent?->compact((string) $this->sessionId, $c));
             })
             ->add('clear', 'Clear the screen', function (string $_): void {
-                $this->terminal->write("\e[2J\e[3J\e[H");
-                $this->region->redraw();
+                $this->region->clear(scrollback: true);
             })
-            ->add('help', 'Show commands and keys', $this->help(...))
+            ->add('help', 'Commands and keys', $this->help(...))
             ->add('exit', 'Leave Bia', function (string $_): void {
                 $this->running = false;
             }, aliases: ['quit']);
@@ -119,8 +121,8 @@ final class Chat
         $suspension = EventLoop::current()->getSuspension();
         $this->confirming = $suspension;
         $this->openMenu('confirm', $question, new SelectList([
-            ['value' => 'yes', 'label' => 'Yes', 'hint' => 'run it'],
-            ['value' => 'no', 'label' => 'No', 'hint' => 'tell the model it was declined'],
+            ['value' => 'yes', 'label' => 'Yes'],
+            ['value' => 'no', 'label' => 'No'],
         ], filters: false));
         $this->draw();
         try {
@@ -144,7 +146,7 @@ final class Chat
                 $this->draw();
             })
             : null;
-        $this->region->print(Style::dim("bia {$this->version} · {$this->config->modelLabel()} · /help for commands") . "\n");
+        $this->region->print($this->banner(max(20, $this->terminal->columns())));
         if ($this->sessionId !== null) {
             $this->replay($this->sessionId);
         } elseif ($this->pickSession) {
@@ -172,7 +174,7 @@ final class Chat
             $this->region->close();
             $this->terminal->leave();
             if ($this->used && $this->sessionId !== null) {
-                $this->terminal->write("\n" . Style::dim('Resume this session with:') . ' ' . Style::accent("bia resume {$this->sessionId}") . "\n");
+                $this->terminal->write("\n" . Style::accent("bia resume {$this->sessionId}") . "\n");
             }
         }
     }
@@ -210,8 +212,7 @@ final class Chat
             return;
         }
         if ($key->is('ctrl-l')) {
-            $this->terminal->write("\e[2J\e[H");
-            $this->region->redraw();
+            $this->region->clear();
             return;
         }
         if ($this->menuKind === 'model' || $this->menuKind === 'session') {
@@ -261,7 +262,7 @@ final class Chat
             return;
         }
         $this->exitArmed = microtime(true);
-        $this->say('Press Ctrl-C again to leave', 2.0);
+        $this->say('Ctrl-C again to leave', 2.0);
     }
 
     private function submit(string $text): void
@@ -277,11 +278,11 @@ final class Chat
         if (Commands::looksLikeOne($text)) {
             $name = strtolower((string) strtok(substr($text, 1), " \n"));
             if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'clear'], true)) {
-                $this->say("Wait for the turn to finish, or press Esc, before /{$name}");
+                $this->say("Busy · Esc to stop");
                 return;
             }
             if (!$this->commands->run($text)) {
-                $this->say("No command /{$name}; /help lists them");
+                $this->say("Unknown command /{$name}");
             }
             return;
         }
@@ -353,7 +354,7 @@ final class Chat
             $this->switchModel($name);
             return;
         }
-        $this->openMenu('model', 'Model  (type to filter, Enter to switch, Esc to close)', new SelectList([], 10, empty: 'Loading models…'));
+        $this->openMenu('model', 'Model', new SelectList([], 10, empty: 'Loading models…'));
         $current = $this->config->modelLabel();
         Task::spawn(EventLoop::current(), function () use ($current): void {
             $found = $this->catalog->list($this->config->providers());
@@ -369,11 +370,11 @@ final class Chat
                 'label' => $model,
                 'hint' => $model === $current ? 'current' : '',
             ], $models);
-            $title = 'Model  (type to filter, Enter to switch, Esc to close)';
+            $title = 'Model';
             foreach ($found['errors'] as $provider => $error) {
                 $title .= "  · {$provider}: {$error}";
             }
-            $this->openMenu('model', $title, new SelectList($items, 10, $current, empty: 'No models; give a provider a key, or type /model provider/name'));
+            $this->openMenu('model', $title, new SelectList($items, 10, $current, empty: 'No models'));
             $this->draw();
         });
     }
@@ -411,7 +412,7 @@ final class Chat
         if ($id !== '') {
             $found = $this->sessions->resolve($id);
             if ($found === null) {
-                $this->say("No single session starts with {$id}");
+                $this->say("No session {$id}");
                 return;
             }
             $this->switchSession($found);
@@ -424,14 +425,13 @@ final class Chat
                 continue;
             }
             $title = trim((string) preg_replace('/\s+/', ' ', (string) ($session['title'] ?? '')));
-            $messages = (int) $session['entry_count'];
             $items[] = [
                 'value' => (string) $session['id'],
                 'label' => $title !== '' ? $title : '(forked, ' . substr((string) $session['id'], 0, 8) . ')',
-                'hint' => self::ago($now - (int) strtotime((string) $session['updated_at'])) . ' · ' . $messages . ($messages === 1 ? ' entry' : ' entries') . ' · ' . $session['model'],
+                'hint' => self::ago($now - (int) strtotime((string) $session['updated_at'])) . ' · ' . $session['model'],
             ];
         }
-        $this->openMenu('session', 'Resume  (type to filter, Enter to resume, Esc to close)', new SelectList($items, 10, empty: 'No other sessions in this folder'));
+        $this->openMenu('session', 'Resume', new SelectList($items, 10, empty: 'No other sessions'));
     }
 
     private function switchSession(string $id): void
@@ -441,7 +441,7 @@ final class Chat
         $this->used = true;
         $this->contextTokens = null;
         $this->lineStart();
-        $this->region->print("\n" . Style::dim("· resumed session {$id}") . "\n");
+        $this->region->print("\n" . Style::dim("· resumed {$id}") . "\n");
         $this->replay($id);
     }
 
@@ -452,7 +452,7 @@ final class Chat
     {
         if ($this->used && $this->sessionId !== null) {
             $this->lineStart();
-            $this->region->print(Style::dim("· left session {$this->sessionId}; bia resume {$this->sessionId} or /resume comes back") . "\n");
+            $this->region->print(Style::dim("· left {$this->sessionId}") . "\n");
         }
     }
 
@@ -620,16 +620,29 @@ final class Chat
             }
         } else {
             [$rows, [$row, $column]] = $this->editor->render($width, self::PLACEHOLDER);
+            // Suggestions open above the input, so the input does not move as they come and go.
+            if ($this->menu !== null) {
+                array_push($lines, ...$this->menu->render($width));
+            }
             $lines[] = $rule;
             $cursor = [count($lines) + $row, $column];
             array_push($lines, ...$rows);
             $lines[] = $rule;
-            if ($this->menu !== null) {
-                array_push($lines, ...$this->menu->render($width));
-            }
         }
         $lines[] = $this->status($width);
         $this->region->set($lines, $cursor);
+    }
+
+    /**
+     * The greeting: Bia the cat beside the version, model and place.
+     */
+    private function banner(int $width): string
+    {
+        $room = max(0, $width - 10);
+        $top = Style::bold('bia') . ' ' . Style::dim(Style::truncate("{$this->version} · {$this->config->modelLabel()}", max(0, $room - 4)));
+        $bottom = Style::dim(Style::truncate($this->place, $room));
+        return Style::accent(self::MASCOT[0]) . '   ' . $top . "\n"
+            . Style::accent(self::MASCOT[1]) . '   ' . $bottom . "\n\n";
     }
 
     private function status(int $width): string
