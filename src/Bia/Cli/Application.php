@@ -68,7 +68,7 @@ final class Application
                 return self::fork($words);
             }
             if ($command === 'init') {
-                return self::init();
+                return ($options['global'] ?? false) === true ? self::initGlobal() : self::init();
             }
             if ($command === 'resume') {
                 array_shift($words);
@@ -98,7 +98,7 @@ final class Application
               bia sessions
               bia fork <session-id>
               bia export <session-id>
-              bia init
+              bia init [--global]
 
             Options:
               --model NAME       Select the model
@@ -181,6 +181,35 @@ final class Application
         file_put_contents($path, json_encode([
             'prompt' => ['system' => 'You are Bia, a fast coding assistant. Be precise and concise.'],
         ], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . PHP_EOL);
+        fwrite(STDOUT, "Created {$path}" . PHP_EOL);
+        return 0;
+    }
+
+    /**
+     * Writes ~/.config/bia/config.php with every setting commented out at its
+     * default. A file with settings in it is left alone; a blank one is filled.
+     */
+    private static function initGlobal(): int
+    {
+        $path = Config::globalPath();
+        if (is_file($path) && trim((string) file_get_contents($path)) !== '') {
+            fwrite(STDOUT, "Your Bia config already exists at {$path}; it was left as it is." . PHP_EOL);
+            return 0;
+        }
+        $directory = dirname($path);
+        if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
+            throw new \RuntimeException("Cannot create {$directory}.");
+        }
+        // It may come to hold an API key: readable by you alone.
+        $previous = umask(0077);
+        try {
+            if (file_put_contents($path, Config::template()) === false) {
+                throw new \RuntimeException("Cannot write {$path}.");
+            }
+        } finally {
+            umask($previous);
+        }
+        chmod($path, 0600);
         fwrite(STDOUT, "Created {$path}" . PHP_EOL);
         return 0;
     }
@@ -439,6 +468,10 @@ final class Application
             }
             if ($argument === '--yes') {
                 $options['yes'] = true;
+                continue;
+            }
+            if ($argument === '--global') {
+                $options['global'] = true;
                 continue;
             }
             [$name, $value] = str_contains($argument, '=')

@@ -32,53 +32,11 @@ final readonly class Config
     public static function load(?string $projectRoot = null, array $overrides = []): self
     {
         $projectRoot ??= self::findProjectRoot(getcwd());
-        $home = self::home();
-        $configHome = self::directory('XDG_CONFIG_HOME', $home . '/.config');
-        $stateHome = self::directory('XDG_STATE_HOME', $home . '/.local/state');
-        $cacheHome = self::directory('XDG_CACHE_HOME', $home . '/.cache');
-        $defaults = [
-            'model' => [
-                'provider' => 'openai-compatible',
-                'base_url' => 'https://api.openai.com/v1',
-                'endpoint' => 'chat/completions',
-                'api_key' => null,
-                'name' => 'gpt-5',
-                // A whole reply may take this long; a server silent for idle_timeout seconds is given up on.
-                'timeout' => 3600.0,
-                'idle_timeout' => 120.0,
-                // Tokens the model can take in one request; compaction keeps below it.
-                'context_window' => 128_000,
-            ],
-            'prompt' => [
-                'system' => 'You are Bia, a fast coding assistant. Be precise and concise.',
-            ],
-            'permissions' => [
-                'read' => 'auto',
-                'write' => 'auto',
-                'shell' => 'auto',
-            ],
-            'tools' => [
-                'shell_timeout' => 120.0,
-                // Tool output past either limit is cut, and saved in full under cache.path.
-                'output_bytes' => 51_200,
-                'output_lines' => 2000,
-            ],
-            'compaction' => [
-                'enabled' => true,
-                'reserve_tokens' => 16_384,
-                'keep_tokens' => 20_000,
-            ],
-            'storage' => [
-                'path' => $stateHome . '/bia/bia.sqlite',
-            ],
-            'cache' => [
-                'path' => $cacheHome . '/bia',
-            ],
-        ];
+        $defaults = self::defaults();
         $sources = [];
         $values = $defaults;
 
-        $global = $configHome . '/bia/config.php';
+        $global = self::globalPath();
         if (is_file($global)) {
             $values = self::merge($values, self::file($global));
             $sources[] = $global;
@@ -129,6 +87,118 @@ final readonly class Config
 
         self::check($values);
         return new self($values, $sources);
+    }
+
+    /**
+     * Every setting and its built-in value.
+     *
+     * @return array<string, mixed>
+     */
+    public static function defaults(): array
+    {
+        $home = self::home();
+        $stateHome = self::directory('XDG_STATE_HOME', $home . '/.local/state');
+        $cacheHome = self::directory('XDG_CACHE_HOME', $home . '/.cache');
+        return [
+            'model' => [
+                'provider' => 'openai-compatible',
+                'base_url' => 'https://api.openai.com/v1',
+                'endpoint' => 'chat/completions',
+                'api_key' => null,
+                'name' => 'gpt-5',
+                // A whole reply may take this long; a server silent for idle_timeout seconds is given up on.
+                'timeout' => 3600.0,
+                'idle_timeout' => 120.0,
+                // Tokens the model can take in one request; compaction keeps below it.
+                'context_window' => 128_000,
+            ],
+            'prompt' => [
+                'system' => 'You are Bia, a fast coding assistant. Be precise and concise.',
+            ],
+            'permissions' => [
+                'read' => 'auto',
+                'write' => 'auto',
+                'shell' => 'auto',
+            ],
+            'tools' => [
+                'shell_timeout' => 120.0,
+                // Tool output past either limit is cut, and saved in full under cache.path.
+                'output_bytes' => 51_200,
+                'output_lines' => 2000,
+            ],
+            'compaction' => [
+                'enabled' => true,
+                'reserve_tokens' => 16_384,
+                'keep_tokens' => 20_000,
+            ],
+            'storage' => [
+                'path' => $stateHome . '/bia/bia.sqlite',
+            ],
+            'cache' => [
+                'path' => $cacheHome . '/bia',
+            ],
+        ];
+    }
+
+    /**
+     * The user's own configuration file.
+     */
+    public static function globalPath(): string
+    {
+        return self::directory('XDG_CONFIG_HOME', self::home() . '/.config') . '/bia/config.php';
+    }
+
+    /**
+     * The file `bia init --global` writes: every setting, commented out at
+     * its default, so the file changes nothing until a line is uncommented.
+     */
+    public static function template(): string
+    {
+        return <<<'PHP'
+            <?php
+
+            // Bia's configuration for you, in every project. Uncomment a line to change it.
+            // A project's .bia/config.json, the environment and command-line options
+            // override what is set here. `bia config` shows the result.
+
+            return [
+                // 'model' => [
+                //     'base_url' => 'https://api.openai.com/v1',  // any OpenAI-compatible API
+                //     'name' => 'gpt-5',
+                //     'api_key' => null,                // better: BIA_API_KEY or <PROVIDER>_API_KEY in the environment
+                //     'provider' => 'openai-compatible',  // names the <PROVIDER>_API_KEY variable, e.g. 'tdaproxy'
+                //     'endpoint' => 'chat/completions',
+                //     'timeout' => 3600.0,              // seconds a whole reply may take
+                //     'idle_timeout' => 120.0,          // give up on a server silent this long
+                //     'context_window' => 128000,       // your model's window, in tokens
+                // ],
+                // 'prompt' => [
+                //     'system' => 'You are Bia, a fast coding assistant. Be precise and concise.',
+                // ],
+                // 'permissions' => [                    // auto | ask | deny
+                //     'read' => 'auto',
+                //     'write' => 'auto',
+                //     'shell' => 'auto',
+                // ],
+                // 'tools' => [
+                //     'shell_timeout' => 120.0,         // default seconds for a shell command
+                //     'output_bytes' => 51200,          // tool output sent to the model per call
+                //     'output_lines' => 2000,
+                // ],
+                // 'compaction' => [
+                //     'enabled' => true,
+                //     'reserve_tokens' => 16384,        // room left for the reply
+                //     'keep_tokens' => 20000,           // recent history kept word for word
+                // ],
+                // 'storage' => [
+                //     'path' => '~/.local/state/bia/bia.sqlite',
+                // ],
+                // 'cache' => [
+                //     'path' => '~/.cache/bia',
+                // ],
+            ];
+
+            PHP;
     }
 
     /**
@@ -247,6 +317,9 @@ final readonly class Config
      */
     private static function file(string $path): array
     {
+        if (trim((string) file_get_contents($path)) === '') {
+            return []; // A blank file sets nothing.
+        }
         $values = require $path;
         if (!is_array($values)) {
             throw new \InvalidArgumentException("{$path} must return a configuration array.");

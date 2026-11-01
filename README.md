@@ -113,6 +113,7 @@ bia export <session-id>             Write a session as JSONL
 bia config [--json]                 Show the merged configuration, secrets redacted
 bia doctor                          Check PHP, tools and configuration
 bia init                            Create .bia/config.json in this directory
+bia init --global                   Create ~/.config/bia/config.php with every setting
 ```
 
 | Option | Effect |
@@ -216,7 +217,9 @@ Later sources override earlier ones:
 ### Your config
 
 `~/.config/bia/config.php` (or `$XDG_CONFIG_HOME/bia/config.php`) returns an
-array:
+array. `bia init --global` writes one listing every setting at its default,
+commented out, so you uncomment what you change; it fills a missing or blank
+file and leaves one with content alone. A minimal one:
 
 ```php
 <?php

@@ -66,6 +66,56 @@ final class ConfigTest extends TestCase
         }
     }
 
+    public function testTheGlobalTemplateShowsTheRealDefaults(): void
+    {
+        $template = Config::template();
+        $uncommented = (string) preg_replace('#^( +)// #m', '$1', $template);
+        $file = $this->directory() . '/config.php';
+        file_put_contents($file, $uncommented);
+        $shown = require $file;
+
+        $defaults = Config::defaults();
+        unset($defaults['storage'], $defaults['cache'], $shown['storage'], $shown['cache']);
+        self::assertEquals($defaults, $shown, 'The template and the defaults have drifted apart.');
+
+        file_put_contents($file, $template);
+        self::assertSame([], require $file, 'The template as written must change nothing.');
+    }
+
+    public function testInitGlobalFillsAMissingOrBlankFileAndLeavesOneWithSettings(): void
+    {
+        $home = $this->directory();
+        $run = static fn (): string => (string) shell_exec(
+            'XDG_CONFIG_HOME=' . escapeshellarg($home) . ' ' . escapeshellarg(PHP_BINARY) . ' '
+            . escapeshellarg(dirname(__DIR__) . '/bin/bia') . ' init --global 2>&1',
+        );
+        $path = $home . '/bia/config.php';
+
+        self::assertStringContainsString('Created', $run());
+        self::assertSame(Config::template(), file_get_contents($path));
+        self::assertSame(0600, fileperms($path) & 0777);
+
+        file_put_contents($path, "  \n");
+        self::assertStringContainsString('Created', $run(), 'A blank file was not filled.');
+
+        file_put_contents($path, "<?php return ['model' => ['name' => 'mine']];\n");
+        self::assertStringContainsString('left as it is', $run());
+        self::assertStringContainsString("'mine'", (string) file_get_contents($path));
+    }
+
+    public function testABlankGlobalFileSetsNothing(): void
+    {
+        $home = $this->directory();
+        mkdir($home . '/bia');
+        file_put_contents($home . '/bia/config.php', '');
+        putenv('XDG_CONFIG_HOME=' . $home);
+        try {
+            self::assertSame('gpt-5', Config::load($this->directory())->get('model.name'));
+        } finally {
+            putenv('XDG_CONFIG_HOME');
+        }
+    }
+
     /**
      * @param array<string, mixed> $settings
      */

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `bia init --global` creates `~/.config/bia/config.php` (mode 0600) listing
+  every setting at its default, commented out. It fills a missing or blank
+  file and never overwrites one with content.
+- A blank global config file no longer stops Bia from starting.
+
 ## 0.1.0-beta.2 (2026-11-01)
 
 Fixes found by the first runs against a real provider (gpt-6-astra and
