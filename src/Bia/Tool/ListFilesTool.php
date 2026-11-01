@@ -32,7 +32,8 @@ final readonly class ListFilesTool implements Tool
     public function execute(array $arguments, ToolContext $context, ?Cancellation $cancellation = null): ToolResult
     {
         $cancellation?->throwIfCancelled();
-        $relative = (string) ($arguments['path'] ?? '.');
+        // Models often send an optional path as "": that is the workspace too.
+        $relative = trim((string) ($arguments['path'] ?? '')) === '' ? '.' : (string) $arguments['path'];
         $directory = $relative === '.' ? $this->workspace->root() : $this->workspace->path($relative);
         if (!is_dir($directory)) {
             return new ToolResult("Directory {$relative} does not exist.", false);

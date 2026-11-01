@@ -34,5 +34,7 @@ final class ContractsTest extends TestCase
 
         self::assertEquals($message, Message::fromArray(json_decode(json_encode($message->toArray()), true)));
         self::assertSame('function', (new ToolDefinition('read_file', 'Read.', ['type' => 'object']))->openAi()['type']);
+        $empty = new ToolDefinition('git_diff', 'Diff.', ['type' => 'object', 'properties' => [], 'additionalProperties' => false]);
+        self::assertSame('{"type":"object","properties":{},"additionalProperties":false}', json_encode($empty->openAi()['function']['parameters']));
     }
 }

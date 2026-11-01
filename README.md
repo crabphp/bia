@@ -81,6 +81,19 @@ cd ~/code/my-project
 bia "explain the structure of this repository"
 ```
 
+Through tdaproxy (tested with `gpt-6-astra` and `gpt-6-sol`, which have a
+272,000-token window):
+
+```sh
+export BIA_PROVIDER=tdaproxy
+export TDAPROXY_API_KEY=...
+export BIA_BASE_URL=<tdaproxy base URL>/v1
+export BIA_MODEL=gpt-6-astra
+bia
+```
+
+and in `~/.config/bia/config.php`, `'model' => ['context_window' => 272000]`.
+
 Any other OpenAI-compatible server:
 
 ```sh
@@ -362,7 +375,7 @@ provider.
 
 ## Status and limits
 
-Bia is at 0.1.0-beta.1. Not yet built:
+Bia is at 0.1.0-beta.2. Not yet built:
 - **Only the Chat Completions API.** Native Anthropic Messages, Gemini and
   OpenAI Responses adapters are planned.
 - **No MCP servers.**

@@ -87,6 +87,7 @@ final class ToolTest extends TestCase
         sort($all);
         self::assertSame(['.env.example', 'sub/.hidden'], $all);
         self::assertSame('sub/.hidden', $list->execute(['path' => 'sub'], $context)->text);
+        self::assertTrue($list->execute(['path' => ''], $context)->ok, 'An empty path is the workspace.');
     }
 
     public function testShellCommandsDoNotSeeTheModelKey(): void

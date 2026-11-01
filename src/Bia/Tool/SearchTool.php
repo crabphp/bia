@@ -38,7 +38,8 @@ final readonly class SearchTool implements Tool
         if ($pattern === '') {
             return new ToolResult('Search pattern must not be empty.', false);
         }
-        $relative = (string) ($arguments['path'] ?? '.');
+        // Models often send an optional path as "": that is the workspace too.
+        $relative = trim((string) ($arguments['path'] ?? '')) === '' ? '.' : (string) $arguments['path'];
         $directory = $relative === '.' ? $this->workspace->root() : $this->workspace->path($relative);
         if (!is_dir($directory) && !is_file($directory)) {
             return new ToolResult("Search path {$relative} does not exist.", false);

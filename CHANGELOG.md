@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.0-beta.2 (2026-11-01)
+
+Fixes found by the first runs against a real provider (gpt-6-astra and
+gpt-6-sol through tdaproxy):
+
+- **A tool without parameters broke every request.** `git_diff`'s empty
+  `properties` was sent as a JSON list, which OpenAI-style APIs refuse; empty
+  schema objects are now sent as `{}`.
+- **An empty `path` is the workspace** for `list_files` and `search`; models
+  often send optional arguments as `""`.
+- **Leaving a conversation exits 0,** even after a cancelled turn.
+
 ## 0.1.0-beta.1 (2026-11-01)
 
 The first beta: a terminal coding agent for any OpenAI-compatible Chat

@@ -32,7 +32,7 @@ use Crab\HttpClient\Client;
  */
 final class Application
 {
-    public const VERSION = '0.1.0-beta.1';
+    public const VERSION = '0.1.0-beta.2';
 
     /**
      * @param list<string> $arguments
@@ -368,7 +368,8 @@ final class Application
                 $status = 1;
             }
         } while ($repl);
-        return $status;
+        // A conversation left on purpose ended well; a one-shot run reports its turn.
+        return $repl ? 0 : $status;
     }
 
     /**
