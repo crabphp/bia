@@ -1,5 +1,10 @@
 # Bia
 
+```text
+▙▄▄▄▄▄▟   bia 0.1.0-beta.2 · provider/model
+█▙███▟█   ~/code/my-project
+```
+
 Bia is a fast, resumable coding agent for the terminal, written in PHP 8.4 on
 the [Crab](https://github.com/crabphp/framework) engine. It streams a model's
 reply as it arrives, runs coding tools in your project, and keeps every
