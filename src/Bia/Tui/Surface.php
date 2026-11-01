@@ -19,7 +19,14 @@ interface Surface
     public function print(string $text): void;
 
     /**
-     * Whether the output printed so far ends a line.
+     * Shows the unfinished line as given, after the output: each draft takes
+     * the place of the last, and printing anything keeps the draft as it is.
+     * A line that streams in can so be drawn again as more of it arrives.
+     */
+    public function draft(string $text): void;
+
+    /**
+     * Whether the output printed so far ends a line, with no draft after it.
      */
     public function atLineStart(): bool;
 

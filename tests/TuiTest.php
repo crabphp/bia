@@ -4,8 +4,15 @@ declare(strict_types=1);
 
 namespace Bia\Tests;
 
+use Bia\Contracts\ModelEvent;
+use Bia\Contracts\ModelResult;
+use Bia\Contracts\ToolCall;
 use Bia\Terminal\Commands;
 use Bia\Terminal\History;
+use Bia\Terminal\TuiRenderer;
+use Bia\Tool\Diff;
+use Bia\Tui\Highlight;
+use Bia\Tui\Markdown;
 use Bia\Tui\Editor;
 use Bia\Tui\Fuzzy;
 use Bia\Tui\Key;
@@ -280,6 +287,69 @@ final class TuiTest extends TestCase
         $all = (string) stream_get_contents($output);
         self::assertStringContainsString("\e[?1049h", $all, 'It draws on the alternate screen.');
         self::assertStringContainsString("\e[?1049lline 1\r\nline 2\r\n", $all, 'Closing prints the output on the main screen.');
+    }
+
+    public function testMarkdownIsRenderedALineAtATime(): void
+    {
+        Style::enable(true);
+        $markdown = new Markdown();
+        self::assertSame("\e[1mTitle\e[0m", $markdown->line('## Title'));
+        self::assertSame("a \e[1mbold\e[0m and \e[36mco**de**\e[0m", $markdown->line('a **bold** and `co**de**`'), 'Code is left as it is inside.');
+        self::assertSame('  • item', $markdown->line('  - item'));
+        self::assertSame("\e[2m│ said\e[0m", $markdown->line('> said'));
+        self::assertSame('a __init__ b', $markdown->line('a __init__ b'));
+        self::assertSame("\e[2m```text\e[0m", $markdown->line('```text'));
+        self::assertSame("\e[36m# not a heading\e[0m", $markdown->line('# not a heading'), 'Inside a code block, nothing is markup.');
+        self::assertSame("\e[2m```\e[0m", $markdown->line('```'));
+        $markdown->line('```php');
+        self::assertSame("\e[36mreturn\e[39m \e[33m'x'\e[39m; \e[2m// done\e[22m", $markdown->line("return 'x'; // done"), 'A block in a known language is highlighted.');
+        $markdown->line('```');
+        self::assertSame('half **open', $markdown->preview('half **open'), 'A marker not yet closed waits.');
+    }
+
+    public function testCodeIsHighlightedInOnePassALineAtATime(): void
+    {
+        Style::enable(true);
+        $php = Highlight::for('src/App.php');
+        self::assertNotNull($php);
+        self::assertSame("\e[36mfunction\e[39m f(\$class) { \e[36mreturn\e[39m \$this->list; }", $php->line('function f($class) { return $this->list; }'), 'A variable or member named like a keyword is a name.');
+        self::assertSame("\e[2m/* open\e[22m", $php->line('/* open'));
+        self::assertSame("\e[2mstill */\e[22m \e[36mif\e[39m", $php->line('still */ if'), 'A block comment carries over to the next line.');
+        self::assertSame("\e[36mSELECT\e[39m 1 \e[2m-- why\e[22m", Highlight::for('sql')?->line('SELECT 1 -- why'));
+        self::assertNull(Highlight::for('notes.txt'), 'A language not known is left plain.');
+        Style::enable(false);
+        self::assertNull(Highlight::for('php'), 'Without colour there is nothing to highlight.');
+    }
+
+    public function testTheRendererDrawsTheStreamingLineAgainAsItGrows(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        $output = fopen('php://memory', 'w+');
+        $screen = new Screen(new Terminal(STDIN, $output, [40, 6]));
+        $renderer = new TuiRenderer($screen);
+        $renderer->event(ModelEvent::text('# Ti'));
+        $screen->flush();
+        self::assertSame('Ti', self::screenRows($output, 6)[0], 'A line still streaming is shown, rendered, as far as it goes.');
+        $renderer->event(ModelEvent::text("tle\nnext **b"));
+        $renderer->event(ModelEvent::text('old**'));
+        $renderer->finish(new ModelResult(''));
+        $screen->flush();
+        self::assertSame(['Title', 'next bold'], array_slice(self::screenRows($output, 6), 0, 2));
+    }
+
+    public function testAToolCallShowsTheChangeItMade(): void
+    {
+        $diff = Diff::between("a\nb\nc\nd\ne\nf\n", "a\nB\nc\nd\ne\nF\n");
+        self::assertSame(['@1', ' a', '-b', '+B', ' c', '@5', ' e', '-f', '+F'], $diff, 'Changes far apart are hunks of their own, with a line around each.');
+        $lines = TuiRenderer::toolLines(new ToolCall('1', 'edit', ['path' => 'x.php']), true, 'Edited x.php', ['diff' => $diff]);
+        self::assertSame(['✓ edit x.php', '    a', '  - b', '  + B', '    c', '  ⋯', '    e', '  - f', '  + F'], $lines);
+        self::assertSame(['@1', ' a', '-b', '+B', ' c', ' d', '+e'], Diff::between("a\nb\nc\nd\n", "a\nB\nc\nd\ne\n"), 'Changes close together share a hunk.');
+
+        $long = Diff::between('', implode("\n", range(1, 100)));
+        self::assertSame('…' . (100 - Diff::LIMIT), end($long), 'A big change is cut, and what is left is counted.');
+        self::assertStringEndsWith('… 84 more', end(...[TuiRenderer::toolLines(new ToolCall('2', 'write_file', []), true, '', ['diff' => $long])]));
+
+        self::assertSame(['=src/a.php', '@3', ' keep', '-old', '+new'], Diff::ofPatch("diff --git a/src/a.php b/src/a.php\n--- a/src/a.php\n+++ b/src/a.php\n@@ -3,2 +3,2 @@\n keep\n-old\n+new\n"));
     }
 
     /**

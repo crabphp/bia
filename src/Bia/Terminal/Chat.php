@@ -12,6 +12,7 @@ use Bia\Model\ModelCatalog;
 use Bia\Tui\Editor;
 use Bia\Tui\Fuzzy;
 use Bia\Tui\Key;
+use Bia\Tui\Markdown;
 use Bia\Tui\Surface;
 use Bia\Tui\SelectList;
 use Bia\Tui\Spinner;
@@ -500,14 +501,22 @@ final class Chat
                 $this->echo($payload->text);
             } elseif ($payload->role === 'assistant') {
                 if ($payload->text !== '') {
-                    $this->region->print($payload->text);
-                    $this->lineStart();
+                    $markdown = new Markdown();
+                    foreach (explode("\n", rtrim($payload->text, "\n")) as $line) {
+                        $this->region->print($markdown->line($line) . "\n");
+                    }
                 }
                 foreach ($payload->toolCalls as $call) {
                     $result = $results[$call->id] ?? null;
-                    $mark = $result === null ? Style::dim('·') : ($result->ok ? Style::ok('✓') : Style::error('✗'));
-                    $subject = AnsiRenderer::subject($call->arguments);
-                    $this->region->print("{$mark} {$call->name}" . ($subject !== '' ? ' ' . Style::dim($subject) : '') . "\n");
+                    if ($result === null) {
+                        $subject = AnsiRenderer::subject($call->arguments);
+                        $this->region->print(Style::dim('·') . " {$call->name}" . ($subject !== '' ? ' ' . Style::dim($subject) : '') . "\n");
+                        continue;
+                    }
+                    $data = is_array($result->meta['data'] ?? null) ? $result->meta['data'] : [];
+                    foreach (TuiRenderer::toolLines($call, $result->ok, $result->text, $data) as $line) {
+                        $this->region->print($line . "\n");
+                    }
                 }
                 $usage = $payload->meta['usage'] ?? null;
                 if (is_array($usage)) {

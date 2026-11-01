@@ -181,7 +181,10 @@ final class Style
         return self::color() && $text !== '' ? "\e[{$code}m{$text}\e[0m" : $text;
     }
 
-    private static function color(): bool
+    /**
+     * Whether styles are drawn: not with NO_COLOR, nor when not on a terminal.
+     */
+    public static function color(): bool
     {
         return self::$color ??= getenv('NO_COLOR') === false && function_exists('stream_isatty') && stream_isatty(STDOUT);
     }

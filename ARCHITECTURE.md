@@ -42,7 +42,9 @@ the engine, kept able to move into the framework when a second user needs it:
 | `Region` | Inline, with `tui.fullscreen` false: finished output goes into the terminal's own scrollback, only the live lines at the bottom are redrawn, at most once a frame, and the screen is drawn afresh when a resize changes the width |
 | `Editor` | Multi-line input with history, word moves and paste |
 | `SelectList` | A filtered list for pickers and completion menus; keys in, lines out |
-| `Spinner`, `Fuzzy`, `Style` | The working line, fuzzy ranking, and the minimal theme with display-width measuring |
+| `Spinner`, `Fuzzy`, `Style` | The working line, fuzzy ranking, and the minimal theme with display-width measuring and styled wrapping |
+| `Markdown` | A streamed answer's markdown, a line at a time (about 1 µs a line): headings and bold, bullets, quotes, fences, inline code; the line still streaming is drawn again as it grows |
+| `Highlight` | Basic syntax highlighting in one split a line (about 5 µs): keywords, strings, comments, for code blocks and diffs |
 
 Components hold no terminal: they take keys and return lines, so they are
 tested without one. It is not full-screen: the scrollback stays the

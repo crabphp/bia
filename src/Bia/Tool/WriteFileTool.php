@@ -41,8 +41,13 @@ final readonly class WriteFileTool implements Tool
             return new ToolResult("File content exceeds {$this->maxBytes} bytes.", false);
         }
         $existed = is_file($path);
+        $before = $existed && filesize($path) <= $this->maxBytes ? (string) @file_get_contents($path) : '';
         AtomicFile::write($path, $content);
         $lines = substr_count($content, "\n") + ($content !== '' && !str_ends_with($content, "\n") ? 1 : 0);
-        return new ToolResult(($existed ? 'Replaced' : 'Created') . " {$relative} ({$lines} lines).", true, ['path' => $relative, 'bytes' => strlen($content)]);
+        return new ToolResult(
+            ($existed ? 'Replaced' : 'Created') . " {$relative} ({$lines} lines).",
+            true,
+            ['path' => $relative, 'bytes' => strlen($content), 'diff' => Diff::between($before, $content)],
+        );
     }
 }

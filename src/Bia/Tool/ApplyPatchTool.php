@@ -44,6 +44,6 @@ final readonly class ApplyPatchTool implements Tool
         if (!$applied->ok()) {
             return new ToolResult(trim($applied->output) ?: 'The patch could not be applied.', false);
         }
-        return new ToolResult('Patch applied.', true);
+        return new ToolResult('Patch applied.', true, ['diff' => Diff::ofPatch($patch)]);
     }
 }

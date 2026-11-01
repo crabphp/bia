@@ -20,7 +20,10 @@ or load a terminal UI framework just to print help or stream a model reply.
   components take keys and return lines and never write to the terminal;
   only the two `Surface`s, `Screen` and `Region`, and `Terminal` do. Keep the
   theme minimal: dim, one accent, green and red, a grey shade behind the
-  user's messages, and nothing when `NO_COLOR` is set.
+  user's messages, green and red tints behind a diff's lines, and for code
+  only the accent, yellow and dim; nothing when `NO_COLOR` is set.
+- Rendering runs on every streamed line: keep `Markdown` and `Highlight` to
+  one pass a line, with no library, and measure before adding to them.
 - Draw through the `Surface`, never with a direct write while the chat runs, or
   the live lines are drawn over.
 - Tools run with full permission by default; do not make approval the default.

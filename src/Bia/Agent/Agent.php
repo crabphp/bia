@@ -20,6 +20,7 @@ use Bia\Tool\Registry;
 use Crab\Engine\Async\Cancellation;
 use Crab\Engine\Async\Task;
 use Crab\Engine\EventLoop;
+use Crab\HttpClient\NetworkException;
 
 /**
  * Runs the model/tool turn loop and appends every message and tool result to
@@ -31,6 +32,18 @@ use Crab\Engine\EventLoop;
  */
 final readonly class Agent
 {
+    /**
+     * Seconds to wait before each new try of a request that failed for a
+     * passing reason, doubling: 31 seconds over five tries in all.
+     */
+    public const RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0, 16.0];
+
+    /** The longest wait a provider's Retry-After is followed for. */
+    private const RETRY_AFTER_LIMIT = 60.0;
+
+    /**
+     * @param list<float> $retryDelays Waits before each new try of a request that failed for a passing reason.
+     */
     public function __construct(
         private Model $model,
         private string $modelName,
@@ -43,6 +56,7 @@ final readonly class Agent
         private int $maxOutputBytes = 51_200,
         private int $maxOutputLines = 2000,
         private ?string $outputs = null,
+        private array $retryDelays = self::RETRY_DELAYS,
     ) {
         if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
@@ -71,11 +85,7 @@ final readonly class Agent
                 array_unshift($messages, Message::system($system));
             }
             try {
-                $result = $this->model->stream(
-                    new ModelRequest($this->modelName, $messages, $definitions),
-                    $this->renderer->event(...),
-                    $cancellation,
-                );
+                $result = $this->request(new ModelRequest($this->modelName, $messages, $definitions), $cancellation);
             } catch (ModelException $error) {
                 // Our estimate was short: compact once and try the same turn again.
                 if (!$error->contextOverflow || $retried || $this->compactor === null) {
@@ -118,6 +128,67 @@ final readonly class Agent
         }
 
         throw new \RuntimeException("The agent reached its {$this->maxTurns}-turn limit.");
+    }
+
+    /**
+     * Streams one request, trying again after a failure that may pass: a
+     * rate limit, an overloaded or failing provider, a lost connection. A
+     * request is tried again only while nothing of its answer has arrived,
+     * so no text is ever shown twice.
+     */
+    private function request(ModelRequest $request, ?Cancellation $cancellation): ModelResult
+    {
+        for ($attempt = 0; ; $attempt++) {
+            $started = false;
+            try {
+                return $this->model->stream(
+                    $request,
+                    function ($event) use (&$started): void {
+                        $started = true;
+                        $this->renderer->event($event);
+                    },
+                    $cancellation,
+                );
+            } catch (ModelException | NetworkException $error) {
+                $transient = $error instanceof NetworkException || $error->transient();
+                if ($started || !$transient || $attempt >= count($this->retryDelays)) {
+                    throw $error;
+                }
+                $wait = $this->retryDelays[$attempt];
+                if ($error instanceof ModelException && $error->retryAfter !== null) {
+                    $wait = min(max($wait, $error->retryAfter), self::RETRY_AFTER_LIMIT);
+                }
+                $why = $error instanceof ModelException ? (string) $error->status : 'connection failed';
+                $tries = count($this->retryDelays);
+                $this->renderer->notice("{$why} · retry " . ($attempt + 1) . "/{$tries} in " . self::seconds($wait));
+                self::wait($wait, $cancellation);
+            }
+        }
+    }
+
+    /**
+     * Waits on the event loop, cut short by the cancellation.
+     */
+    private static function wait(float $seconds, ?Cancellation $cancellation): void
+    {
+        $cancellation?->throwIfCancelled();
+        $loop = EventLoop::current();
+        $suspension = $loop->getSuspension();
+        $timer = $loop->delay($seconds, static fn () => $suspension->resume());
+        $unsubscribe = $cancellation?->subscribe(static fn (\Throwable $error) => $suspension->throw($error));
+        try {
+            $suspension->suspend();
+        } finally {
+            $loop->cancel($timer);
+            if ($unsubscribe !== null) {
+                $unsubscribe();
+            }
+        }
+    }
+
+    private static function seconds(float $seconds): string
+    {
+        return $seconds >= 10 || $seconds === floor($seconds) ? round($seconds) . 's' : number_format($seconds, 1) . 's';
     }
 
     /**

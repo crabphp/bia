@@ -23,6 +23,7 @@ final class Region implements Surface
     private ?array $cursor = null;
     private string $pending = '';
     private string $partial = '';
+    private string $draft = '';
     /** Row of the region the terminal's cursor is on, counted from its top. */
     private int $at = 0;
     /** The width the region was last drawn at; 0 before the first frame. */
@@ -55,17 +56,21 @@ final class Region implements Surface
         if ($text === '') {
             return;
         }
-        $this->pending .= $text;
+        $this->pending .= $this->draft . $text;
+        $this->draft = '';
         $this->tail = $text[-1];
         $this->schedule();
     }
 
-    /**
-     * Whether the output printed so far ends a line.
-     */
+    public function draft(string $text): void
+    {
+        $this->draft = $text;
+        $this->schedule();
+    }
+
     public function atLineStart(): bool
     {
-        return $this->tail === "\n";
+        return $this->tail === "\n" && $this->draft === '';
     }
 
     /**
@@ -101,6 +106,8 @@ final class Region implements Surface
     {
         $this->lines = [];
         $this->cursor = null;
+        $this->pending .= $this->draft;
+        $this->draft = '';
         if ($this->partial !== '' || ($this->pending !== '' && !str_ends_with($this->pending, "\n"))) {
             $this->pending .= "\n";
         }
@@ -189,8 +196,8 @@ final class Region implements Surface
         $this->partial = $end === false ? $text : substr($text, $end + 1);
 
         $rows = [];
-        if ($this->partial !== '') {
-            $rows = Style::wrap($this->partial, $columns);
+        if ($this->partial . $this->draft !== '') {
+            $rows = Style::wrapAnsi($this->partial . $this->draft, $columns);
         }
         $offset = count($rows);
         array_push($rows, ...$this->lines);

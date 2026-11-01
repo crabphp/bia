@@ -27,6 +27,7 @@ final class Screen implements Surface
     private int $start = 0;
     private int $next = 0;
     private string $partial = '';
+    private string $draft = '';
     private string $tail = "\n";
     private int $width = 0;
     /** @var list<string> */
@@ -56,7 +57,8 @@ final class Screen implements Surface
             return;
         }
         $this->tail = $text[-1];
-        $parts = explode("\n", str_replace("\r", '', $this->partial . $text));
+        $parts = explode("\n", str_replace("\r", '', $this->partial . $this->draft . $text));
+        $this->draft = '';
         $this->partial = (string) array_pop($parts);
         foreach ($parts as $line) {
             $this->done[$this->next++] = $line;
@@ -71,9 +73,15 @@ final class Screen implements Surface
         $this->schedule();
     }
 
+    public function draft(string $text): void
+    {
+        $this->draft = $text;
+        $this->schedule();
+    }
+
     public function atLineStart(): bool
     {
-        return $this->tail === "\n";
+        return $this->tail === "\n" && $this->draft === '';
     }
 
     public function set(array $lines, ?array $cursor = null): void
@@ -104,8 +112,8 @@ final class Screen implements Surface
         foreach ($this->done as $line) {
             $out .= $line . "\r\n";
         }
-        if ($this->partial !== '') {
-            $out .= $this->partial . "\r\n";
+        if ($this->partial . $this->draft !== '') {
+            $out .= $this->partial . $this->draft . "\r\n";
         }
         $this->terminal->write($out . "\e[?25h");
     }
@@ -181,7 +189,8 @@ final class Screen implements Surface
     private function rows(int $line): array
     {
         if ($line >= $this->next) {
-            return $this->partial === '' ? [] : Style::wrapAnsi($this->partial, $this->width);
+            $line = $this->partial . $this->draft;
+            return $line === '' ? [] : Style::wrapAnsi($line, $this->width);
         }
         return $this->wrapped[$line] ??= Style::wrapAnsi($this->done[$line], $this->width);
     }

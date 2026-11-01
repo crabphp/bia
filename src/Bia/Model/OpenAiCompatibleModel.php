@@ -83,7 +83,7 @@ final readonly class OpenAiCompatibleModel implements Model
                 idle: $this->idleTimeout,
             );
         if ($response->getStatusCode() >= 400) {
-            throw ModelException::fromAnswer($response->getStatusCode(), (string) $response->getBody());
+            throw ModelException::fromAnswer($response->getStatusCode(), (string) $response->getBody(), $response->getHeaderLine('retry-after'));
         }
 
         $contentType = strtolower($response->getHeaderLine('content-type'));

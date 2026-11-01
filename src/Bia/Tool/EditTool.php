@@ -126,7 +126,7 @@ final readonly class EditTool implements Tool
         return new ToolResult(
             "Edited {$relative}: {$count} " . ($count === 1 ? 'replacement' : 'replacements') . ' at line ' . implode(', ', array_unique($lines)) . '.',
             true,
-            ['path' => $relative, 'replacements' => $count, 'lines' => $lines],
+            ['path' => $relative, 'replacements' => $count, 'lines' => $lines, 'diff' => Diff::between($content, $result)],
         );
     }
 

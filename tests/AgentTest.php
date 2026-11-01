@@ -18,6 +18,7 @@ use Bia\Contracts\ToolDefinition;
 use Bia\Contracts\ToolResult;
 use Bia\Agent\Compactor;
 use Bia\Contracts\Entry;
+use Bia\Model\ModelException;
 use Bia\Session\SqliteStore;
 use Bia\Tool\Registry;
 use Crab\Engine\Async\Async;
@@ -27,6 +28,66 @@ use PHPUnit\Framework\TestCase;
 
 final class AgentTest extends TestCase
 {
+    public function testAPassingFailureIsTriedAgain(): void
+    {
+        [$store, $session] = $this->session();
+        $model = new FlakyModel([
+            [new ModelException('busy', 503), ''],
+            [new ModelException('slow down', 429, retryAfter: 0.0), ''],
+        ]);
+        $renderer = new FakeRenderer();
+        $agent = new Agent($model, 'fake', new Registry(), $store, $renderer, '/workspace', retryDelays: [0.0, 0.0, 0.0]);
+
+        self::assertSame('done', $agent->run($session, 'hi')->text);
+        self::assertSame(3, $model->calls);
+        self::assertSame(['503 · retry 1/3 in 0s', '429 · retry 2/3 in 0s'], $renderer->notices);
+    }
+
+    public function testARefusalIsNotTriedAgain(): void
+    {
+        [$store, $session] = $this->session();
+        $model = new FlakyModel([[new ModelException('bad request', 400), '']]);
+        $agent = new Agent($model, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', retryDelays: [0.0]);
+
+        try {
+            $agent->run($session, 'hi');
+            self::fail('A 400 is not tried again.');
+        } catch (ModelException $error) {
+            self::assertSame(400, $error->status);
+        }
+        self::assertSame(1, $model->calls);
+    }
+
+    public function testTriesStopAfterTheLastWait(): void
+    {
+        [$store, $session] = $this->session();
+        $model = new FlakyModel(array_fill(0, 4, [new ModelException('down', 502), '']));
+        $agent = new Agent($model, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', retryDelays: [0.0, 0.0]);
+
+        $this->expectException(ModelException::class);
+        try {
+            $agent->run($session, 'hi');
+        } finally {
+            self::assertSame(3, $model->calls, 'One try, then one for each wait.');
+        }
+    }
+
+    public function testAnAnswerCutOffPartwayIsNotTriedAgain(): void
+    {
+        [$store, $session] = $this->session();
+        $model = new FlakyModel([[new ModelException('stream broke', 500), 'half an ans']]);
+        $renderer = new FakeRenderer();
+        $agent = new Agent($model, 'fake', new Registry(), $store, $renderer, '/workspace', retryDelays: [0.0]);
+
+        $this->expectException(ModelException::class);
+        try {
+            $agent->run($session, 'hi');
+        } finally {
+            self::assertSame(1, $model->calls, 'Its text was already shown; trying again would show it twice.');
+            self::assertSame('half an ans', $renderer->text);
+        }
+    }
+
     public function testToolTurnIsCheckpointedBeforeTheFinalTurn(): void
     {
         [$store, $session] = $this->session();
@@ -329,6 +390,33 @@ final class CancellingTool implements Tool
         $this->cancellation->cancel();
         $this->cancellation->throwIfCancelled();
         return new ToolResult('unreachable');
+    }
+}
+
+/**
+ * Fails with the given errors first, each after the text given with it, then answers.
+ */
+final class FlakyModel implements Model
+{
+    public int $calls = 0;
+
+    /**
+     * @param list<array{\Throwable, string}> $failures
+     */
+    public function __construct(private array $failures) {}
+
+    public function stream(ModelRequest $request, callable $emit, ?Cancellation $cancellation = null): ModelResult
+    {
+        $this->calls++;
+        $failure = array_shift($this->failures);
+        if ($failure !== null) {
+            if ($failure[1] !== '') {
+                $emit(ModelEvent::text($failure[1]));
+            }
+            throw $failure[0];
+        }
+        $emit(ModelEvent::text('done'));
+        return new ModelResult('done');
     }
 }
 
