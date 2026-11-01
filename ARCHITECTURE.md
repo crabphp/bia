@@ -23,9 +23,37 @@ network I/O. Sessions are rows in SQLite; JSONL is an export format. A live
 conversation may use an actor for per-session ordering. Durable multi-step work
 uses Crab Runs and Queue, with every model and tool boundary checkpointed.
 
-The terminal is an event consumer. The first renderer uses ANSI text and line
-input, with plain text and JSONL modes for pipes and tests. A full-screen TUI is
-an optional later package and does not enter the agent core.
+The terminal is an event consumer. A conversation in a terminal runs
+`Terminal\Chat` on the TUI kit; a one-shot prompt, a pipe and `--json` use
+`Terminal\AnsiRenderer`'s plain text or JSONL. Neither enters the agent core,
+which only calls the `Renderer` contract.
+
+## Terminal UI
+
+`Bia\Tui` is a small TUI kit on Crab's event loop, with no dependency beyond
+the engine, kept able to move into the framework when a second user needs it:
+
+| Part | Does |
+|---|---|
+| `Terminal` | Raw mode with `stty` on /dev/tty (Ctrl-C and Ctrl-Z arrive as keys), bracketed paste, size, keys read on the event loop; gives the terminal back as found, on exit too |
+| `Keys`, `Key` | Turns terminal bytes into keys and pastes |
+| `Region` | Inline rendering: finished output scrolls, only the live lines at the bottom are redrawn, at most once a frame (1/60 s), in one synchronized write, and not at all when unchanged |
+| `Editor` | Multi-line input with history, word moves and paste |
+| `SelectList` | A filtered list for pickers and completion menus; keys in, lines out |
+| `Spinner`, `Fuzzy`, `Style` | The working line, fuzzy ranking, and the minimal theme with display-width measuring |
+
+Components hold no terminal: they take keys and return lines, so they are
+tested without one. It is not full-screen: the scrollback stays the
+terminal's own, as in Pi and Claude Code.
+
+`Terminal\Chat` composes them. Keys are read the whole time, in the
+operation's fiber; a turn runs in a task of its own, so the next message can
+be typed while it runs and Enter queues it. Esc or Ctrl-C cancels the turn's
+`Cancellation`. A tool whose permission is `ask` suspends the turn's fiber on
+a picker until it is answered. `/model` lists every keyed provider's models
+at once through `Model\ModelCatalog` and rebuilds the agent from
+`Config::withModel()`; the session continues, since it is stored in no
+provider's format.
 
 The first tools are deliberately small and bounded: file reads and writes,
 listing, ripgrep search, shell commands, patch application, and git diff. Every

@@ -128,23 +128,62 @@ bia init --global                   Create ~/.config/bia/config.php with every s
 
 ### A conversation
 
-Run `bia` with no prompt in a terminal to get a `>` prompt. Each turn is
-saved as it completes.
+Run `bia` with no prompt in a terminal. Finished output scrolls as usual;
+the bottom of the screen is live:
+
+```text
+› fix the failing test
+
+✓ read_file tests/CalcTest.php
+✓ edit src/Calc.php
+✓ shell composer test
+  OK (12 tests, 30 assertions)
+Fixed: add() subtracted.
+⠴ Thinking… 4s · esc to stop
+  queued: now update the changelog
+────────────────────────────────────────────────────────────────
+› Ask anything · / for commands · @ for files
+────────────────────────────────────────────────────────────────
+~/code/my-app (main)                 tdaproxy/gpt-6-astra · 9k/272k (3%)
+```
+
+The status line shows the workspace and its git branch, the model, and how
+much of the context window the conversation uses. Each turn is saved as it
+completes.
 
 | Command | Effect |
 |---|---|
+| `/model` | Pick a model from every provider you have a key for, fuzzy-filtered as you type |
+| `/model provider/name` | Switch straight to that model; the session goes on |
+| `/new` | Start a new session |
 | `/compact` | Summarize the conversation so far now |
-| `/help` | List these commands |
-| `/exit`, `/quit`, Ctrl-D | Leave |
+| `/clear` | Clear the screen |
+| `/help` | List commands and keys |
+| `/exit`, `/quit` | Leave |
 
-- **Ctrl-C during a turn** cancels it: the model request and any running
-  command stop, and you are back at the prompt.
-- **A second Ctrl-C** quits.
-- **A failed turn,** such as a rate limit or a dropped connection, prints the
-  error and keeps the conversation open.
+Typing `/` opens a menu of commands, and `@` one of the workspace's files
+(those `.gitignore` does not leave out), fuzzy-matched; Tab or Enter takes
+the highlighted one.
 
-The session id is printed at the start (`session: 2e18...`). Continue it later
-with `bia resume <id>`.
+| Key | Effect |
+|---|---|
+| Enter | Send; while Bia works, queue the message for after the turn |
+| Ctrl-J, Alt-Enter, or `\` then Enter | New line; a paste keeps its lines |
+| Up / Down | Move between lines, then through earlier prompts (kept across runs) |
+| Esc | Stop the turn, or close a menu |
+| Ctrl-C | Stop the turn; else clear the input; on an empty input, twice to leave |
+| Ctrl-D | Leave, on an empty input |
+| Ctrl-W, Ctrl-U, Ctrl-K | Delete a word, to the line start, to the line end |
+| Ctrl-A / Ctrl-E, Ctrl-Left / Ctrl-Right | Line start and end, word moves |
+| Ctrl-L | Clear the screen |
+
+A tool whose permission is `ask` asks in the same place, Yes or No (`y` and
+`n` answer too). A failed turn, such as a rate limit or a dropped connection,
+prints the error and keeps the conversation open. Continue a session later
+with `bia resume <id>`; its id is on the first line.
+
+Without a terminal, or with `TERM=dumb`, Bia falls back to a plain `>`
+prompt.
 
 ### What you see
 

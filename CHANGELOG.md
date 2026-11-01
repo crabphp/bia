@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **A terminal UI for conversations,** inline like Pi's: output scrolls, and
+  the live lines at the bottom hold a spinner with what Bia is doing and for
+  how long, the input, menus and a status line (workspace, git branch, model,
+  context used). Drawn at most once a frame and only when changed; on screen
+  in about 85 ms.
+  - Multi-line input with history kept across runs, word moves and paste.
+  - Type while Bia works: Enter queues the message. Esc or Ctrl-C stops the
+    turn.
+  - `/model` picks from every keyed provider's models, listed at once and
+    fuzzy-filtered; `/model provider/name` switches directly. The session
+    goes on with the new model.
+  - `/new`, `/compact`, `/clear`, `/help`, `/exit`, `/quit`; `/` and `@`
+    open completion menus of commands and workspace files.
+  - A tool whose permission is `ask` asks in a Yes/No picker.
+- `Bia\Tui`: the kit it is built from (terminal, keys, live region, editor,
+  select list, spinner, fuzzy matching, theme), on Crab's event loop alone.
+- One-shot runs print the model next to the session id.
 - `bia init --global` creates `~/.config/bia/config.php` (mode 0600) listing
   every setting at its default, commented out. It fills a missing or blank
   file and never overwrites one with content.

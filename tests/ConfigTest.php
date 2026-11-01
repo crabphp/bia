@@ -9,6 +9,17 @@ use PHPUnit\Framework\TestCase;
 
 final class ConfigTest extends TestCase
 {
+    protected function setUp(): void
+    {
+        // Never read the real ~/.config/bia: it holds the developer's keys.
+        putenv('XDG_CONFIG_HOME=' . $this->directory());
+    }
+
+    protected function tearDown(): void
+    {
+        putenv('XDG_CONFIG_HOME');
+    }
+
     public function testProjectSettingsAndOverridesAreMerged(): void
     {
         $root = $this->project([
@@ -185,6 +196,27 @@ final class ConfigTest extends TestCase
             self::assertStringContainsString('openai-compatible model gpt-5', Config::load($this->directory())->keyHelp());
         } finally {
             putenv('XDG_CONFIG_HOME');
+        }
+    }
+
+    public function testModelCanBeSwitchedToAnotherProvider(): void
+    {
+        $this->global("<?php return ['providers' => ['tda' => ['base_url' => 'http://tda/v1', 'api_key' => 'tda-key', 'context_window' => 272000]], 'model' => ['name' => 'tda/astra']];");
+        putenv('CLIPROXYAPI_API_KEY=proxy-key');
+        try {
+            $config = Config::load($this->directory());
+            self::assertSame('tda/astra', $config->modelLabel());
+            $switched = $config->withModel('cliproxyapi/claude-sonnet-4-6');
+            self::assertSame('cliproxyapi/claude-sonnet-4-6', $switched->modelLabel());
+            self::assertSame('proxy-key', $switched->get('model.api_key'));
+            self::assertSame(200000, $switched->get('model.context_window'), 'Nothing of the old provider is kept.');
+            self::assertSame('tda-key', $switched->withModel('tda/sol')->get('model.api_key'));
+
+            $providers = $config->providers();
+            self::assertSame(['base_url' => 'http://tda/v1', 'endpoint' => 'chat/completions', 'api_key' => 'tda-key', 'models' => []], $providers['tda']);
+            self::assertNull($providers['anthropic']['api_key']);
+        } finally {
+            putenv('CLIPROXYAPI_API_KEY');
         }
     }
 

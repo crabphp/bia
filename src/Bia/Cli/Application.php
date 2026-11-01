@@ -8,11 +8,17 @@ use Bia\Agent\Agent;
 use Bia\Agent\Compactor;
 use Bia\Agent\SystemPrompt;
 use Bia\Config\Config;
+use Bia\Contracts\Renderer;
+use Bia\Model\ModelCatalog;
 use Bia\Model\OpenAiCompatibleModel;
 use Bia\Session\SqliteStore;
 use Bia\Terminal\AnsiRenderer;
+use Bia\Terminal\Chat;
+use Bia\Terminal\Files;
+use Bia\Terminal\History;
 use Bia\Terminal\Loop;
 use Bia\Terminal\Prompt;
+use Bia\Terminal\TuiRenderer;
 use Bia\Tool\ApplyPatchTool;
 use Bia\Tool\EditTool;
 use Bia\Tool\GitDiffTool;
@@ -24,6 +30,9 @@ use Bia\Tool\SearchTool;
 use Bia\Tool\ShellTool;
 use Bia\Tool\Workspace;
 use Bia\Tool\WriteFileTool;
+use Bia\Tui\Region;
+use Bia\Tui\Style;
+use Bia\Tui\Terminal;
 use Crab\Engine\Async\CancelledException;
 use Crab\HttpClient\Client;
 
@@ -317,59 +326,56 @@ final class Application
         if ($words === [] && !$repl) {
             throw new \RuntimeException('Give Bia a prompt, or run it from an interactive terminal.');
         }
-        $modelName = (string) $config->get('model.name');
-        $sessionId ??= $store->create(realpath(getcwd()) ?: getcwd(), $modelName);
-
-        $model = new OpenAiCompatibleModel(
-            new Client(),
-            (string) $config->get('model.base_url'),
-            $apiKey,
-            $modelName,
-            (string) $config->get('model.endpoint', 'chat/completions'),
-            (float) $config->get('model.timeout'),
-            (float) $config->get('model.idle_timeout'),
-        );
-        $loop = new Loop();
         $json = (bool) ($options['json'] ?? false);
+        $root = realpath(getcwd()) ?: getcwd();
+        $sessionId ??= $store->create($root, $config->modelLabel());
+        $workspace = new Workspace($root);
+        $runner = new ProcessRunner([$apiKey]);
+        $outputs = $config->cachePath() . '/outputs';
+        $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
+        $http = new Client();
+        $loop = new Loop();
+
+        if ($repl && !$json && Terminal::interactive()) {
+            $terminal = new Terminal();
+            $region = new Region($terminal);
+            $renderer = new TuiRenderer($region);
+            $chat = null;
+            $ask = static function (string $question) use (&$chat): bool {
+                return $chat instanceof Chat && $chat->confirm($question);
+            };
+            $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs);
+            $makeAgent = static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs);
+            $chat = new Chat(
+                $terminal,
+                $region,
+                $renderer,
+                $config,
+                $makeAgent,
+                $store,
+                $sessionId,
+                $system,
+                $workspace->root(),
+                new Files($runner, $workspace->root()),
+                new ModelCatalog($http),
+                new History(dirname($config->databasePath()) . '/history'),
+                self::VERSION,
+            );
+            $loop->execute($chat->run(...));
+            return 0;
+        }
+
         if ($json) {
             fwrite(STDOUT, json_encode(['type' => 'session', 'id' => $sessionId]) . PHP_EOL);
         } else {
-            fwrite(STDERR, "session: {$sessionId}" . PHP_EOL);
+            fwrite(STDERR, Style::dim("session: {$sessionId} · " . $config->modelLabel()) . PHP_EOL);
         }
         $prompt = new Prompt($canPrompt);
-        $workspace = new Workspace(realpath(getcwd()) ?: getcwd());
-        $runner = new ProcessRunner([$apiKey]);
-        $outputs = $config->cachePath() . '/outputs';
-        $tools = (new Registry(self::approval($config, $options, $prompt, $canPrompt)))
-            ->add(new ReadFileTool($workspace, outputs: $outputs))
-            ->add(new ListFilesTool($workspace, $runner))
-            ->add(new SearchTool($workspace, $runner))
-            ->add(new EditTool($workspace))
-            ->add(new WriteFileTool($workspace))
-            ->add(new ApplyPatchTool($workspace, $runner))
-            ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout')))
-            ->add(new GitDiffTool($workspace, $runner));
-        $renderer = new AnsiRenderer($json);
-        $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
-            $model,
-            $modelName,
-            (int) $config->get('model.context_window'),
-            (int) $config->get('compaction.reserve_tokens'),
-            (int) $config->get('compaction.keep_tokens'),
-        );
-        $agent = new Agent(
-            $model,
-            $modelName,
-            $tools,
-            $store,
-            $renderer,
-            $workspace->root(),
-            $compactor,
-            maxOutputBytes: (int) $config->get('tools.output_bytes'),
-            maxOutputLines: (int) $config->get('tools.output_lines'),
-            outputs: $outputs,
-        );
-        $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
+        $ask = static function (string $question) use ($prompt): bool {
+            return in_array(strtolower(trim((string) $prompt->ask($question . ' [y/N] '))), ['y', 'yes'], true);
+        };
+        $tools = self::tools($config, $options, $ask, $canPrompt, $workspace, $runner, $outputs);
+        $agent = self::agent($config, $http, $tools, $store, new AnsiRenderer($json), $workspace, $outputs);
         $status = 0;
         do {
             $question = $words === [] ? $prompt->ask('> ') : implode(' ', $words);
@@ -408,19 +414,72 @@ final class Application
     }
 
     /**
+     * @param array<string, string|bool> $options
+     * @param \Closure(string): bool $ask Asks the user a yes/no question.
+     */
+    private static function tools(Config $config, array $options, \Closure $ask, bool $canPrompt, Workspace $workspace, ProcessRunner $runner, string $outputs): Registry
+    {
+        return (new Registry(self::approval($config, $options, $ask, $canPrompt)))
+            ->add(new ReadFileTool($workspace, outputs: $outputs))
+            ->add(new ListFilesTool($workspace, $runner))
+            ->add(new SearchTool($workspace, $runner))
+            ->add(new EditTool($workspace))
+            ->add(new WriteFileTool($workspace))
+            ->add(new ApplyPatchTool($workspace, $runner))
+            ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout')))
+            ->add(new GitDiffTool($workspace, $runner));
+    }
+
+    /**
+     * The agent for the configured model; /model builds another.
+     */
+    private static function agent(Config $config, Client $http, Registry $tools, SqliteStore $store, Renderer $renderer, Workspace $workspace, string $outputs): Agent
+    {
+        $modelName = (string) $config->get('model.name');
+        $model = new OpenAiCompatibleModel(
+            $http,
+            (string) $config->get('model.base_url'),
+            (string) $config->get('model.api_key'),
+            $modelName,
+            (string) $config->get('model.endpoint', 'chat/completions'),
+            (float) $config->get('model.timeout'),
+            (float) $config->get('model.idle_timeout'),
+        );
+        $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
+            $model,
+            $modelName,
+            (int) $config->get('model.context_window'),
+            (int) $config->get('compaction.reserve_tokens'),
+            (int) $config->get('compaction.keep_tokens'),
+        );
+        return new Agent(
+            $model,
+            $modelName,
+            $tools,
+            $store,
+            $renderer,
+            $workspace->root(),
+            $compactor,
+            maxOutputBytes: (int) $config->get('tools.output_bytes'),
+            maxOutputLines: (int) $config->get('tools.output_lines'),
+            outputs: $outputs,
+        );
+    }
+
+    /**
      * The approval asked before a tool runs, or null when every permission is
      * "auto", Bia's default, so a call costs nothing extra.
      *
      * @param array<string, string|bool> $options
      */
-    private static function approval(Config $config, array $options, Prompt $prompt, bool $canPrompt): ?\Closure
+    private static function approval(Config $config, array $options, \Closure $ask, bool $canPrompt): ?\Closure
     {
         $policies = (array) $config->get('permissions', []);
         if (array_filter($policies, static fn (mixed $policy): bool => $policy !== 'auto') === []) {
             return null;
         }
         $yes = ($options['yes'] ?? false) === true;
-        return static function (\Bia\Contracts\ToolDefinition $definition, array $arguments) use ($policies, $yes, $prompt, $canPrompt): bool {
+        return static function (\Bia\Contracts\ToolDefinition $definition, array $arguments) use ($policies, $yes, $ask, $canPrompt): bool {
             $policy = (string) ($policies[$definition->permission] ?? 'auto');
             if ($policy === 'auto') {
                 return true;
@@ -435,8 +494,7 @@ final class Application
                 return false;
             }
             $encoded = json_encode($arguments, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE);
-            $answer = $prompt->ask("Allow {$definition->name} ({$encoded})? [y/N] ");
-            return in_array(strtolower(trim((string) $answer)), ['y', 'yes'], true);
+            return $ask("Allow {$definition->name} ({$encoded})?");
         };
     }
 

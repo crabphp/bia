@@ -97,7 +97,7 @@ final class AnsiRenderer implements Renderer
      *
      * @param array<string, mixed> $arguments
      */
-    private static function subject(array $arguments): string
+    public static function subject(array $arguments): string
     {
         foreach (['command', 'path', 'pattern'] as $key) {
             if (isset($arguments[$key]) && is_string($arguments[$key])) {

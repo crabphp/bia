@@ -19,10 +19,14 @@ final readonly class Config
     /**
      * @param array<string, mixed> $values
      * @param list<string> $sources
+     * @param array<string, mixed> $merged Every layer merged, before the model's provider was applied.
+     * @param array<string, mixed> $explicit Model settings the environment or command line set.
      */
     private function __construct(
         private array $values,
         private array $sources,
+        private array $merged,
+        private array $explicit,
     ) {}
 
     /**
@@ -68,8 +72,67 @@ final readonly class Config
         // What the environment or command line set for the model beats a provider's settings.
         $explicit = self::merge($environment['model'] ?? [], is_array($overrides['model'] ?? null) ? $overrides['model'] : []);
         unset($explicit['name'], $explicit['provider']);
-        $values = self::resolve($values, $explicit);
+        return self::make($values, $explicit, $sources);
+    }
 
+    /**
+     * The same configuration with another model, `provider/model` or a bare
+     * name, as `/model` switches to.
+     */
+    public function withModel(string $name): self
+    {
+        $merged = $this->merged;
+        $merged['model']['name'] = $name;
+        return self::make($merged, $this->explicit, $this->sources);
+    }
+
+    /**
+     * Each provider as a model of it would use it: its base_url, endpoint,
+     * api_key and the models listed for it.
+     *
+     * @return array<string, array{base_url: string, endpoint: string, api_key: ?string, models: list<string>}>
+     */
+    public function providers(): array
+    {
+        $providers = [];
+        foreach ((array) ($this->merged['providers'] ?? []) as $name => $settings) {
+            if (!is_string($name) || !is_array($settings)) {
+                continue;
+            }
+            try {
+                $model = $this->withModel("{$name}/-")->get('model');
+            } catch (\InvalidArgumentException) {
+                continue;
+            }
+            $key = $model['api_key'] ?? null;
+            $providers[$name] = [
+                'base_url' => (string) $model['base_url'],
+                'endpoint' => (string) ($model['endpoint'] ?? 'chat/completions'),
+                'api_key' => is_string($key) && $key !== '' ? $key : null,
+                'models' => array_values(array_map('strval', array_keys((array) ($settings['models'] ?? [])))),
+            ];
+        }
+        return $providers;
+    }
+
+    /**
+     * The model as the user names it: `provider/model` when it is a provider's.
+     */
+    public function modelLabel(): string
+    {
+        $provider = (string) $this->get('model.provider');
+        $name = (string) $this->get('model.name');
+        return isset($this->values['providers'][$provider]) ? "{$provider}/{$name}" : $name;
+    }
+
+    /**
+     * @param array<string, mixed> $merged
+     * @param array<string, mixed> $explicit
+     * @param list<string> $sources
+     */
+    private static function make(array $merged, array $explicit, array $sources): self
+    {
+        $values = self::resolve($merged, $explicit);
         // <PROVIDER>_API_KEY stands in for a key not given; it does not replace one.
         if (!isset($explicit['api_key']) && (string) ($values['model']['api_key'] ?? '') === '') {
             foreach (self::keyVariables($values) as $variable) {
@@ -82,9 +145,8 @@ final readonly class Config
                 }
             }
         }
-
         self::check($values);
-        return new self($values, $sources);
+        return new self($values, $sources, $merged, $explicit);
     }
 
     /**

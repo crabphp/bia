@@ -14,7 +14,14 @@ or load a terminal UI framework just to print help or stream a model reply.
 - Keep model, tool, and session operations cancellable and bounded.
 - Run subprocesses through `Bia\Tool\ProcessRunner` (Crab's `Subprocess`), never
   `proc_open` or `shell_exec` directly: that is what makes them cancellable,
-  concurrent and free of Bia's credentials.
+  concurrent and free of Bia's credentials. The one exception is
+  `Tui\Terminal`'s `stty` calls on /dev/tty, which need the terminal itself.
+- `Bia\Tui` names nothing of Bia outside it: only the Crab engine. Its
+  components take keys and return lines and never write to the terminal;
+  only `Region` and `Terminal` do. Keep the theme minimal: dim, one accent,
+  green and red, and nothing when `NO_COLOR` is set.
+- Draw through `Region`, never with a direct write while the chat runs, or the
+  live lines are drawn over.
 - Tools run with full permission by default; do not make approval the default.
 - A project's `.bia/config.json` is untrusted data. Never `require` a project
   file, and never let it set where requests or keys go.
@@ -22,6 +29,8 @@ or load a terminal UI framework just to print help or stream a model reply.
 ## Fast path
 
 - Do not initialize Crab's full web `App` from `bin/bia`.
+- Load the TUI only for a conversation in a terminal; `--help`, one-shot
+  prompts and pipes never touch it.
 - Do not log tokens, prompts, or credentials by default.
 - Do not persist a token delta; persist completed messages and tool boundaries.
 - Measure startup, first-token latency, tool latency, and memory before keeping an optimization.

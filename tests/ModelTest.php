@@ -122,4 +122,12 @@ final class ModelTest extends TestCase
         self::assertNotNull($result->toolCalls[0]->error);
         self::assertSame(['id' => 'c2', 'name' => 'git_diff', 'arguments' => []], $result->toolCalls[1]->toArray());
     }
+
+    public function testModelListsAreReadInTheirCommonShapes(): void
+    {
+        self::assertSame(['gpt-5', 'claude'], \Bia\Model\ModelCatalog::parse(['data' => [['id' => 'gpt-5'], ['id' => 'claude']]]));
+        self::assertSame(['gemini-2.5-pro'], \Bia\Model\ModelCatalog::parse(['models' => [['name' => 'models/gemini-2.5-pro']]]));
+        $this->expectException(\RuntimeException::class);
+        \Bia\Model\ModelCatalog::parse(['error' => 'nope']);
+    }
 }
