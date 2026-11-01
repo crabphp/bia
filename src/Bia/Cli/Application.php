@@ -116,7 +116,11 @@ final class Application
             Configuration:
               ~/.config/bia/config.php   (yours: any setting)
               .bia/config.json           (the project's: model.name, prompt.system,
-                                          permissions, tools)
+                                          permissions, tools, compaction)
+
+            Providers: --model anthropic/NAME, openai/NAME or cliproxyapi/NAME
+            uses a built-in provider; add your own under "providers" in
+            ~/.config/bia/config.php (bia init --global shows how).
 
             State:
               ~/.local/state/bia/bia.sqlite
@@ -139,6 +143,7 @@ final class Application
         fwrite(STDOUT, sprintf("%-18s %s\n", 'ripgrep', self::which('rg') ? 'ok' : 'missing (search; list_files falls back to PHP)'));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'process groups', function_exists('posix_kill') && self::which('setsid') ? 'ok' : 'off (background children may outlive a command)'));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'permissions', json_encode($config->get('permissions'))));
+        fwrite(STDOUT, sprintf("%-18s %s\n", 'model', (string) $config->get('model.name')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model provider', (string) $config->get('model.provider')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model base URL', (string) $config->get('model.base_url')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'API key', self::hasKey($config) ? 'configured' : 'missing'));
@@ -520,7 +525,7 @@ final class Application
         foreach ($values as $key => $value) {
             if (is_array($value)) {
                 $values[$key] = self::redact($value);
-            } elseif (is_string($key) && (str_contains(strtolower($key), 'key') || str_contains(strtolower($key), 'secret') || str_contains(strtolower($key), 'token'))) {
+            } elseif (is_string($key) && preg_match('/(^|_)(api_?key|key|secret|password|token)$/i', $key) === 1) {
                 $values[$key] = $value === null || $value === '' ? $value : '[configured]';
             }
         }

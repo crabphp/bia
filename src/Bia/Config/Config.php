@@ -11,7 +11,8 @@ namespace Bia\Config;
  * `.bia/config.json` comes with whatever repository Bia is run in, so it is
  * read as data and may only set what cannot send a key or a prompt
  * somewhere else: the model name, the system prompt, permissions and tool
- * limits.
+ * limits. It may pick a model of a provider the user configured, never
+ * define one.
  */
 final readonly class Config
 {
@@ -49,31 +50,11 @@ final readonly class Config
             }
         }
 
-        $provider = (string) self::read($values, 'model.provider', 'openai-compatible');
         $environment = [];
-        if (($value = getenv('BIA_PROVIDER')) !== false && $value !== '') {
-            $environment['model']['provider'] = $value;
-            $provider = $value;
-        }
-        foreach (['BIA_BASE_URL' => 'base_url', 'BIA_MODEL' => 'name', 'BIA_API_KEY' => 'api_key'] as $name => $key) {
+        foreach (['BIA_PROVIDER' => 'provider', 'BIA_BASE_URL' => 'base_url', 'BIA_MODEL' => 'name', 'BIA_API_KEY' => 'api_key'] as $name => $key) {
             $value = getenv($name);
             if ($value !== false && $value !== '') {
                 $environment['model'][$key] = $value;
-            }
-        }
-        $providerKey = strtoupper((string) preg_replace('/[^A-Za-z0-9]+/', '_', $provider)) . '_API_KEY';
-        $providerKeys = [$providerKey];
-        if ($provider === 'openai-compatible' || $provider === 'openai') {
-            $providerKeys[] = 'OPENAI_API_KEY';
-        }
-        if ($provider === 'tdaproxy') {
-            $providerKeys[] = 'TDAPROXY_API_KEY';
-            $providerKeys[] = 'TDA_PROXY_API_KEY';
-        }
-        foreach ($providerKeys as $providerKey) {
-            if (($value = getenv($providerKey)) !== false && $value !== '') {
-                $environment['model']['api_key'] = $value;
-                break;
             }
         }
         if ($environment !== []) {
@@ -83,6 +64,22 @@ final readonly class Config
         if ($overrides !== []) {
             $values = self::merge($values, $overrides);
             $sources[] = 'command line';
+        }
+        // What the environment or command line set for the model beats a provider's settings.
+        $explicit = self::merge($environment['model'] ?? [], is_array($overrides['model'] ?? null) ? $overrides['model'] : []);
+        unset($explicit['name'], $explicit['provider']);
+        $values = self::resolve($values, $explicit);
+
+        if (!isset($explicit['api_key'])) {
+            foreach (self::keyVariables($values) as $variable) {
+                if (($value = getenv($variable)) !== false && $value !== '') {
+                    $values['model']['api_key'] = $value;
+                    if (!in_array('environment', $sources, true)) {
+                        $sources[] = 'environment';
+                    }
+                    break;
+                }
+            }
         }
 
         self::check($values);
@@ -100,11 +97,33 @@ final readonly class Config
         $stateHome = self::directory('XDG_STATE_HOME', $home . '/.local/state');
         $cacheHome = self::directory('XDG_CACHE_HOME', $home . '/.cache');
         return [
+            // Named model servers, picked as provider/model; users add their own.
+            'providers' => [
+                'openai' => [
+                    'base_url' => 'https://api.openai.com/v1',
+                    'api_key_env' => 'OPENAI_API_KEY',
+                    'context_window' => 400_000,
+                ],
+                'anthropic' => [
+                    // Anthropic's OpenAI-compatible endpoint.
+                    'base_url' => 'https://api.anthropic.com/v1',
+                    'api_key_env' => 'ANTHROPIC_API_KEY',
+                    'context_window' => 200_000,
+                ],
+                'cliproxyapi' => [
+                    // CLIProxyAPI on this machine, at its default port.
+                    'base_url' => 'http://127.0.0.1:8317/v1',
+                    'api_key_env' => 'CLIPROXYAPI_API_KEY',
+                    'context_window' => 200_000,
+                ],
+            ],
             'model' => [
                 'provider' => 'openai-compatible',
                 'base_url' => 'https://api.openai.com/v1',
                 'endpoint' => 'chat/completions',
                 'api_key' => null,
+                // The environment variable holding the key, when it is not <PROVIDER>_API_KEY.
+                'api_key_env' => null,
                 'name' => 'gpt-5',
                 // A whole reply may take this long; a server silent for idle_timeout seconds is given up on.
                 'timeout' => 3600.0,
@@ -162,10 +181,34 @@ final readonly class Config
             // override what is set here. `bia config` shows the result.
 
             return [
+                // Providers: set a server up once, then pick any of its models by
+                // naming it provider/model in model.name, BIA_MODEL or --model, e.g.
+                // anthropic/claude-sonnet-4-5. These three are built in; change one, or
+                // add your own under a new name. A model listed under models overrides
+                // its provider's settings; any other model just uses them.
+                // 'providers' => [
+                //     'openai' => [
+                //         'base_url' => 'https://api.openai.com/v1',
+                //         'api_key_env' => 'OPENAI_API_KEY',
+                //         'context_window' => 400000,
+                //     ],
+                //     'anthropic' => [                  // Anthropic's OpenAI-compatible endpoint
+                //         'base_url' => 'https://api.anthropic.com/v1',
+                //         'api_key_env' => 'ANTHROPIC_API_KEY',
+                //         'context_window' => 200000,
+                //     ],
+                //     'cliproxyapi' => [                // CLIProxyAPI on this machine
+                //         'base_url' => 'http://127.0.0.1:8317/v1',
+                //         'api_key_env' => 'CLIPROXYAPI_API_KEY',
+                //         'context_window' => 200000,
+                //     ],
+                //     // 'gemini' => [ 'base_url' => ..., 'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]] ],
+                // ],
                 // 'model' => [
                 //     'base_url' => 'https://api.openai.com/v1',  // any OpenAI-compatible API
-                //     'name' => 'gpt-5',
+                //     'name' => 'gpt-5',                // or provider/model, e.g. 'cliproxyapi/gpt-5'
                 //     'api_key' => null,                // better: BIA_API_KEY or <PROVIDER>_API_KEY in the environment
+                //     'api_key_env' => null,            // the variable holding the key, e.g. 'OPENAI_API_KEY'
                 //     'provider' => 'openai-compatible',  // names the <PROVIDER>_API_KEY variable, e.g. 'tdaproxy'
                 //     'endpoint' => 'chat/completions',
                 //     'timeout' => 3600.0,              // seconds a whole reply may take
@@ -249,6 +292,77 @@ final readonly class Config
     }
 
     /**
+     * Applies the provider a model belongs to. `model.name` may name one of
+     * `providers` as a prefix, `tdaproxy/gpt-6-astra`; otherwise
+     * `model.provider` may. The provider's settings then fill in the model's,
+     * and `models.<name>` overrides them for that one model. Whatever was set
+     * explicitly in the environment or on the command line still wins.
+     *
+     * @param array<string, mixed> $values
+     * @param array<string, mixed> $explicit
+     * @return array<string, mixed>
+     */
+    private static function resolve(array $values, array $explicit): array
+    {
+        $providers = $values['providers'] ?? [];
+        if (!is_array($providers)) {
+            throw new \InvalidArgumentException('providers must be an array of named providers.');
+        }
+        $name = $values['model']['name'] ?? null;
+        $provider = null;
+        if (is_string($name) && ($slash = strpos($name, '/')) !== false && isset($providers[substr($name, 0, $slash)])) {
+            $provider = substr($name, 0, $slash);
+            $name = substr($name, $slash + 1);
+        } elseif (is_string($values['model']['provider'] ?? null) && isset($providers[$values['model']['provider']])) {
+            $provider = $values['model']['provider'];
+        }
+        if ($provider === null) {
+            return $values;
+        }
+        $settings = $providers[$provider];
+        if (!is_array($settings)) {
+            throw new \InvalidArgumentException("providers.{$provider} must be an array of settings.");
+        }
+        $models = $settings['models'] ?? [];
+        if (!is_array($models)) {
+            throw new \InvalidArgumentException("providers.{$provider}.models must map model names to settings.");
+        }
+        $model = $models[$name] ?? [];
+        if (!is_array($model)) {
+            throw new \InvalidArgumentException("providers.{$provider}.models.{$name} must be an array of settings.");
+        }
+        unset($settings['models'], $settings['name'], $model['name']);
+        $values['model'] = self::merge(self::merge(self::merge($values['model'], $settings), $model), $explicit);
+        $values['model']['provider'] = $provider;
+        $values['model']['name'] = $name;
+        return $values;
+    }
+
+    /**
+     * The environment variables that may hold the model's API key, first found wins.
+     *
+     * @param array<string, mixed> $values
+     * @return list<string>
+     */
+    private static function keyVariables(array $values): array
+    {
+        $provider = (string) ($values['model']['provider'] ?? 'openai-compatible');
+        $variables = [];
+        $named = $values['model']['api_key_env'] ?? null;
+        if (is_string($named) && $named !== '') {
+            $variables[] = $named;
+        }
+        $variables[] = strtoupper((string) preg_replace('/[^A-Za-z0-9]+/', '_', $provider)) . '_API_KEY';
+        if ($provider === 'openai-compatible' || $provider === 'openai') {
+            $variables[] = 'OPENAI_API_KEY';
+        }
+        if ($provider === 'tdaproxy') {
+            $variables[] = 'TDA_PROXY_API_KEY';
+        }
+        return array_values(array_unique($variables));
+    }
+
+    /**
      * @param array<string, mixed> $values
      */
     private static function check(array $values): void
@@ -267,6 +381,9 @@ final readonly class Config
         }
         if (isset($model['api_key']) && $model['api_key'] !== null && !is_string($model['api_key'])) {
             throw new \InvalidArgumentException('model.api_key must be a string or null.');
+        }
+        if (isset($model['api_key_env']) && (!is_string($model['api_key_env']) || $model['api_key_env'] === '')) {
+            throw new \InvalidArgumentException('api_key_env must name an environment variable.');
         }
         foreach (['timeout', 'idle_timeout'] as $key) {
             if (isset($model[$key]) && (!is_int($model[$key]) && !is_float($model[$key]) || $model[$key] <= 0)) {

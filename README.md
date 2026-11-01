@@ -257,6 +257,50 @@ return [
 ];
 ```
 
+### Providers
+
+A provider is a model server set up once: its URL, where its key is, and its
+models' context window. Pick any of its models as `provider/model`, with
+`--model`, `BIA_MODEL` or `model.name`; there is no list of models to keep.
+
+Three are built in:
+
+| Provider | Server | Key from | Context window |
+|---|---|---|---|
+| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | 400,000 |
+| `anthropic` | `https://api.anthropic.com/v1` (OpenAI-compatible endpoint) | `ANTHROPIC_API_KEY` | 200,000 |
+| `cliproxyapi` | `http://127.0.0.1:8317/v1` ([CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)) | `CLIPROXYAPI_API_KEY` | 200,000 |
+
+```sh
+export CLIPROXYAPI_API_KEY=...     # one of the api-keys in CLIProxyAPI's config.yaml
+bia --model cliproxyapi/claude-sonnet-4-6
+bia --model anthropic/claude-sonnet-4-5
+export BIA_MODEL=openai/gpt-5      # the default from now on
+```
+
+Change one, or add your own, under `providers` in your config. Only a model
+that differs from its provider needs an entry under `models`:
+
+```php
+'providers' => [
+    'cliproxyapi' => ['base_url' => 'http://192.168.1.20:8317/v1'],
+    'tdaproxy' => [
+        'base_url' => 'https://tdaproxy.example/v1',
+        'api_key_env' => 'TDAPROXY_API_KEY', // default: <NAME>_API_KEY
+        'context_window' => 272000,
+        'models' => ['gpt-6-mini' => ['context_window' => 128000]],
+    ],
+],
+'model' => ['name' => 'tdaproxy/gpt-6-astra'],
+```
+
+A provider takes any `model` setting (`base_url`, `api_key`, `api_key_env`,
+`endpoint`, `timeout`, `idle_timeout`, `context_window`). `--base-url`,
+`--api-key`, `BIA_BASE_URL` and `BIA_API_KEY` still override it. A prefix that
+names no provider stays part of the model name, so `meta/llama-4` on
+OpenRouter works as before. A project's `.bia/config.json` may pick a
+provider's model but never define or change a provider.
+
 ### Project config
 
 `.bia/config.json` is found in the current directory or the nearest parent
@@ -281,9 +325,9 @@ with the offending keys named. `bia init` creates one.
 |---|---|
 | `BIA_API_KEY` | `model.api_key` |
 | `OPENAI_API_KEY` | `model.api_key` for the default provider |
-| `<PROVIDER>_API_KEY` | `model.api_key` for `BIA_PROVIDER` (e.g. `TDAPROXY_API_KEY`) |
+| `<PROVIDER>_API_KEY` | `model.api_key` for that provider, unless it names its own `api_key_env` |
 | `BIA_BASE_URL` | `model.base_url` |
-| `BIA_MODEL` | `model.name` |
+| `BIA_MODEL` | `model.name`, e.g. `cliproxyapi/claude-sonnet-4-6` |
 | `BIA_PROVIDER` | `model.provider` |
 | `XDG_CONFIG_HOME`, `XDG_STATE_HOME` | Where config and sessions live |
 | `NO_COLOR` | Plain tool lines |

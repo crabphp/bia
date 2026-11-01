@@ -69,7 +69,7 @@ final class ConfigTest extends TestCase
     public function testTheGlobalTemplateShowsTheRealDefaults(): void
     {
         $template = Config::template();
-        $uncommented = (string) preg_replace('#^( +)// #m', '$1', $template);
+        $uncommented = (string) preg_replace('#^( +)// (?=[\'\]\s])#m', '$1', $template);
         $file = $this->directory() . '/config.php';
         file_put_contents($file, $uncommented);
         $shown = require $file;
@@ -114,6 +114,108 @@ final class ConfigTest extends TestCase
         } finally {
             putenv('XDG_CONFIG_HOME');
         }
+    }
+
+    public function testAProviderIsSetUpOnceForAllItsModels(): void
+    {
+        $home = $this->global(<<<'PHP'
+            <?php return ['providers' => [
+                'cliproxy' => [
+                    'base_url' => 'http://127.0.0.1:8317/v1',
+                    'api_key_env' => 'BIA_TEST_CLIPROXY_KEY',
+                    'context_window' => 272000,
+                    'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]],
+                ],
+                'openrouter' => ['base_url' => 'https://openrouter.ai/api/v1'],
+            ]];
+            PHP);
+        putenv('BIA_TEST_CLIPROXY_KEY=proxy-key');
+        putenv('OPENROUTER_API_KEY=router-key');
+        try {
+            $any = Config::load($this->directory(), ['model' => ['name' => 'cliproxy/gpt-5']]);
+            self::assertSame('gpt-5', $any->get('model.name'));
+            self::assertSame('cliproxy', $any->get('model.provider'));
+            self::assertSame('http://127.0.0.1:8317/v1', $any->get('model.base_url'));
+            self::assertSame('proxy-key', $any->get('model.api_key'));
+            self::assertSame(272000, $any->get('model.context_window'));
+
+            $listed = Config::load($this->directory(), ['model' => ['name' => 'cliproxy/gemini-2.5-pro']]);
+            self::assertSame(1000000, $listed->get('model.context_window'), 'A listed model overrides its provider.');
+
+            $nested = Config::load($this->directory(), ['model' => ['name' => 'openrouter/anthropic/claude-sonnet-4']]);
+            self::assertSame('anthropic/claude-sonnet-4', $nested->get('model.name'));
+            self::assertSame('router-key', $nested->get('model.api_key'), 'The key defaults to <PROVIDER>_API_KEY.');
+
+            $explicit = Config::load($this->directory(), ['model' => ['name' => 'cliproxy/gpt-5', 'base_url' => 'http://other/v1']]);
+            self::assertSame('http://other/v1', $explicit->get('model.base_url'), 'The command line beats the provider.');
+
+            $plain = Config::load($this->directory(), ['model' => ['name' => 'meta/llama-4']]);
+            self::assertSame('meta/llama-4', $plain->get('model.name'), 'A prefix that is no provider stays in the name.');
+        } finally {
+            putenv('BIA_TEST_CLIPROXY_KEY');
+            putenv('OPENROUTER_API_KEY');
+            putenv('XDG_CONFIG_HOME');
+        }
+        self::assertDirectoryExists($home);
+    }
+
+    public function testAnthropicOpenAiAndCliProxyApiAreBuiltIn(): void
+    {
+        putenv('XDG_CONFIG_HOME=' . $this->directory());
+        putenv('ANTHROPIC_API_KEY=anthropic-key');
+        try {
+            $claude = Config::load($this->directory(), ['model' => ['name' => 'anthropic/claude-sonnet-4-5']]);
+            self::assertSame('https://api.anthropic.com/v1', $claude->get('model.base_url'));
+            self::assertSame('anthropic-key', $claude->get('model.api_key'));
+            self::assertSame('claude-sonnet-4-5', $claude->get('model.name'));
+            self::assertSame('http://127.0.0.1:8317/v1', Config::load($this->directory(), ['model' => ['name' => 'cliproxyapi/gpt-5']])->get('model.base_url'));
+            self::assertSame(400000, Config::load($this->directory(), ['model' => ['name' => 'openai/gpt-5']])->get('model.context_window'));
+            self::assertSame('https://api.openai.com/v1', Config::load($this->directory())->get('model.base_url'), 'A plain model name is unchanged.');
+        } finally {
+            putenv('ANTHROPIC_API_KEY');
+            putenv('XDG_CONFIG_HOME');
+        }
+    }
+
+    public function testAProjectMayPickAProvidersModelButNotDefineAProvider(): void
+    {
+        $this->global("<?php return ['providers' => ['cliproxy' => ['base_url' => 'http://127.0.0.1:8317/v1']]];");
+        try {
+            $root = $this->project(['model' => ['name' => 'cliproxy/gpt-5']]);
+            self::assertSame('http://127.0.0.1:8317/v1', Config::load($root)->get('model.base_url'));
+
+            $this->expectException(\InvalidArgumentException::class);
+            $this->expectExceptionMessage('providers.evil.base_url');
+            Config::load($this->project(['providers' => ['evil' => ['base_url' => 'https://attacker.example']]]));
+        } finally {
+            putenv('XDG_CONFIG_HOME');
+        }
+    }
+
+    public function testConfigShowsTokenLimitsAndHidesKeys(): void
+    {
+        $output = (string) shell_exec(
+            'OPENAI_API_KEY=sk-hidden XDG_CONFIG_HOME=' . escapeshellarg($this->directory()) . ' '
+            . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(dirname(__DIR__) . '/bin/bia') . ' config --json 2>&1',
+        );
+        $shown = json_decode($output, true);
+        self::assertIsArray($shown, $output);
+        self::assertSame(20000, $shown['compaction']['keep_tokens']);
+        self::assertSame('[configured]', $shown['model']['api_key']);
+        self::assertStringNotContainsString('sk-hidden', $output);
+    }
+
+    /**
+     * Points XDG_CONFIG_HOME at a new directory holding this global config.php;
+     * the caller unsets it.
+     */
+    private function global(string $php): string
+    {
+        $home = $this->directory();
+        mkdir($home . '/bia');
+        file_put_contents($home . '/bia/config.php', $php);
+        putenv('XDG_CONFIG_HOME=' . $home);
+        return $home;
     }
 
     /**
