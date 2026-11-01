@@ -101,7 +101,12 @@ final readonly class ModelCatalog
             maxBytes: 4_194_304,
         );
         if (!$response->ok()) {
-            throw new \RuntimeException('HTTP ' . $response->getStatusCode());
+            $status = $response->getStatusCode();
+            $refused = in_array($status, [401, 403], true);
+            if ($refused && $provider['api_key'] === null) {
+                return []; // A local server that wants a key never given: not one set up for Bia.
+            }
+            throw new \RuntimeException($refused ? 'key rejected' : "HTTP {$status}");
         }
         return self::parse($response->json());
     }
