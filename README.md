@@ -56,13 +56,11 @@ bia "find why the login test fails and fix it"
 ## Install
 
 Bia is not on Packagist yet. It installs from a checkout that sits beside the
-framework, which its `composer.json` loads by path. Until the framework's
-`subprocess-and-stream-idle` branch is merged, check out that branch: Bia
-needs its `Subprocess` and streaming idle timeout.
+framework, which its `composer.json` loads by path.
 
 ```sh
 mkdir crabphp && cd crabphp
-git clone -b subprocess-and-stream-idle git@github.com:crabphp/framework.git
+git clone git@github.com:crabphp/framework.git
 git clone git@github.com:crabphp/bia.git
 cd framework && composer install && cd ..
 cd bia && composer install
