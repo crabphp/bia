@@ -15,7 +15,7 @@ use Crab\Engine\EventLoop;
  * frame, not per token. Text printed without its newline yet stays in the
  * region until the line is finished.
  */
-final class Region
+final class Region implements Surface
 {
     /** @var list<string> */
     private array $lines = [];
@@ -131,6 +131,18 @@ final class Region
         $this->drawn = false;
         $this->terminal->write("\e[H\e[2J" . ($scrollback ? "\e[3J" : ''));
         $this->redraw();
+    }
+
+    public function scroll(int $rows): void
+    {
+        // The terminal scrolls its own scrollback.
+    }
+
+    public function follow(): void {}
+
+    public function page(): int
+    {
+        return 0;
     }
 
     private function schedule(): void

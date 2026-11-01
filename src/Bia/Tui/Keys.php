@@ -52,6 +52,10 @@ final class Keys
         }
         $first = $buffer[0];
         if ($first === "\e") {
+            $mouse = self::mouse($buffer);
+            if ($mouse !== null) {
+                return $mouse->is('pending') ? null : $mouse;
+            }
             return self::escape($buffer);
         }
         if (isset(self::CONTROLS[$first])) {
@@ -74,6 +78,42 @@ final class Keys
         $char = substr($buffer, 0, $length);
         $buffer = (string) substr($buffer, $length);
         return new Key('char', mb_check_encoding($char, 'UTF-8') ? $char : '?');
+    }
+
+    /**
+     * A mouse report, as SGR (`ESC [ < b ; x ; y M`) or the older X10 form
+     * (`ESC [ M` and three bytes): the wheel as "wheel-up" and "wheel-down",
+     * any other button as "mouse". A report not yet whole is "pending", to
+     * wait for the rest; null when the buffer holds none.
+     */
+    private static function mouse(string &$buffer): ?Key
+    {
+        if (str_starts_with($buffer, "\e[<")) {
+            if (preg_match('/^\e\[<(\d+);\d+;\d+[Mm]/', $buffer, $match) !== 1) {
+                return preg_match('/^\e\[<[\d;]*$/', $buffer) === 1 ? new Key('pending') : null;
+            }
+            $buffer = (string) substr($buffer, strlen($match[0]));
+            return self::button((int) $match[1]);
+        }
+        if (str_starts_with($buffer, "\e[M")) {
+            if (strlen($buffer) < 6) {
+                return new Key('pending');
+            }
+            $button = ord($buffer[3]) - 32;
+            $buffer = (string) substr($buffer, 6);
+            return self::button($button);
+        }
+        return null;
+    }
+
+    private static function button(int $button): Key
+    {
+        // Bit 6 marks the wheel; shift, alt and ctrl add 4, 8 and 16.
+        return match ($button & ~(4 | 8 | 16)) {
+            64 => new Key('wheel-up'),
+            65 => new Key('wheel-down'),
+            default => new Key('mouse'),
+        };
     }
 
     private static function escape(string &$buffer): Key

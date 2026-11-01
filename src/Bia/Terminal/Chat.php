@@ -12,7 +12,7 @@ use Bia\Model\ModelCatalog;
 use Bia\Tui\Editor;
 use Bia\Tui\Fuzzy;
 use Bia\Tui\Key;
-use Bia\Tui\Region;
+use Bia\Tui\Surface;
 use Bia\Tui\SelectList;
 use Bia\Tui\Spinner;
 use Bia\Tui\Style;
@@ -65,7 +65,7 @@ final class Chat
      */
     public function __construct(
         private readonly Terminal $terminal,
-        private readonly Region $region,
+        private readonly Surface $region,
         TuiRenderer $renderer,
         private Config $config,
         private readonly \Closure $makeAgent,
@@ -181,6 +181,17 @@ final class Chat
 
     private function handle(Key $key): void
     {
+        if ($key->is('wheel-up', 'wheel-down')) {
+            $this->region->scroll($key->is('wheel-up') ? -3 : 3);
+            return;
+        }
+        if ($key->is('mouse')) {
+            return;
+        }
+        if ($key->is('pageup', 'pagedown') && $this->menu === null && $this->region->page() > 0) {
+            $this->region->scroll(($key->is('pageup') ? -1 : 1) * $this->region->page());
+            return;
+        }
         if ($this->menuKind === 'confirm') {
             $answer = null;
             if ($key->is('char')) {
@@ -275,6 +286,7 @@ final class Chat
         $this->editor->remember($text);
         $this->history->add($text);
         $this->editor->clear();
+        $this->region->follow();
         if (Commands::looksLikeOne($text)) {
             $name = strtolower((string) strtok(substr($text, 1), " \n"));
             if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'clear'], true)) {
@@ -340,10 +352,11 @@ final class Chat
     private function echo(string $text): void
     {
         $this->lineStart();
+        // The user's words on a shaded background, a line at a time, set apart from the answer.
         $lines = explode("\n", $text);
-        $shown = Style::accent('›') . ' ' . array_shift($lines);
+        $shown = Style::bar(' › ' . array_shift($lines));
         foreach ($lines as $line) {
-            $shown .= "\n  " . $line;
+            $shown .= "\n" . Style::bar('   ' . $line);
         }
         $this->region->print("\n" . $shown . "\n\n");
     }
@@ -514,6 +527,9 @@ final class Chat
             Ctrl-W delete word · Ctrl-U delete to line start · Ctrl-L clear screen · Ctrl-D leave
             Type while Bia works: Enter queues the message for after the turn.
             TEXT;
+        if ($this->region->page() > 0) {
+            $keys .= "\nWheel or PageUp/PageDown scroll · Shift-drag selects text";
+        }
         $this->lineStart();
         $this->region->print(Style::dim($this->commands->help() . "\n\n" . $keys) . "\n");
     }

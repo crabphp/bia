@@ -45,6 +45,16 @@ final class Style
         return self::paint('33', $text);
     }
 
+    /**
+     * A line on a dark grey background, just above a dark terminal's own, as
+     * wide as the terminal: erasing to the end of the row fills it with the
+     * background.
+     */
+    public static function bar(string $text): string
+    {
+        return self::color() ? "\e[48;5;236m{$text}\e[K\e[0m" : $text;
+    }
+
     public static function bold(string $text): string
     {
         return self::paint('1', $text);
@@ -108,9 +118,71 @@ final class Style
         return $rows;
     }
 
+    /**
+     * A line of styled text split into rows of at most the given columns.
+     * Colour carries across a split: a row that ends inside a style resets
+     * it, and the next row starts it again. Tabs become spaces, and other
+     * control characters and non-colour escape codes are dropped, as they
+     * would move the cursor. An empty line is one empty row.
+     *
+     * @return list<string>
+     */
+    public static function wrapAnsi(string $line, int $width): array
+    {
+        $width = max(1, $width);
+        if (!preg_match('/[^\x20-\x7e]/', $line)) {
+            return strlen($line) <= $width ? [$line] : str_split($line, $width);
+        }
+        preg_match_all('/\e\[[0-9;?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\\\)?|\e.?|./us', $line, $tokens);
+        $rows = [];
+        $row = '';
+        $used = 0;
+        $active = '';
+        // A line that erases to its end fills its rows with its background: each row it wraps onto too.
+        $fill = str_contains($line, "\e[K") ? "\e[K" : '';
+        foreach ($tokens[0] as $token) {
+            if ($token[0] === "\e") {
+                if (preg_match('/^\e\[([0-9;]*)m$/', $token, $sgr) === 1) {
+                    $active = $sgr[1] === '' || $sgr[1] === '0' ? '' : $active . $token;
+                    $row .= $token;
+                } elseif ($token === "\e[K") {
+                    $row .= $token;
+                }
+                continue;
+            }
+            if ($token === "\t") {
+                $token = ' ';
+                $count = 8 - $used % 8;
+            } elseif (ord($token) < 0x20 || $token === "\x7f") {
+                continue;
+            } else {
+                $count = 1;
+            }
+            $w = mb_strwidth($token, 'UTF-8');
+            for ($i = 0; $i < $count; $i++) {
+                if ($used + $w > $width && $used > 0) {
+                    $rows[] = $active !== '' ? $row . $fill . "\e[0m" : $row;
+                    $row = $active;
+                    $used = 0;
+                    if ($count > 1) {
+                        break; // a tab ends at the row's end
+                    }
+                }
+                $row .= $token;
+                $used += $w;
+            }
+        }
+        $rows[] = $row;
+        return $rows;
+    }
+
     private static function paint(string $code, string $text): string
     {
-        self::$color ??= getenv('NO_COLOR') === false && function_exists('stream_isatty') && stream_isatty(STDOUT);
-        return self::$color && $text !== '' ? "\e[{$code}m{$text}\e[0m" : $text;
+        return self::color() && $text !== '' ? "\e[{$code}m{$text}\e[0m" : $text;
+    }
+
+    private static function color(): bool
+    {
+        return self::$color ??= getenv('NO_COLOR') === false && function_exists('stream_isatty') && stream_isatty(STDOUT);
     }
 }

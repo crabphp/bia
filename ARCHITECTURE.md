@@ -35,9 +35,11 @@ the engine, kept able to move into the framework when a second user needs it:
 
 | Part | Does |
 |---|---|
-| `Terminal` | Raw mode with `stty` on /dev/tty (Ctrl-C and Ctrl-Z arrive as keys), bracketed paste, size, keys read on the event loop; gives the terminal back as found, on exit too |
-| `Keys`, `Key` | Turns terminal bytes into keys and pastes |
-| `Region` | Inline rendering: finished output scrolls, only the live lines at the bottom are redrawn, at most once a frame (1/60 s), in one synchronized write, and not at all when unchanged |
+| `Terminal` | Raw mode with `stty` on /dev/tty (Ctrl-C and Ctrl-Z arrive as keys), bracketed paste, the alternate screen with mouse-wheel reports, size, keys read on the event loop; gives the terminal back as found, on exit too |
+| `Keys`, `Key` | Turns terminal bytes into keys, pastes and mouse-wheel turns |
+| `Surface` | Where the chat draws: output above, live lines below. Two kinds: |
+| `Screen` | Fullscreen, the default: the alternate screen, output wrapped and scrolled by Bia (wheel, PageUp/PageDown) with the live lines kept at the bottom; only changed rows are written, at most once a frame (1/60 s), in one synchronized write; the output is printed on the main screen on leaving |
+| `Region` | Inline, with `tui.fullscreen` false: finished output goes into the terminal's own scrollback, only the live lines at the bottom are redrawn, at most once a frame, and the screen is drawn afresh when a resize changes the width |
 | `Editor` | Multi-line input with history, word moves and paste |
 | `SelectList` | A filtered list for pickers and completion menus; keys in, lines out |
 | `Spinner`, `Fuzzy`, `Style` | The working line, fuzzy ranking, and the minimal theme with display-width measuring |

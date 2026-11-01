@@ -9,7 +9,7 @@ use Bia\Contracts\ModelResult;
 use Bia\Contracts\Renderer;
 use Bia\Contracts\ToolCall;
 use Bia\Contracts\ToolResult;
-use Bia\Tui\Region;
+use Bia\Tui\Surface;
 use Bia\Tui\Style;
 
 /**
@@ -23,7 +23,7 @@ final class TuiRenderer implements Renderer
     /** @var \Closure(array<string, mixed>): void */
     private \Closure $usage;
 
-    public function __construct(private readonly Region $region)
+    public function __construct(private readonly Surface $region)
     {
         $this->activity = static function (string $label): void {};
         $this->usage = static function (array $usage): void {};

@@ -21,6 +21,7 @@ final class Terminal
     private string $buffer = '';
     private ?int $columns = null;
     private ?int $rows = null;
+    private bool $alternate = false;
 
     /**
      * @param resource $input
@@ -91,11 +92,25 @@ final class Terminal
         register_shutdown_function($this->leave(...));
     }
 
+    /**
+     * The alternate screen, with the mouse wheel reported as keys: the whole
+     * terminal for the program, given back as it was on leaving.
+     */
+    public function alternate(bool $on): void
+    {
+        if ($on === $this->alternate) {
+            return;
+        }
+        $this->alternate = $on;
+        $this->write($on ? "\e[?1049h\e[H\e[2J\e[?1000h\e[?1006h" : "\e[?1006l\e[?1000l\e[?1049l");
+    }
+
     public function leave(): void
     {
         if ($this->saved === null) {
             return;
         }
+        $this->alternate(false);
         $this->write("\e[?2004l\e[?25h");
         shell_exec('stty ' . escapeshellarg($this->saved) . ' < /dev/tty 2>/dev/null');
         stream_set_blocking($this->input, true);

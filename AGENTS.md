@@ -18,10 +18,11 @@ or load a terminal UI framework just to print help or stream a model reply.
   `Tui\Terminal`'s `stty` calls on /dev/tty, which need the terminal itself.
 - `Bia\Tui` names nothing of Bia outside it: only the Crab engine. Its
   components take keys and return lines and never write to the terminal;
-  only `Region` and `Terminal` do. Keep the theme minimal: dim, one accent,
-  green and red, and nothing when `NO_COLOR` is set.
-- Draw through `Region`, never with a direct write while the chat runs, or the
-  live lines are drawn over.
+  only the two `Surface`s, `Screen` and `Region`, and `Terminal` do. Keep the
+  theme minimal: dim, one accent, green and red, a grey shade behind the
+  user's messages, and nothing when `NO_COLOR` is set.
+- Draw through the `Surface`, never with a direct write while the chat runs, or
+  the live lines are drawn over.
 - Tools run with full permission by default; do not make approval the default.
 - A project's `.bia/config.json` is untrusted data. Never `require` a project
   file, and never let it set where requests or keys go.

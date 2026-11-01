@@ -11,6 +11,7 @@ use Bia\Tui\Fuzzy;
 use Bia\Tui\Key;
 use Bia\Tui\Keys;
 use Bia\Tui\Region;
+use Bia\Tui\Screen;
 use Bia\Tui\SelectList;
 use Bia\Tui\Spinner;
 use Bia\Tui\Style;
@@ -214,5 +215,97 @@ final class TuiTest extends TestCase
         self::assertSame(5, Style::width(Style::accent('hello')));
         self::assertSame(['日本', '語x'], Style::wrap('日本語x', 4));
         self::assertSame('abc…', Style::truncate('abcdef', 4));
+    }
+
+    public function testStyledTextWrapsWithItsColourCarriedOver(): void
+    {
+        self::assertSame(['abcd', 'ef'], Style::wrapAnsi('abcdef', 4));
+        self::assertSame([''], Style::wrapAnsi('', 4));
+        self::assertSame(["\e[36mabcd\e[0m", "\e[36mef\e[0m"], Style::wrapAnsi("\e[36mabcdef\e[0m", 4), 'A row ending inside a colour resets it; the next starts it again.');
+        self::assertSame(['a   ', 'b'], Style::wrapAnsi("a\tb", 4), 'A tab ends at the row it is on.');
+        self::assertSame(['ab'], Style::wrapAnsi("a\e[2Kb\x07", 4), 'Codes that move the cursor are dropped.');
+        self::assertSame(['日本', '語'], Style::wrapAnsi('日本語', 5));
+        self::assertSame(
+            ["\e[100mabcd\e[K\e[0m", "\e[100mef\e[K\e[0m"],
+            Style::wrapAnsi("\e[100mabcdef\e[K\e[0m", 4),
+            'A shaded bar fills every row it wraps onto.',
+        );
+    }
+
+    public function testTheMouseWheelIsReadAsKeys(): void
+    {
+        $buffer = "\e[<64;10;5M\e[<65;10;5M\e[<0;3;4M\e[<0;3;4m\e[M`!!";
+        $names = [];
+        while (($key = Keys::take($buffer)) !== null) {
+            $names[] = $key->name;
+        }
+        self::assertSame(['wheel-up', 'wheel-down', 'mouse', 'mouse', 'wheel-up'], $names);
+
+        $buffer = "\e[<64;10";
+        self::assertNull(Keys::take($buffer), 'Half a mouse report waits for the rest.');
+        self::assertSame("\e[<64;10", $buffer);
+    }
+
+    public function testTheScreenScrollsTheOutputAndKeepsTheLiveLinesAtTheBottom(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        $output = fopen('php://memory', 'w+');
+        $screen = new Screen(new Terminal(STDIN, $output, [20, 6]));
+        $screen->set(['input', 'status'], [0, 2]);
+        for ($i = 1; $i <= 10; $i++) {
+            $screen->print("line {$i}\n");
+        }
+        $screen->flush();
+        self::assertSame(['line 7', 'line 8', 'line 9', 'line 10', 'input', 'status'], self::screenRows($output, 6), 'It follows the newest output.');
+
+        $screen->scroll(-3);
+        $screen->flush();
+        self::assertSame(['line 4', 'line 5', 'line 6', '↓', 'input', 'status'], self::screenRows($output, 6));
+
+        $screen->print("line 11\n");
+        $screen->flush();
+        self::assertSame('line 4', self::screenRows($output, 6)[0], 'New output does not move what is being read.');
+
+        $screen->scroll(-100);
+        $screen->flush();
+        self::assertSame('line 1', self::screenRows($output, 6)[0], 'Scrolling stops at the oldest line.');
+
+        $screen->scroll(100);
+        $screen->flush();
+        self::assertSame(['line 8', 'line 9', 'line 10', 'line 11', 'input', 'status'], self::screenRows($output, 6), 'Scrolling to the end follows again.');
+        self::assertSame(3, $screen->page());
+
+        $screen->close();
+        rewind($output);
+        $all = (string) stream_get_contents($output);
+        self::assertStringContainsString("\e[?1049h", $all, 'It draws on the alternate screen.');
+        self::assertStringContainsString("\e[?1049lline 1\r\nline 2\r\n", $all, 'Closing prints the output on the main screen.');
+    }
+
+    /**
+     * What a terminal of the given rows shows after the bytes written so far,
+     * for the few codes Screen writes: row moves, row clears and colours.
+     *
+     * @param resource $output
+     * @return list<string>
+     */
+    private static function screenRows(mixed $output, int $rows): array
+    {
+        rewind($output);
+        $bytes = (string) stream_get_contents($output);
+        $screen = array_fill(0, $rows, '');
+        $row = 0;
+        foreach (preg_split('/(\e\[[0-9;?]*[A-Za-z])/', $bytes, -1, PREG_SPLIT_DELIM_CAPTURE) ?: [] as $part) {
+            if (preg_match('/^\e\[(\d+);\d+H$/', $part, $match) === 1) {
+                $row = (int) $match[1] - 1;
+            } elseif ($part === "\e[2J") {
+                $screen = array_fill(0, $rows, '');
+            } elseif ($part === "\e[2K") {
+                $screen[$row] = '';
+            } elseif ($part !== '' && $part[0] !== "\e" && isset($screen[$row])) {
+                $screen[$row] .= str_replace(["\r", "\n"], '', $part);
+            }
+        }
+        return $screen;
     }
 }

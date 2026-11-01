@@ -208,6 +208,10 @@ final readonly class Config
                 'reserve_tokens' => 16_384,
                 'keep_tokens' => 20_000,
             ],
+            'tui' => [
+                // The whole terminal, scrolled by Bia with the input kept at the bottom; false draws inline.
+                'fullscreen' => true,
+            ],
             'storage' => [
                 'path' => $stateHome . '/bia/bia.sqlite',
             ],
@@ -373,6 +377,21 @@ final readonly class Config
                 //     'enabled' => true,
                 //     'reserve_tokens' => 16384,
                 //     'keep_tokens' => 20000,
+                // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Terminal
+                |--------------------------------------------------------------------------
+                |
+                | A conversation takes the whole terminal and keeps the input at the
+                | bottom while the output scrolls. false draws inline instead, in the
+                | terminal's own scrollback.
+                |
+                */
+
+                // 'tui' => [
+                //     'fullscreen' => true,
                 // ],
 
                 /*

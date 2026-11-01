@@ -31,6 +31,7 @@ use Bia\Tool\ShellTool;
 use Bia\Tool\Workspace;
 use Bia\Tool\WriteFileTool;
 use Bia\Tui\Region;
+use Bia\Tui\Screen;
 use Bia\Tui\Style;
 use Bia\Tui\Terminal;
 use Crab\Engine\Async\CancelledException;
@@ -339,7 +340,7 @@ final class Application
 
         if ($repl && !$json && Terminal::interactive()) {
             $terminal = new Terminal();
-            $region = new Region($terminal);
+            $region = $config->get('tui.fullscreen') === false ? new Region($terminal) : new Screen($terminal);
             $renderer = new TuiRenderer($region);
             $chat = null;
             $ask = static function (string $question) use (&$chat): bool {
