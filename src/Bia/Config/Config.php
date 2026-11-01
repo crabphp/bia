@@ -200,8 +200,9 @@ final readonly class Config
                 | as anthropic/claude-sonnet-4-5. These three are built in; change one,
                 | or add your own under a new name.
                 |
-                | A provider takes any model setting below. The key is read from the
-                | api_key_env variable, or <NAME>_API_KEY when none is named. Only a
+                | A provider takes any model setting below. Paste its key into api_key,
+                | or leave that out and Bia reads the variable named by api_key_env,
+                | else <NAME>_API_KEY; a variable that is set wins. Only a
                 | model that differs from its provider needs an entry under "models",
                 | e.g. 'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]].
                 |
@@ -220,7 +221,7 @@ final readonly class Config
                 //     ],
                 //     'cliproxyapi' => [
                 //         'base_url' => 'http://127.0.0.1:8317/v1',
-                //         'api_key_env' => 'CLIPROXYAPI_API_KEY',
+                //         'api_key_env' => 'CLIPROXYAPI_API_KEY',  // or 'api_key' => 'sk-...'
                 //         'context_window' => 200000,
                 //     ],
                 // ],
@@ -234,8 +235,9 @@ final readonly class Config
                 | the server, key and context window from that provider. Otherwise
                 | base_url may point at any OpenAI-compatible API.
                 |
-                | Keep the key out of this file: BIA_API_KEY or the provider's variable
-                | in the environment is better. The timeout is how long a whole reply
+                | The key may be pasted into api_key here, in this file only you can
+                | read; BIA_API_KEY or the provider's variable overrides it when set.
+                | The timeout is how long a whole reply
                 | may take; a server silent for idle_timeout seconds is given up on.
                 | The context window is your model's, in tokens; compaction keeps the
                 | conversation below it.

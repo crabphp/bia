@@ -228,7 +228,7 @@ return [
     'model' => [
         'base_url' => 'https://api.openai.com/v1',
         'name' => 'gpt-5',
-        'api_key' => null,          // prefer the environment
+        'api_key' => null,          // or paste it here; the environment wins
         'timeout' => 3600.0,        // longest a whole reply may take
         'idle_timeout' => 120.0,    // give up on a server silent this long
         'context_window' => 128000, // tokens; set it to your model's
@@ -278,12 +278,15 @@ bia --model anthropic/claude-sonnet-4-5
 export BIA_MODEL=openai/gpt-5      # the default from now on
 ```
 
-Change one, or add your own, under `providers` in your config. Only a model
-that differs from its provider needs an entry under `models`:
+Change one, or add your own, under `providers` in your config. Paste a key
+into `api_key`, or leave it out and Bia reads the variable named by
+`api_key_env`, else `<NAME>_API_KEY`; a variable that is set wins over the
+file. Only a model that differs from its provider needs an entry under
+`models`:
 
 ```php
 'providers' => [
-    'cliproxyapi' => ['base_url' => 'http://192.168.1.20:8317/v1'],
+    'cliproxyapi' => ['api_key' => 'sk-...'],
     'tdaproxy' => [
         'base_url' => 'https://tdaproxy.example/v1',
         'api_key_env' => 'TDAPROXY_API_KEY', // default: <NAME>_API_KEY
