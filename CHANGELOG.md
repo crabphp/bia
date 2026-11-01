@@ -16,6 +16,16 @@
   - `/new`, `/compact`, `/clear`, `/help`, `/exit`, `/quit`; `/` and `@`
     open completion menus of commands and workspace files.
   - A tool whose permission is `ask` asks in a Yes/No picker.
+- **Resuming:** `/resume` picks one of this folder's sessions, titled by its
+  first prompt, with when it was last used; `/resume <id>` and
+  `bia resume <id>` take the start of an id; `bia resume` without one opens
+  the picker. Resuming replays the end of the conversation. Leaving a
+  session with messages prints `bia resume <id>`, in every mode.
+- A conversation's session is created by its first message, so starting and
+  leaving Bia no longer leaves empty sessions; `bia sessions` lists only
+  sessions with entries, with their first prompt.
+- `SessionStore::list()` takes a workspace and returns each session's title;
+  `SessionStore::resolve()` finds a session by the start of its id.
 - `Bia\Tui`: the kit it is built from (terminal, keys, live region, editor,
   select list, spinner, fuzzy matching, theme), on Crab's event loop alone.
 - One-shot runs print the model next to the session id.

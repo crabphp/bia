@@ -98,6 +98,11 @@ final class Keys
             $buffer = (string) substr($buffer, 2);
             return new Key('unknown');
         }
+        if (!in_array($second, ["\r", "\n", "\x7f", "\x08", "\e"], true) && (ord($second) < 0x20 || ord($second) > 0x7e)) {
+            // Esc, then a key of its own (Ctrl-D, a letter beyond ASCII): not an Alt chord.
+            $buffer = (string) substr($buffer, 1);
+            return new Key('escape');
+        }
         $buffer = (string) substr($buffer, 2);
         return match ($second) {
             "\r", "\n" => new Key('alt-enter'),

@@ -129,10 +129,14 @@ final class SelectList
             return $rows;
         }
         $labelWidth = 0;
+        $hintWidth = 0;
         foreach (array_slice($this->shown, $this->top, $this->height) as $item) {
             $labelWidth = max($labelWidth, mb_strwidth($item['label'], 'UTF-8'));
+            $hintWidth = max($hintWidth, mb_strwidth($item['hint'], 'UTF-8'));
         }
-        $labelWidth = min($labelWidth, max(10, $width - 6));
+        // Labels give way to hints up to half the width, so both stay readable.
+        $hintRoom = $hintWidth === 0 ? 0 : min($hintWidth, intdiv($width, 2)) + 2;
+        $labelWidth = min($labelWidth, max(10, $width - 4 - $hintRoom));
         foreach (array_slice($this->shown, $this->top, $this->height, true) as $index => $item) {
             $label = Style::truncate($item['label'], $labelWidth);
             $hintRoom = $width - 4 - $labelWidth;

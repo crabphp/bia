@@ -32,7 +32,19 @@ interface SessionStore
     public function exists(string $sessionId): bool;
 
     /**
+     * The most recently used sessions first, each with its id, workspace,
+     * model, created_at, updated_at, entry_count, and title: its first
+     * prompt, or null.
+     *
+     * @param string|null $workspace Only the sessions of this workspace.
      * @return list<array<string, mixed>>
      */
-    public function list(int $limit = 50): array;
+    public function list(int $limit = 50, ?string $workspace = null): array;
+
+    /**
+     * The session with this id, or the one session whose id starts with it.
+     *
+     * @return string|null Null when none does, or more than one.
+     */
+    public function resolve(string $id): ?string;
 }

@@ -106,7 +106,7 @@ bia
 ```text
 bia [options] [prompt]              One prompt, or a conversation when run without one
 bia ask [options] <prompt>          The same, explicitly
-bia resume <session-id> [prompt]    Continue a session
+bia resume [session-id] [prompt]    Continue a session; without an id, pick one
 bia fork <session-id>               Start a new session from another's latest point
 bia sessions [--json]               List recent sessions
 bia export <session-id>             Write a session as JSONL
@@ -155,6 +155,8 @@ completes.
 |---|---|
 | `/model` | Pick a model from every provider you have a key for, fuzzy-filtered as you type |
 | `/model provider/name` | Switch straight to that model; the session goes on |
+| `/resume` | Pick one of this folder's sessions, by its first prompt, and continue it |
+| `/resume <id>` | Continue that session; the start of its id is enough |
 | `/new` | Start a new session |
 | `/compact` | Summarize the conversation so far now |
 | `/clear` | Clear the screen |
@@ -179,8 +181,16 @@ the highlighted one.
 
 A tool whose permission is `ask` asks in the same place, Yes or No (`y` and
 `n` answer too). A failed turn, such as a rate limit or a dropped connection,
-prints the error and keeps the conversation open. Continue a session later
-with `bia resume <id>`; its id is on the first line.
+prints the error and keeps the conversation open.
+
+A session begins with its first message, so opening Bia and leaving creates
+nothing. When you leave one that has messages, Bia says how to come back:
+
+```text
+Resume this session with: bia resume ede8706ee073e1d00698e128
+```
+
+Resuming shows the end of the conversation as it was, then goes on.
 
 Without a terminal, or with `TERM=dumb`, Bia falls back to a plain `>`
 prompt.
@@ -402,10 +412,11 @@ messages and tool results, not each streamed token. Messages are kept in no
 provider's format, so the same session works with any adapter.
 
 ```sh
-bia sessions
-bia resume 2e1854a1819f72436858d0c0 "now add a test for it"
-bia fork 2e1854a1819f72436858d0c0      # a new session from that point; the original is untouched
-bia export 2e1854a1819f72436858d0c0 > session.jsonl
+bia sessions                           # id, last used, entries, model, first prompt
+bia resume                             # pick one of this folder's sessions
+bia resume 2e18 "now add a test for it"  # the start of an id is enough
+bia fork 2e18                          # a new session from that point; the original is untouched
+bia export 2e18 > session.jsonl
 ```
 
 Before a request would take more than `context_window - reserve_tokens`,

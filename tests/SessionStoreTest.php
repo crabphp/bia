@@ -68,6 +68,27 @@ final class SessionStoreTest extends TestCase
         self::assertSame('c1', $path[2]->message()?->toolCallId);
     }
 
+    public function testSessionsAreListedWithTitlesAndFoundByIdPrefix(): void
+    {
+        $store = new SqliteStore(sys_get_temp_dir() . '/bia-list-' . bin2hex(random_bytes(4)) . '/bia.sqlite');
+        $here = $store->create('/work/here', 'tda/astra', 'abc123');
+        $store->append($here, \Bia\Contracts\Message::user('fix the failing test'));
+        $store->append($here, new \Bia\Contracts\Message('assistant', 'done'));
+        $store->create('/work/other', 'tda/astra', 'abd456');
+
+        $listed = $store->list(workspace: '/work/here');
+        self::assertCount(1, $listed);
+        self::assertSame('fix the failing test', $listed[0]['title']);
+        self::assertSame(2, $listed[0]['entry_count']);
+        self::assertCount(2, $store->list());
+
+        self::assertSame('abc123', $store->resolve('abc'));
+        self::assertSame('abc123', $store->resolve('abc123'));
+        self::assertNull($store->resolve('ab'), 'Two sessions start with it.');
+        self::assertNull($store->resolve('a%'), 'A LIKE wildcard is taken literally.');
+        self::assertNull($store->resolve(''));
+    }
+
     private function path(): string
     {
         return sys_get_temp_dir() . '/bia-session-' . bin2hex(random_bytes(4)) . '.sqlite';

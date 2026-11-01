@@ -81,8 +81,8 @@ final class Application
             }
             if ($command === 'resume') {
                 array_shift($words);
-                $id = array_shift($words) ?? throw new \InvalidArgumentException('resume needs a session id.');
-                $options['resume'] = $id;
+                // Without an id, a conversation opens on the session picker.
+                $options['resume'] = array_shift($words) ?? '';
             } elseif ($command === 'ask') {
                 array_shift($words);
             }
@@ -101,7 +101,7 @@ final class Application
             Usage:
               bia [options] [prompt]
               bia ask [options] <prompt>
-              bia resume <session-id> [prompt]
+              bia resume [session-id] [prompt]
               bia doctor
               bia config [--json]
               bia sessions
@@ -241,12 +241,17 @@ final class Application
             return 0;
         }
         foreach ($sessions as $session) {
+            if ($session['entry_count'] === 0) {
+                continue;
+            }
+            $title = trim((string) preg_replace('/\s+/', ' ', (string) ($session['title'] ?? '')));
             fwrite(STDOUT, sprintf(
-                "%s  %s  %s entries  %s\n",
+                "%s  %s  %3d entries  %s  %s\n",
                 $session['id'],
-                $session['model'],
+                substr((string) $session['updated_at'], 0, 16),
                 $session['entry_count'],
-                $session['updated_at'],
+                $session['model'],
+                mb_strimwidth($title, 0, 60, '…', 'UTF-8'),
             ));
         }
         return 0;
@@ -263,9 +268,7 @@ final class Application
         }
         $config = Config::load();
         $store = new SqliteStore($config->databasePath());
-        if (!$store->exists($id)) {
-            throw new \RuntimeException("Session {$id} does not exist.");
-        }
+        $id = $store->resolve($id) ?? throw new \RuntimeException("No single session starts with {$id}; bia sessions lists them.");
         foreach ($store->path($id) as $entry) {
             fwrite(STDOUT, json_encode([
                 'id' => $entry->id,
@@ -289,10 +292,8 @@ final class Application
         $id = $words[0] ?? throw new \InvalidArgumentException('fork needs a session id.');
         $config = Config::load();
         $store = new SqliteStore($config->databasePath());
-        if (!$store->exists($id)) {
-            throw new \RuntimeException("Session {$id} does not exist.");
-        }
-        $fork = $store->create(realpath(getcwd()) ?: getcwd(), (string) $config->get('model.name'), fromEntry: $store->head($id));
+        $id = $store->resolve($id) ?? throw new \RuntimeException("No single session starts with {$id}; bia sessions lists them.");
+        $fork = $store->create(realpath(getcwd()) ?: getcwd(), $config->modelLabel(), fromEntry: $store->head($id));
         fwrite(STDOUT, $fork . PHP_EOL);
         return 0;
     }
@@ -315,9 +316,10 @@ final class Application
             throw new \RuntimeException($config->keyHelp());
         }
         $store = new SqliteStore($config->databasePath());
-        $sessionId = isset($options['resume']) ? (string) $options['resume'] : null;
-        if ($sessionId !== null && !$store->exists($sessionId)) {
-            throw new \RuntimeException("Session {$sessionId} does not exist.");
+        $resume = isset($options['resume']) ? (string) $options['resume'] : null;
+        $sessionId = null;
+        if ($resume !== null && $resume !== '') {
+            $sessionId = $store->resolve($resume) ?? throw new \RuntimeException("No single session starts with {$resume}; bia sessions lists them.");
         }
         // Whether someone is there to answer is not whether a prompt was given:
         // `bia "fix it"` in a terminal can still be asked about a tool.
@@ -328,7 +330,6 @@ final class Application
         }
         $json = (bool) ($options['json'] ?? false);
         $root = realpath(getcwd()) ?: getcwd();
-        $sessionId ??= $store->create($root, $config->modelLabel());
         $workspace = new Workspace($root);
         $runner = new ProcessRunner([$apiKey]);
         $outputs = $config->cachePath() . '/outputs';
@@ -360,10 +361,15 @@ final class Application
                 new ModelCatalog($http),
                 new History(dirname($config->databasePath()) . '/history'),
                 self::VERSION,
+                pickSession: $resume === '',
             );
             $loop->execute($chat->run(...));
             return 0;
         }
+        if ($resume === '') {
+            throw new \RuntimeException('Give bia resume a session id; bia sessions lists them.');
+        }
+        $sessionId ??= $store->create($root, $config->modelLabel());
 
         if ($json) {
             fwrite(STDOUT, json_encode(['type' => 'session', 'id' => $sessionId]) . PHP_EOL);
@@ -409,6 +415,9 @@ final class Application
                 $status = 1;
             }
         } while ($repl);
+        if (!$json && $store->path($sessionId) !== []) {
+            fwrite(STDERR, "Resume this session with: bia resume {$sessionId}" . PHP_EOL);
+        }
         // A conversation left on purpose ended well; a one-shot run reports its turn.
         return $repl ? 0 : $status;
     }

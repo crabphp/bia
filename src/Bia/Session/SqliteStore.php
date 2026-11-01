@@ -110,15 +110,36 @@ final class SqliteStore implements SessionStore
         return $statement->fetchColumn() !== false;
     }
 
-    public function list(int $limit = 50): array
+    public function list(int $limit = 50, ?string $workspace = null): array
     {
         $limit = max(1, min(500, $limit));
-        $statement = $this->open()->query(
-            'SELECT s.id, s.workspace, s.model, s.created_at, s.updated_at, COUNT(e.id) AS entry_count '
-            . 'FROM sessions s LEFT JOIN entries e ON e.session_id = s.id '
-            . 'GROUP BY s.id ORDER BY s.updated_at DESC LIMIT ' . $limit,
+        $statement = $this->open()->prepare(
+            'SELECT s.id, s.workspace, s.model, s.created_at, s.updated_at, '
+            . '(SELECT COUNT(*) FROM entries e WHERE e.session_id = s.id) AS entry_count, '
+            . "(SELECT json_extract(e.data, '$.text') FROM entries e WHERE e.session_id = s.id AND e.type = 'message' "
+            . "AND json_extract(e.data, '$.role') = 'user' ORDER BY e.id LIMIT 1) AS title "
+            . 'FROM sessions s' . ($workspace !== null ? ' WHERE s.workspace = ?' : '')
+            . ' ORDER BY s.updated_at DESC LIMIT ' . $limit,
         );
-        return $statement->fetchAll();
+        $statement->execute($workspace !== null ? [$workspace] : []);
+        return array_map(static function (array $row): array {
+            $row['entry_count'] = (int) $row['entry_count'];
+            return $row;
+        }, $statement->fetchAll());
+    }
+
+    public function resolve(string $id): ?string
+    {
+        if ($id === '') {
+            return null;
+        }
+        if ($this->exists($id)) {
+            return $id;
+        }
+        $statement = $this->open()->prepare("SELECT id FROM sessions WHERE id LIKE ? ESCAPE '\\' LIMIT 2");
+        $statement->execute([addcslashes($id, '%_\\') . '%']);
+        $found = $statement->fetchAll(\PDO::FETCH_COLUMN);
+        return count($found) === 1 ? (string) $found[0] : null;
     }
 
     public function close(): void

@@ -36,6 +36,14 @@ final class TuiTest extends TestCase
         self::assertSame(['char:a', 'up', 'enter', 'backspace', 'ctrl-c', 'ctrl-left', 'ctrl-left', 'alt-enter', "paste:one\ntwo", 'char:é', 'unknown', 'ctrl-w'], $names);
     }
 
+    public function testEscapeFollowedByAControlKeyIsTwoKeys(): void
+    {
+        $buffer = "\e\x04\ex";
+        self::assertSame('escape', Keys::take($buffer)?->name);
+        self::assertSame('ctrl-d', Keys::take($buffer)?->name);
+        self::assertSame('alt-x', Keys::take($buffer)?->name);
+    }
+
     public function testAKeyCutShortWaitsForTheRest(): void
     {
         $buffer = "\xc3";

@@ -6,6 +6,7 @@ namespace Bia\Terminal;
 
 use Bia\Agent\Agent;
 use Bia\Config\Config;
+use Bia\Contracts\Message;
 use Bia\Contracts\SessionStore;
 use Bia\Model\ModelCatalog;
 use Bia\Tui\Editor;
@@ -37,7 +38,7 @@ final class Chat
     private readonly Editor $editor;
     private readonly Commands $commands;
     private ?SelectList $menu = null;
-    /** "command" and "file" complete the input; "model" and "confirm" take every key. */
+    /** "command" and "file" complete the input; "model", "session" and "confirm" take every key. */
     private string $menuKind = '';
     private string $menuTitle = '';
     private int $replace = 0;
@@ -53,6 +54,8 @@ final class Chat
     private ?string $ticker = null;
     private ?int $contextTokens = null;
     private string $place;
+    /** Whether the session has messages, so that leaving names it for `bia resume`. */
+    private bool $used = false;
 
     /**
      * @param \Closure(Config): Agent $makeAgent Builds the agent for a model, as /model switches.
@@ -64,7 +67,7 @@ final class Chat
         private Config $config,
         private readonly \Closure $makeAgent,
         private readonly SessionStore $sessions,
-        private string $sessionId,
+        private ?string $sessionId,
         private readonly string $system,
         private readonly string $workspace,
         private readonly Files $files,
@@ -72,6 +75,7 @@ final class Chat
         private readonly History $history,
         private readonly string $version,
         private ?Agent $agent = null,
+        private readonly bool $pickSession = false,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->editor = new Editor($this->history->load());
@@ -87,9 +91,14 @@ final class Chat
         );
         $this->commands = (new Commands())
             ->add('model', 'Switch model; without a name, pick from your providers', $this->model(...), '[provider/model]')
+            ->add('resume', 'Resume a session; without an id, pick one of this folder\'s', $this->resume(...), '[session-id]')
             ->add('new', 'Start a new session', $this->newSession(...))
             ->add('compact', 'Summarize the conversation so far', function (string $_): void {
-                $this->work('Compacting', fn (Cancellation $c) => $this->agent?->compact($this->sessionId, $c));
+                if ($this->sessionId === null) {
+                    $this->say('Nothing to compact yet');
+                    return;
+                }
+                $this->work('Compacting', fn (Cancellation $c) => $this->agent?->compact((string) $this->sessionId, $c));
             })
             ->add('clear', 'Clear the screen', function (string $_): void {
                 $this->terminal->write("\e[2J\e[3J\e[H");
@@ -135,7 +144,12 @@ final class Chat
                 $this->draw();
             })
             : null;
-        $this->region->print(Style::dim("bia {$this->version} · {$this->config->modelLabel()} · session {$this->sessionId} · /help") . "\n");
+        $this->region->print(Style::dim("bia {$this->version} · {$this->config->modelLabel()} · /help for commands") . "\n");
+        if ($this->sessionId !== null) {
+            $this->replay($this->sessionId);
+        } elseif ($this->pickSession) {
+            $this->resume('');
+        }
         $this->draw();
         try {
             while ($this->running) {
@@ -157,6 +171,9 @@ final class Chat
             $this->stopTicker();
             $this->region->close();
             $this->terminal->leave();
+            if ($this->used && $this->sessionId !== null) {
+                $this->terminal->write("\n" . Style::dim('Resume this session with:') . ' ' . Style::accent("bia resume {$this->sessionId}") . "\n");
+            }
         }
     }
 
@@ -197,11 +214,12 @@ final class Chat
             $this->region->redraw();
             return;
         }
-        if ($this->menuKind === 'model') {
+        if ($this->menuKind === 'model' || $this->menuKind === 'session') {
+            $kind = $this->menuKind;
             $action = $this->menu?->key($key);
             if ($action === 'choose' && ($chosen = $this->menu?->selected()) !== null) {
                 $this->closeMenu();
-                $this->switchModel($chosen['value']);
+                $kind === 'model' ? $this->switchModel($chosen['value']) : $this->switchSession($chosen['value']);
             } elseif ($action === 'cancel') {
                 $this->closeMenu();
             }
@@ -276,8 +294,11 @@ final class Chat
 
     private function ask(string $text): void
     {
+        // A session is made by its first message, so starting Bia leaves no empty ones.
+        $sessionId = $this->sessionId ??= $this->sessions->create($this->workspace, $this->config->modelLabel());
+        $this->used = true;
         $this->echo($text);
-        $this->work('Thinking', fn (Cancellation $cancellation) => $this->agent?->run($this->sessionId, $text, $this->system, $cancellation));
+        $this->work('Thinking', fn (Cancellation $cancellation) => $this->agent?->run($sessionId, $text, $this->system, $cancellation));
     }
 
     /**
@@ -377,10 +398,112 @@ final class Chat
 
     private function newSession(string $_): void
     {
-        $this->sessionId = $this->sessions->create($this->workspace, $this->config->modelLabel());
+        $this->leaving();
+        $this->sessionId = null;
+        $this->used = false;
         $this->contextTokens = null;
         $this->lineStart();
-        $this->region->print(Style::dim("· new session {$this->sessionId}") . "\n");
+        $this->region->print(Style::dim('· new session') . "\n");
+    }
+
+    private function resume(string $id): void
+    {
+        if ($id !== '') {
+            $found = $this->sessions->resolve($id);
+            if ($found === null) {
+                $this->say("No single session starts with {$id}");
+                return;
+            }
+            $this->switchSession($found);
+            return;
+        }
+        $items = [];
+        $now = time();
+        foreach ($this->sessions->list(200, $this->workspace) as $session) {
+            if ($session['entry_count'] === 0 || $session['id'] === $this->sessionId) {
+                continue;
+            }
+            $title = trim((string) preg_replace('/\s+/', ' ', (string) ($session['title'] ?? '')));
+            $messages = (int) $session['entry_count'];
+            $items[] = [
+                'value' => (string) $session['id'],
+                'label' => $title !== '' ? $title : '(forked, ' . substr((string) $session['id'], 0, 8) . ')',
+                'hint' => self::ago($now - (int) strtotime((string) $session['updated_at'])) . ' · ' . $messages . ($messages === 1 ? ' entry' : ' entries') . ' · ' . $session['model'],
+            ];
+        }
+        $this->openMenu('session', 'Resume  (type to filter, Enter to resume, Esc to close)', new SelectList($items, 10, empty: 'No other sessions in this folder'));
+    }
+
+    private function switchSession(string $id): void
+    {
+        $this->leaving();
+        $this->sessionId = $id;
+        $this->used = true;
+        $this->contextTokens = null;
+        $this->lineStart();
+        $this->region->print("\n" . Style::dim("· resumed session {$id}") . "\n");
+        $this->replay($id);
+    }
+
+    /**
+     * Before the conversation moves to another session, says how to come back to this one.
+     */
+    private function leaving(): void
+    {
+        if ($this->used && $this->sessionId !== null) {
+            $this->lineStart();
+            $this->region->print(Style::dim("· left session {$this->sessionId}; bia resume {$this->sessionId} or /resume comes back") . "\n");
+        }
+    }
+
+    /**
+     * Shows the end of a session's conversation, as it was seen.
+     */
+    private function replay(string $id, int $last = 40): void
+    {
+        $entries = $this->sessions->path($id);
+        if ($entries === []) {
+            return;
+        }
+        $this->used = true;
+        $results = [];
+        foreach ($entries as $entry) {
+            if ($entry->payload instanceof Message && $entry->payload->role === 'tool') {
+                $results[$entry->payload->toolCallId] = $entry->payload;
+            }
+        }
+        $shown = array_slice($entries, -$last);
+        if (count($entries) > count($shown)) {
+            $this->region->print(Style::dim('· ' . (count($entries) - count($shown)) . ' earlier entries') . "\n");
+        }
+        foreach ($shown as $entry) {
+            $payload = $entry->payload;
+            if (!$payload instanceof Message) {
+                $this->lineStart();
+                $this->region->print(Style::dim('· the conversation before here was summarized') . "\n");
+                continue;
+            }
+            if ($payload->role === 'user') {
+                $this->echo($payload->text);
+            } elseif ($payload->role === 'assistant') {
+                if ($payload->text !== '') {
+                    $this->region->print($payload->text);
+                    $this->lineStart();
+                }
+                foreach ($payload->toolCalls as $call) {
+                    $result = $results[$call->id] ?? null;
+                    $mark = $result === null ? Style::dim('·') : ($result->ok ? Style::ok('✓') : Style::error('✗'));
+                    $subject = AnsiRenderer::subject($call->arguments);
+                    $this->region->print("{$mark} {$call->name}" . ($subject !== '' ? ' ' . Style::dim($subject) : '') . "\n");
+                }
+                $usage = $payload->meta['usage'] ?? null;
+                if (is_array($usage)) {
+                    $total = (int) ($usage['total'] ?? 0);
+                    $this->contextTokens = $total > 0 ? $total : (int) ($usage['input'] ?? 0) + (int) ($usage['output'] ?? 0);
+                }
+            }
+        }
+        $this->lineStart();
     }
 
     private function help(string $_): void
@@ -487,7 +610,7 @@ final class Chat
         }
         $rule = Style::dim(str_repeat('─', $width));
         $cursor = null;
-        if ($this->menuKind === 'confirm' || $this->menuKind === 'model') {
+        if (in_array($this->menuKind, ['confirm', 'model', 'session'], true)) {
             $lines[] = $rule;
             if ($this->menuKind === 'confirm') {
                 $lines[] = Style::warn(Style::truncate($this->menuTitle, $width));
@@ -565,6 +688,16 @@ final class Chat
             }
         }
         return $place;
+    }
+
+    private static function ago(int $seconds): string
+    {
+        return match (true) {
+            $seconds < 60 => 'just now',
+            $seconds < 3600 => intdiv($seconds, 60) . 'm ago',
+            $seconds < 86400 => intdiv($seconds, 3600) . 'h ago',
+            default => intdiv($seconds, 86400) . 'd ago',
+        };
     }
 
     private static function thousands(int $tokens): string
