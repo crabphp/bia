@@ -25,14 +25,26 @@ final class Region
     private string $partial = '';
     /** Row of the region the terminal's cursor is on, counted from its top. */
     private int $at = 0;
+    /** The width the region was last drawn at; 0 before the first frame. */
+    private int $columns = 0;
+    /** The end of the finished output, to print again when a resize makes the screen be drawn afresh. */
+    private string $transcript = '';
+    /** The width a resize is settling at, and the timer that draws afresh when it has. */
+    private int $settling = 0;
+    private ?string $settle = null;
     private bool $drawn = false;
     private ?string $frame = null;
     private string $last = '';
     private string $tail = "\n";
 
+    /**
+     * @param int $keep Bytes of finished output kept to print again after a resize.
+     */
     public function __construct(
         private readonly Terminal $terminal,
         private readonly float $interval = 1 / 60,
+        private readonly int $keep = 512 * 1024,
+        private readonly float $settleDelay = 0.1,
     ) {}
 
     /**
@@ -78,7 +90,7 @@ final class Region
             EventLoop::current()->cancel($this->frame);
             $this->frame = null;
         }
-        $this->render();
+        $this->render(true);
     }
 
     /**
@@ -97,12 +109,28 @@ final class Region
     }
 
     /**
-     * Draws everything again from where the region starts, as after a resize.
+     * Draws the region again on the next frame. After a resize that changed
+     * the width, the whole screen is drawn afresh: the terminal has rewrapped
+     * the old region, each terminal its own way, into rows that cannot be
+     * found again to erase.
      */
     public function redraw(): void
     {
         $this->last = '';
         $this->schedule();
+    }
+
+    /**
+     * Clears the screen, and its scrollback too when asked, and forgets the
+     * output printed so far, then draws the region at the top.
+     */
+    public function clear(bool $scrollback = false): void
+    {
+        $this->flush();
+        $this->transcript = '';
+        $this->drawn = false;
+        $this->terminal->write("\e[H\e[2J" . ($scrollback ? "\e[3J" : ''));
+        $this->redraw();
     }
 
     private function schedule(): void
@@ -116,9 +144,32 @@ final class Region
         });
     }
 
-    private function render(): void
+    /**
+     * @param bool $now Draw even while a resize is settling, as on leaving.
+     */
+    private function render(bool $now = false): void
     {
         $columns = $this->terminal->columns();
+        $fresh = $this->drawn && $this->columns !== 0 && $columns !== $this->columns;
+        if ($fresh && !$now) {
+            // A drag resizes many times: draw afresh once, when the width has settled.
+            if ($columns !== $this->settling) {
+                $this->settling = $columns;
+                if ($this->settle !== null) {
+                    EventLoop::current()->cancel($this->settle);
+                }
+                $this->settle = EventLoop::current()->delay($this->settleDelay, function (): void {
+                    $this->settle = null;
+                    $this->render(true);
+                });
+            }
+            return;
+        }
+        if ($this->settle !== null) {
+            EventLoop::current()->cancel($this->settle);
+            $this->settle = null;
+        }
+        $this->settling = 0;
         $text = $this->partial . $this->pending;
         $this->pending = '';
         $end = strrpos($text, "\n");
@@ -136,20 +187,26 @@ final class Region
         $cut = max(0, count($rows) - $limit);
         $rows = array_slice($rows, $cut);
         $frame = implode("\n", $rows) . "\0" . json_encode($this->cursor) . "\0" . $columns;
-        if ($finished === '' && $frame === $this->last) {
+        if (!$fresh && $finished === '' && $frame === $this->last) {
             return;
         }
         $this->last = $frame;
 
         $out = "\e[?2026h";
-        if ($this->drawn) {
+        if ($fresh) {
+            // The terminal has rewrapped the old region its own way, into rows
+            // that cannot be found again: clear everything and print it again.
+            $out .= "\e[H\e[2J\e[3J" . str_replace("\n", "\r\n", $this->transcript);
+        } elseif ($this->drawn) {
             $out .= "\r" . ($this->at > 0 ? "\e[{$this->at}A" : '') . "\e[J";
         }
         if ($finished !== '') {
             $out .= str_replace("\n", "\r\n", $finished);
+            $this->keep($finished);
         }
         $out .= implode("\r\n", $rows);
         $this->drawn = $rows !== [];
+        $this->columns = $columns;
         $this->at = max(0, count($rows) - 1);
         if ($this->cursor !== null && $rows !== []) {
             [$row, $column] = $this->cursor;
@@ -161,5 +218,19 @@ final class Region
             $out .= "\e[?25l";
         }
         $this->terminal->write($out . "\e[?2026l");
+    }
+
+    /**
+     * Keeps finished output, at most $keep bytes of its end, cut at a line
+     * start so that no character or colour code is split.
+     */
+    private function keep(string $finished): void
+    {
+        $this->transcript .= $finished;
+        if (strlen($this->transcript) <= $this->keep) {
+            return;
+        }
+        $start = strpos($this->transcript, "\n", strlen($this->transcript) - $this->keep);
+        $this->transcript = $start === false ? '' : substr($this->transcript, $start + 1);
     }
 }
