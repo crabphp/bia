@@ -153,8 +153,10 @@ final class TuiTest extends TestCase
     public function testTheSpinnerShowsWhatAndHowLong(): void
     {
         $spinner = new Spinner('Running shell', since: 100.0);
-        self::assertSame('⠦ Running shell… 5s · esc to stop', $spinner->render(80, now: 105.3, hint: 'esc to stop'));
-        self::assertSame('⠹ Running shell… 1m 5s', $spinner->render(80, now: 165.0));
+        self::assertSame('🍺 Running shell… 5s · esc to stop', $spinner->render(80, now: 105.3, hint: 'esc to stop'));
+        self::assertSame('🍻 Running shell… 5s', $spinner->render(80, now: 105.6), 'Half a second on, the mugs clink.');
+        self::assertSame('🍺 Running shell… 1m 5s', $spinner->render(80, now: 165.0));
+        self::assertSame(20, Style::width($spinner->render(20, now: 105.3)), 'The two-column mug is counted in the width.');
     }
 
     public function testTheRegionRedrawsOnlyTheBottomAndKeepsFinishedOutput(): void
