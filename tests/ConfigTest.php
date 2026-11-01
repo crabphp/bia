@@ -174,6 +174,20 @@ final class ConfigTest extends TestCase
         }
     }
 
+    public function testAMissingKeySaysWhichModelAndWhereToSetIt(): void
+    {
+        putenv('XDG_CONFIG_HOME=' . $this->directory());
+        try {
+            $help = Config::load($this->directory(), ['model' => ['name' => 'cliproxyapi/x']])->keyHelp();
+            self::assertStringContainsString('cliproxyapi model x', $help);
+            self::assertStringContainsString('providers.cliproxyapi', $help);
+            self::assertStringContainsString('CLIPROXYAPI_API_KEY', $help);
+            self::assertStringContainsString('openai-compatible model gpt-5', Config::load($this->directory())->keyHelp());
+        } finally {
+            putenv('XDG_CONFIG_HOME');
+        }
+    }
+
     public function testAnthropicOpenAiAndCliProxyApiAreBuiltIn(): void
     {
         putenv('XDG_CONFIG_HOME=' . $this->directory());

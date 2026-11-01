@@ -143,6 +143,7 @@ final class Application
         fwrite(STDOUT, sprintf("%-18s %s\n", 'ripgrep', self::which('rg') ? 'ok' : 'missing (search; list_files falls back to PHP)'));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'process groups', function_exists('posix_kill') && self::which('setsid') ? 'ok' : 'off (background children may outlive a command)'));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'permissions', json_encode($config->get('permissions'))));
+        fwrite(STDOUT, sprintf("%-18s %s\n", 'providers', implode(', ', array_keys((array) $config->get('providers', [])))));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model', (string) $config->get('model.name')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model provider', (string) $config->get('model.provider')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model base URL', (string) $config->get('model.base_url')));
@@ -302,7 +303,7 @@ final class Application
         $config = Config::load(overrides: $overrides);
         $apiKey = (string) ($config->get('model.api_key') ?? '');
         if ($apiKey === '') {
-            throw new \RuntimeException('No API key is configured. Set BIA_API_KEY or add model.api_key to ~/.config/bia/config.php.');
+            throw new \RuntimeException($config->keyHelp());
         }
         $store = new SqliteStore($config->databasePath());
         $sessionId = isset($options['resume']) ? (string) $options['resume'] : null;

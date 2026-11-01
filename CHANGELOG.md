@@ -14,7 +14,9 @@
   read. Explicit `--base-url`, `--api-key` and `BIA_*` variables still win.
 - A key set in `config.php` is no longer replaced by `<PROVIDER>_API_KEY`;
   that variable is only a fallback now. `BIA_API_KEY` still overrides.
-- `bia doctor` shows the model.
+- `bia doctor` shows the model and the providers it knows.
+- A missing API key's error names the model and provider Bia resolved, the
+  variables it read and where to set the key.
 - `bia config` showed `compaction.reserve_tokens` and `keep_tokens` as
   `[configured]`; only key, secret, password and token settings are hidden now.
 

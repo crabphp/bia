@@ -373,6 +373,20 @@ final readonly class Config
         return self::directory('XDG_CONFIG_HOME', self::home() . '/.config') . '/bia';
     }
 
+    /**
+     * Where Bia looked for the model's key, for an error that says what to set.
+     */
+    public function keyHelp(): string
+    {
+        $provider = (string) $this->get('model.provider');
+        $where = isset($this->values['providers'][$provider])
+            ? "set 'api_key' in providers.{$provider} in " . self::globalPath()
+            : 'set model.api_key in ' . self::globalPath();
+        return "No API key for {$provider} model " . $this->get('model.name') . ": {$where}, or export "
+            . implode(' or ', [...self::keyVariables($this->values), 'BIA_API_KEY'])
+            . '. To use one of your providers instead, run bia --model <provider>/<model> or set model.name. `bia doctor` shows what Bia read.';
+    }
+
     public function cachePath(): string
     {
         return self::expand((string) $this->get('cache.path'));
