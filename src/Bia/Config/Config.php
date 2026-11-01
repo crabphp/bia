@@ -176,69 +176,166 @@ final readonly class Config
         return <<<'PHP'
             <?php
 
-            // Bia's configuration for you, in every project. Uncomment a line to change it.
-            // A project's .bia/config.json, the environment and command-line options
-            // override what is set here. `bia config` shows the result.
+            /*
+            |--------------------------------------------------------------------------
+            | Bia Configuration
+            |--------------------------------------------------------------------------
+            |
+            | Your settings for Bia in every project. Each one is shown commented out
+            | at its default, so this file changes nothing until you uncomment a line.
+            | A project's .bia/config.json, the environment and command-line options
+            | override what is set here. Run `bia config` to see the result.
+            |
+            */
 
             return [
-                // Providers: set a server up once, then pick any of its models by
-                // naming it provider/model in model.name, BIA_MODEL or --model, e.g.
-                // anthropic/claude-sonnet-4-5. These three are built in; change one, or
-                // add your own under a new name. A model listed under models overrides
-                // its provider's settings; any other model just uses them.
+
+                /*
+                |--------------------------------------------------------------------------
+                | Providers
+                |--------------------------------------------------------------------------
+                |
+                | A provider is a model server you set up once. Pick any of its models
+                | by naming it provider/model in model.name, BIA_MODEL or --model, such
+                | as anthropic/claude-sonnet-4-5. These three are built in; change one,
+                | or add your own under a new name.
+                |
+                | A provider takes any model setting below. The key is read from the
+                | api_key_env variable, or <NAME>_API_KEY when none is named. Only a
+                | model that differs from its provider needs an entry under "models",
+                | e.g. 'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]].
+                |
+                */
+
                 // 'providers' => [
                 //     'openai' => [
                 //         'base_url' => 'https://api.openai.com/v1',
                 //         'api_key_env' => 'OPENAI_API_KEY',
                 //         'context_window' => 400000,
                 //     ],
-                //     'anthropic' => [                  // Anthropic's OpenAI-compatible endpoint
+                //     'anthropic' => [
                 //         'base_url' => 'https://api.anthropic.com/v1',
                 //         'api_key_env' => 'ANTHROPIC_API_KEY',
                 //         'context_window' => 200000,
                 //     ],
-                //     'cliproxyapi' => [                // CLIProxyAPI on this machine
+                //     'cliproxyapi' => [
                 //         'base_url' => 'http://127.0.0.1:8317/v1',
                 //         'api_key_env' => 'CLIPROXYAPI_API_KEY',
                 //         'context_window' => 200000,
                 //     ],
-                //     // 'gemini' => [ 'base_url' => ..., 'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]] ],
                 // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Model
+                |--------------------------------------------------------------------------
+                |
+                | The model Bia talks to. The name may be provider/model, which takes
+                | the server, key and context window from that provider. Otherwise
+                | base_url may point at any OpenAI-compatible API.
+                |
+                | Keep the key out of this file: BIA_API_KEY or the provider's variable
+                | in the environment is better. The timeout is how long a whole reply
+                | may take; a server silent for idle_timeout seconds is given up on.
+                | The context window is your model's, in tokens; compaction keeps the
+                | conversation below it.
+                |
+                */
+
                 // 'model' => [
-                //     'base_url' => 'https://api.openai.com/v1',  // any OpenAI-compatible API
-                //     'name' => 'gpt-5',                // or provider/model, e.g. 'cliproxyapi/gpt-5'
-                //     'api_key' => null,                // better: BIA_API_KEY or <PROVIDER>_API_KEY in the environment
-                //     'api_key_env' => null,            // the variable holding the key, e.g. 'OPENAI_API_KEY'
-                //     'provider' => 'openai-compatible',  // names the <PROVIDER>_API_KEY variable, e.g. 'tdaproxy'
+                //     'name' => 'gpt-5',
+                //     'base_url' => 'https://api.openai.com/v1',
+                //     'api_key' => null,
+                //     'api_key_env' => null,
+                //     'provider' => 'openai-compatible',
                 //     'endpoint' => 'chat/completions',
-                //     'timeout' => 3600.0,              // seconds a whole reply may take
-                //     'idle_timeout' => 120.0,          // give up on a server silent this long
-                //     'context_window' => 128000,       // your model's window, in tokens
+                //     'timeout' => 3600.0,
+                //     'idle_timeout' => 120.0,
+                //     'context_window' => 128000,
                 // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | System Prompt
+                |--------------------------------------------------------------------------
+                |
+                | Who Bia is. Your AGENTS.md files and the project's are added after it.
+                |
+                */
+
                 // 'prompt' => [
                 //     'system' => 'You are Bia, a fast coding assistant. Be precise and concise.',
                 // ],
-                // 'permissions' => [                    // auto | ask | deny
+
+                /*
+                |--------------------------------------------------------------------------
+                | Permissions
+                |--------------------------------------------------------------------------
+                |
+                | Bia runs every tool without asking. Set a kind of tool to "ask" to be
+                | asked first, or to "deny" to refuse it. Supported: "auto", "ask",
+                | "deny".
+                |
+                */
+
+                // 'permissions' => [
                 //     'read' => 'auto',
                 //     'write' => 'auto',
                 //     'shell' => 'auto',
                 // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Tools
+                |--------------------------------------------------------------------------
+                |
+                | The shell timeout is the default number of seconds a command may run.
+                | Tool output past output_bytes or output_lines is cut to its first and
+                | last lines for the model, and saved in full under the cache path.
+                |
+                */
+
                 // 'tools' => [
-                //     'shell_timeout' => 120.0,         // default seconds for a shell command
-                //     'output_bytes' => 51200,          // tool output sent to the model per call
+                //     'shell_timeout' => 120.0,
+                //     'output_bytes' => 51200,
                 //     'output_lines' => 2000,
                 // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Compaction
+                |--------------------------------------------------------------------------
+                |
+                | When a conversation nears the context window, its older part is
+                | summarized. reserve_tokens is the room left for the reply, and
+                | keep_tokens is how much recent history is kept word for word.
+                |
+                */
+
                 // 'compaction' => [
                 //     'enabled' => true,
-                //     'reserve_tokens' => 16384,        // room left for the reply
-                //     'keep_tokens' => 20000,           // recent history kept word for word
+                //     'reserve_tokens' => 16384,
+                //     'keep_tokens' => 20000,
                 // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Storage & Cache
+                |--------------------------------------------------------------------------
+                |
+                | Sessions are kept in this SQLite database. The cache holds the full
+                | output of tools whose output was cut.
+                |
+                */
+
                 // 'storage' => [
                 //     'path' => '~/.local/state/bia/bia.sqlite',
                 // ],
+
                 // 'cache' => [
                 //     'path' => '~/.cache/bia',
                 // ],
+
             ];
 
             PHP;
