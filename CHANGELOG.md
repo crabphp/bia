@@ -1,0 +1,26 @@
+# Changelog
+
+## 0.1.0-beta.1 (2026-11-01)
+
+The first beta: a terminal coding agent for any OpenAI-compatible Chat
+Completions API.
+
+- **Tools:** `read_file` (paged, 2000 lines / 50 KB), `list_files`, `search`,
+  `edit` (exact text replacement, several edits per call, tolerant of
+  typographic characters and trailing spaces), `write_file`, `apply_patch`,
+  `shell` and `git_diff`, with full permission by default. Read-only calls
+  run concurrently; commands run on Crab's event loop in their own process
+  group, cancellable with Ctrl-C.
+- **Project instructions:** `AGENTS.md` / `CLAUDE.md` from the repository
+  root down to the working directory, and `~/.config/bia/AGENTS.md`.
+- **Sessions:** an append-only SQLite log in no provider's format, with
+  `resume`, `fork` and `export`. Sessions from earlier development builds are
+  migrated on first use.
+- **Compaction:** automatic before the context window fills, `/compact` on
+  demand, and a retry after a provider's context-length error.
+- **Long output:** cut to its first and last lines for the model, saved in
+  full for `read_file`.
+- **Configuration:** your `~/.config/bia/config.php`, and a project's
+  `.bia/config.json`, read as data and limited to safe keys.
+- **Errors:** a provider's own error message is shown; a failed turn keeps
+  the conversation open.

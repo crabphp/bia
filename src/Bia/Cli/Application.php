@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace Bia\Cli;
 
 use Bia\Agent\Agent;
+use Bia\Agent\Compactor;
+use Bia\Agent\SystemPrompt;
 use Bia\Config\Config;
 use Bia\Model\OpenAiCompatibleModel;
 use Bia\Session\SqliteStore;
@@ -12,6 +14,7 @@ use Bia\Terminal\AnsiRenderer;
 use Bia\Terminal\Loop;
 use Bia\Terminal\Prompt;
 use Bia\Tool\ApplyPatchTool;
+use Bia\Tool\EditTool;
 use Bia\Tool\GitDiffTool;
 use Bia\Tool\ListFilesTool;
 use Bia\Tool\ProcessRunner;
@@ -29,7 +32,7 @@ use Crab\HttpClient\Client;
  */
 final class Application
 {
-    public const VERSION = '0.1.0-dev';
+    public const VERSION = '0.1.0-beta.1';
 
     /**
      * @param list<string> $arguments
@@ -60,6 +63,10 @@ final class Application
                 array_shift($words);
                 return self::exportSession($words);
             }
+            if ($command === 'fork') {
+                array_shift($words);
+                return self::fork($words);
+            }
             if ($command === 'init') {
                 return self::init();
             }
@@ -89,6 +96,7 @@ final class Application
               bia doctor
               bia config [--json]
               bia sessions
+              bia fork <session-id>
               bia export <session-id>
               bia init
 
@@ -135,6 +143,9 @@ final class Application
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model base URL', (string) $config->get('model.base_url')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'API key', self::hasKey($config) ? 'configured' : 'missing'));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'database', $config->databasePath()));
+        $instructions = SystemPrompt::files(realpath(getcwd()) ?: getcwd(), $config->configDirectory());
+        fwrite(STDOUT, sprintf("%-18s %s\n", 'instructions', $instructions === [] ? 'none' : implode(', ', $instructions)));
+        fwrite(STDOUT, sprintf("%-18s %s\n", 'context window', $config->get('model.context_window') . ' tokens' . ($config->get('compaction.enabled') ? ', compaction on' : ', compaction off')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'config sources', $config->sources() === [] ? 'defaults' : implode(', ', $config->sources())) . PHP_EOL);
         foreach ($required as $ok) {
             if (!$ok) {
@@ -187,10 +198,10 @@ final class Application
         }
         foreach ($sessions as $session) {
             fwrite(STDOUT, sprintf(
-                "%s  %s  %s messages  %s\n",
+                "%s  %s  %s entries  %s\n",
                 $session['id'],
                 $session['model'],
-                $session['message_count'],
+                $session['entry_count'],
                 $session['updated_at'],
             ));
         }
@@ -211,13 +222,34 @@ final class Application
         if (!$store->exists($id)) {
             throw new \RuntimeException("Session {$id} does not exist.");
         }
-        foreach ($store->messages($id) as $message) {
+        foreach ($store->path($id) as $entry) {
             fwrite(STDOUT, json_encode([
-                'role' => $message->role,
-                'content' => $message->content,
-                'metadata' => $message->metadata,
-            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) . PHP_EOL);
+                'id' => $entry->id,
+                'parent_id' => $entry->parentId,
+                'type' => $entry->payload instanceof \Bia\Contracts\Message ? 'message' : 'compaction',
+                'created_at' => $entry->createdAt,
+                'data' => $entry->payload->toArray(),
+            ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . PHP_EOL);
         }
+        return 0;
+    }
+
+    /**
+     * Starts a new session that continues from another's latest entry; the
+     * original is left as it was.
+     *
+     * @param list<string> $words
+     */
+    private static function fork(array $words): int
+    {
+        $id = $words[0] ?? throw new \InvalidArgumentException('fork needs a session id.');
+        $config = Config::load();
+        $store = new SqliteStore($config->databasePath());
+        if (!$store->exists($id)) {
+            throw new \RuntimeException("Session {$id} does not exist.");
+        }
+        $fork = $store->create(realpath(getcwd()) ?: getcwd(), (string) $config->get('model.name'), fromEntry: $store->head($id));
+        fwrite(STDOUT, $fork . PHP_EOL);
         return 0;
     }
 
@@ -272,15 +304,24 @@ final class Application
         $prompt = new Prompt($canPrompt);
         $workspace = new Workspace(realpath(getcwd()) ?: getcwd());
         $runner = new ProcessRunner([$apiKey]);
+        $outputs = $config->cachePath() . '/outputs';
         $tools = (new Registry(self::approval($config, $options, $prompt, $canPrompt)))
-            ->add(new ReadFileTool($workspace))
+            ->add(new ReadFileTool($workspace, outputs: $outputs))
             ->add(new ListFilesTool($workspace, $runner))
             ->add(new SearchTool($workspace, $runner))
+            ->add(new EditTool($workspace))
             ->add(new WriteFileTool($workspace))
             ->add(new ApplyPatchTool($workspace, $runner))
             ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout')))
             ->add(new GitDiffTool($workspace, $runner));
         $renderer = new AnsiRenderer($json);
+        $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
+            $model,
+            $modelName,
+            (int) $config->get('model.context_window'),
+            (int) $config->get('compaction.reserve_tokens'),
+            (int) $config->get('compaction.keep_tokens'),
+        );
         $agent = new Agent(
             $model,
             $modelName,
@@ -288,9 +329,12 @@ final class Application
             $store,
             $renderer,
             $workspace->root(),
-            maxStoredToolBytes: (int) $config->get('tools.output_bytes'),
+            $compactor,
+            maxOutputBytes: (int) $config->get('tools.output_bytes'),
+            maxOutputLines: (int) $config->get('tools.output_lines'),
+            outputs: $outputs,
         );
-        $system = (string) $config->get('prompt.system', '');
+        $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
         $status = 0;
         do {
             $question = $words === [] ? $prompt->ask('> ') : implode(' ', $words);
@@ -305,8 +349,15 @@ final class Application
             if ($question === '') {
                 continue;
             }
+            if (strtolower($question) === '/help') {
+                fwrite(STDERR, "/compact  summarize the conversation so far\n/exit     leave (Ctrl-D works too)\nCtrl-C cancels a running turn; twice quits.\n");
+                continue;
+            }
+            $command = strtolower($question) === '/compact'
+                ? static fn ($cancellation) => $agent->compact($sessionId, $cancellation)
+                : static fn ($cancellation) => $agent->run($sessionId, $question, $system, $cancellation);
             try {
-                $loop->execute(static fn ($cancellation) => $agent->run($sessionId, $question, $system, $cancellation));
+                $loop->execute($command);
                 $status = 0;
             } catch (CancelledException) {
                 fwrite(STDERR, PHP_EOL . 'bia: cancelled' . PHP_EOL);

@@ -11,19 +11,26 @@ use Bia\Contracts\ToolResult;
 use Crab\Engine\Async\Cancellation;
 
 /**
- * Reads a text file inside the workspace, whole or by a range of lines, so a
- * large file is read a part at a time instead of refused.
+ * Reads a text file inside the workspace, whole or by a range of lines, at
+ * most a page (2000 lines, 50 KB) per call, so a large file is read a part at
+ * a time instead of refused. It also reads the full outputs Bia saved when a
+ * tool's output was too long to send.
  */
 final readonly class ReadFileTool implements Tool
 {
-    public function __construct(private Workspace $workspace, private int $maxBytes = 262_144) {}
+    public function __construct(
+        private Workspace $workspace,
+        private int $maxBytes = 51_200,
+        private int $maxLines = 2000,
+        private ?string $outputs = null,
+    ) {}
 
     public function definition(): ToolDefinition
     {
-        return new ToolDefinition('read_file', 'Read a text file in the workspace, optionally a range of its lines.', [
+        return new ToolDefinition('read_file', "Read a text file, at most {$this->maxLines} lines or " . intdiv($this->maxBytes, 1024) . ' KB per call; use offset and limit for more.', [
             'type' => 'object',
             'properties' => [
-                'path' => ['type' => 'string', 'description' => 'Workspace-relative path.'],
+                'path' => ['type' => 'string', 'description' => 'Workspace-relative path, or the path of a saved tool output.'],
                 'offset' => ['type' => 'integer', 'minimum' => 1, 'description' => 'First line to read, from 1.'],
                 'limit' => ['type' => 'integer', 'minimum' => 1, 'description' => 'How many lines to read.'],
             ],
@@ -36,7 +43,7 @@ final readonly class ReadFileTool implements Tool
     {
         $cancellation?->throwIfCancelled();
         $relative = (string) ($arguments['path'] ?? '');
-        $path = $this->workspace->path($relative);
+        $path = $this->savedOutput($relative) ?? $this->workspace->path($relative);
         if (!is_file($path) || !is_readable($path)) {
             return new ToolResult("File {$relative} is not readable.", false);
         }
@@ -45,14 +52,12 @@ final readonly class ReadFileTool implements Tool
             return new ToolResult("Could not read {$relative}.", false);
         }
         try {
-            $head = (string) fread($handle, 8192);
-            if (str_contains($head, "\0")) {
+            if (str_contains((string) fread($handle, 8192), "\0")) {
                 return new ToolResult("File {$relative} is binary.", false, ['path' => $relative, 'bytes' => filesize($path)]);
             }
             rewind($handle);
             $offset = max(1, (int) ($arguments['offset'] ?? 1));
-            $limit = isset($arguments['limit']) ? max(1, (int) $arguments['limit']) : null;
-            $whole = $offset === 1 && $limit === null;
+            $limit = min($this->maxLines, isset($arguments['limit']) ? max(1, (int) $arguments['limit']) : $this->maxLines);
             $lines = [];
             $bytes = 0;
             $number = 0;
@@ -62,9 +67,12 @@ final readonly class ReadFileTool implements Tool
                 if ($number < $offset) {
                     continue;
                 }
-                if (($limit !== null && count($lines) >= $limit) || $bytes + strlen($line) > $this->maxBytes) {
+                if (count($lines) >= $limit || ($bytes + strlen($line) > $this->maxBytes && $lines !== [])) {
                     $more = true;
                     break;
+                }
+                if (strlen($line) > $this->maxBytes) {
+                    $line = mb_strcut($line, 0, $this->maxBytes, 'UTF-8') . "… [line cut]\n";
                 }
                 $lines[] = $line;
                 $bytes += strlen($line);
@@ -77,9 +85,22 @@ final readonly class ReadFileTool implements Tool
             $last = $offset + count($lines) - 1;
             $text .= ($text === '' || str_ends_with($text, "\n") ? '' : "\n")
                 . "[lines {$offset}-{$last} shown; read on with offset " . ($last + 1) . ']';
-        } elseif (!$whole && $lines === []) {
+        } elseif ($lines === [] && $offset > 1) {
             $text = "[{$relative} has no line {$offset}]";
         }
         return new ToolResult($text, true, ['path' => $relative, 'bytes' => $bytes]);
+    }
+
+    /**
+     * The real path of a saved tool output, or null when the path is not one.
+     */
+    private function savedOutput(string $path): ?string
+    {
+        if ($this->outputs === null || !str_starts_with($path, $this->outputs . '/')) {
+            return null;
+        }
+        $real = realpath($path);
+        $root = realpath($this->outputs);
+        return $real !== false && $root !== false && str_starts_with($real, $root . '/') ? $real : null;
     }
 }

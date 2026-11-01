@@ -27,7 +27,7 @@ final readonly class Config
     /**
      * Settings a project's `.bia/config.json` may set, as dotted prefixes.
      */
-    public const PROJECT_KEYS = ['model.name', 'prompt.system', 'permissions', 'tools'];
+    public const PROJECT_KEYS = ['model.name', 'model.context_window', 'prompt.system', 'permissions', 'tools', 'compaction'];
 
     public static function load(?string $projectRoot = null, array $overrides = []): self
     {
@@ -46,6 +46,8 @@ final readonly class Config
                 // A whole reply may take this long; a server silent for idle_timeout seconds is given up on.
                 'timeout' => 3600.0,
                 'idle_timeout' => 120.0,
+                // Tokens the model can take in one request; compaction keeps below it.
+                'context_window' => 128_000,
             ],
             'prompt' => [
                 'system' => 'You are Bia, a fast coding assistant. Be precise and concise.',
@@ -57,7 +59,14 @@ final readonly class Config
             ],
             'tools' => [
                 'shell_timeout' => 120.0,
-                'output_bytes' => 65_536,
+                // Tool output past either limit is cut, and saved in full under cache.path.
+                'output_bytes' => 51_200,
+                'output_lines' => 2000,
+            ],
+            'compaction' => [
+                'enabled' => true,
+                'reserve_tokens' => 16_384,
+                'keep_tokens' => 20_000,
             ],
             'storage' => [
                 'path' => $stateHome . '/bia/bia.sqlite',
@@ -151,6 +160,19 @@ final readonly class Config
         return self::findProjectRoot(getcwd());
     }
 
+    /**
+     * Where the user's own config.php and global AGENTS.md live.
+     */
+    public function configDirectory(): string
+    {
+        return self::directory('XDG_CONFIG_HOME', self::home() . '/.config') . '/bia';
+    }
+
+    public function cachePath(): string
+    {
+        return self::expand((string) $this->get('cache.path'));
+    }
+
     public function databasePath(): string
     {
         return self::expand((string) $this->get('storage.path'));
@@ -185,13 +207,28 @@ final readonly class Config
         if (!is_array($tools)) {
             throw new \InvalidArgumentException('tools must be an object in Bia configuration.');
         }
-        foreach (['shell_timeout', 'output_bytes'] as $key) {
+        foreach (['shell_timeout', 'output_bytes', 'output_lines'] as $key) {
             if (isset($tools[$key]) && (!is_int($tools[$key]) && !is_float($tools[$key]) || $tools[$key] <= 0)) {
                 throw new \InvalidArgumentException("tools.{$key} must be a positive number.");
             }
         }
         if (!isset($values['storage']['path']) || !is_string($values['storage']['path']) || $values['storage']['path'] === '') {
             throw new \InvalidArgumentException('storage.path must be a non-empty string.');
+        }
+        if (isset($model['context_window']) && (!is_int($model['context_window']) || $model['context_window'] < 4096)) {
+            throw new \InvalidArgumentException('model.context_window must be a whole number of tokens, at least 4096.');
+        }
+        $compaction = $values['compaction'] ?? [];
+        if (!is_array($compaction)) {
+            throw new \InvalidArgumentException('compaction must be an object in Bia configuration.');
+        }
+        if (isset($compaction['enabled']) && !is_bool($compaction['enabled'])) {
+            throw new \InvalidArgumentException('compaction.enabled must be true or false.');
+        }
+        foreach (['reserve_tokens', 'keep_tokens'] as $key) {
+            if (isset($compaction[$key]) && (!is_int($compaction[$key]) || $compaction[$key] < 1)) {
+                throw new \InvalidArgumentException("compaction.{$key} must be a positive whole number.");
+            }
         }
         $permissions = $values['permissions'] ?? [];
         if (!is_array($permissions)) {

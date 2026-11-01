@@ -36,11 +36,11 @@ final class Registry
     }
 
     /**
-     * @return list<array<string, mixed>>
+     * @return list<ToolDefinition>
      */
     public function definitions(): array
     {
-        return array_map(static fn (Tool $tool): array => $tool->definition()->openAi(), array_values($this->tools));
+        return array_map(static fn (Tool $tool): ToolDefinition => $tool->definition(), array_values($this->tools));
     }
 
     public function has(string $name): bool

@@ -11,7 +11,7 @@ final readonly class ModelRequest
 {
     /**
      * @param list<Message> $messages
-     * @param list<array<string, mixed>> $tools
+     * @param list<ToolDefinition> $tools
      * @param array<string, mixed> $options
      */
     public function __construct(
@@ -20,12 +20,4 @@ final readonly class ModelRequest
         public array $tools = [],
         public array $options = [],
     ) {}
-
-    /**
-     * @return list<array<string, mixed>>
-     */
-    public function jsonMessages(): array
-    {
-        return array_map(static fn (Message $message): array => $message->json(), $this->messages);
-    }
 }

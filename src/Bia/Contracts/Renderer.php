@@ -13,10 +13,13 @@ interface Renderer
 
     /**
      * A tool call has finished.
-     *
-     * @param array{id: string, name: string, arguments: array<string, mixed>, error?: string} $call
      */
-    public function tool(array $call, ToolResult $result): void;
+    public function tool(ToolCall $call, ToolResult $result): void;
+
+    /**
+     * Something the agent did on its own, such as compacting the conversation.
+     */
+    public function notice(string $message): void;
 
     public function finish(ModelResult $result): void;
 }

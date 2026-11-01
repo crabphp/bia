@@ -4,12 +4,16 @@ declare(strict_types=1);
 
 namespace Bia\Session;
 
+use Bia\Contracts\Compaction;
+use Bia\Contracts\Entry;
 use Bia\Contracts\Message;
 use Bia\Contracts\SessionStore;
+use Bia\Contracts\ToolCall;
 
 /**
- * The local SQLite conversation store. It opens and migrates lazily, so
- * commands such as `bia --help` never touch the filesystem database.
+ * The local SQLite conversation store: an append-only log of entries, each
+ * pointing at its parent, and a head per session. It opens and migrates
+ * lazily, so commands such as `bia --help` never touch the database.
  */
 final class SqliteStore implements SessionStore
 {
@@ -17,93 +21,104 @@ final class SqliteStore implements SessionStore
 
     public function __construct(private readonly string $path) {}
 
-    public function create(string $workspace, string $model, ?string $id = null): string
+    public function create(string $workspace, string $model, ?string $id = null, ?int $fromEntry = null): string
     {
-        $this->open();
+        $pdo = $this->open();
         $id ??= self::id();
         $now = gmdate('c');
-        $statement = $this->pdo->prepare(
-            'INSERT INTO sessions (id, workspace, model, created_at, updated_at) VALUES (:id, :workspace, :model, :created, :updated)',
-        );
-        $statement->execute([
-            'id' => $id,
-            'workspace' => $workspace,
-            'model' => $model,
-            'created' => $now,
-            'updated' => $now,
-        ]);
+        $pdo->prepare(
+            'INSERT INTO sessions (id, workspace, model, head, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+        )->execute([$id, $workspace, $model, $fromEntry, $now, $now]);
         return $id;
     }
 
-    public function append(string $sessionId, Message $message): int
+    public function append(string $sessionId, Message|Compaction $payload): Entry
     {
-        $this->open();
-        $this->pdo->beginTransaction();
+        $pdo = $this->open();
+        $pdo->beginTransaction();
         try {
-            $next = $this->pdo->prepare('SELECT COALESCE(MAX(sequence), 0) + 1 FROM messages WHERE session_id = :session');
-            $next->execute(['session' => $sessionId]);
-            $sequence = (int) $next->fetchColumn();
-            $insert = $this->pdo->prepare(
-                'INSERT INTO messages (session_id, sequence, role, content, metadata, created_at) VALUES (:session, :sequence, :role, :content, :metadata, :created)',
-            );
-            $insert->execute([
-                'session' => $sessionId,
-                'sequence' => $sequence,
-                'role' => $message->role,
-                'content' => json_encode($message->content, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                'metadata' => json_encode($message->metadata, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
-                'created' => gmdate('c'),
+            $head = $pdo->prepare('SELECT head FROM sessions WHERE id = ?');
+            $head->execute([$sessionId]);
+            $row = $head->fetch();
+            if ($row === false) {
+                throw new \RuntimeException("Session {$sessionId} does not exist.");
+            }
+            $parent = $row['head'] === null ? null : (int) $row['head'];
+            $now = gmdate('c');
+            $pdo->prepare(
+                'INSERT INTO entries (session_id, parent_id, type, data, created_at) VALUES (?, ?, ?, ?, ?)',
+            )->execute([
+                $sessionId,
+                $parent,
+                $payload instanceof Message ? 'message' : 'compaction',
+                json_encode($payload->toArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                $now,
             ]);
-            $update = $this->pdo->prepare('UPDATE sessions SET updated_at = :updated WHERE id = :id');
-            $update->execute(['updated' => gmdate('c'), 'id' => $sessionId]);
-            $this->pdo->commit();
-            return $sequence;
+            $id = (int) $pdo->lastInsertId();
+            $pdo->prepare('UPDATE sessions SET head = ?, updated_at = ? WHERE id = ?')->execute([$id, $now, $sessionId]);
+            $pdo->commit();
+            return new Entry($id, $parent, $payload, $now);
         } catch (\Throwable $error) {
-            $this->pdo->rollBack();
+            $pdo->rollBack();
             throw $error;
         }
     }
 
-    public function messages(string $sessionId): array
+    public function path(string $sessionId): array
     {
-        $this->open();
-        $statement = $this->pdo->prepare(
-            'SELECT role, content, metadata FROM messages WHERE session_id = :session ORDER BY sequence ASC',
-        );
-        $statement->execute(['session' => $sessionId]);
-        $messages = [];
-        while ($row = $statement->fetch(\PDO::FETCH_ASSOC)) {
-            $content = json_decode((string) $row['content'], true, 512, JSON_THROW_ON_ERROR);
-            $metadata = json_decode((string) $row['metadata'], true, 512, JSON_THROW_ON_ERROR);
-            if (!is_string($content) && !is_array($content)) {
-                throw new \RuntimeException("Session {$sessionId} contains invalid message content.");
+        $pdo = $this->open();
+        // Walk from the head to the root; a forked session's path runs into the session it came from.
+        $statement = $pdo->prepare(<<<'SQL'
+            WITH RECURSIVE path(id, parent_id, type, data, created_at, depth) AS (
+                SELECT e.id, e.parent_id, e.type, e.data, e.created_at, 0
+                FROM entries e JOIN sessions s ON e.id = s.head WHERE s.id = ?
+                UNION ALL
+                SELECT e.id, e.parent_id, e.type, e.data, e.created_at, path.depth + 1
+                FROM entries e JOIN path ON e.id = path.parent_id
+            )
+            SELECT id, parent_id, type, data, created_at FROM path ORDER BY depth DESC
+            SQL);
+        $statement->execute([$sessionId]);
+        $entries = [];
+        while ($row = $statement->fetch()) {
+            $data = json_decode((string) $row['data'], true, 512, JSON_THROW_ON_ERROR);
+            if (!is_array($data)) {
+                throw new \RuntimeException("Session {$sessionId} has an unreadable entry {$row['id']}.");
             }
-            if (!is_array($metadata)) {
-                throw new \RuntimeException("Session {$sessionId} contains invalid message metadata.");
-            }
-            $messages[] = new Message((string) $row['role'], $content, $metadata);
+            $entries[] = new Entry(
+                (int) $row['id'],
+                $row['parent_id'] === null ? null : (int) $row['parent_id'],
+                $row['type'] === 'compaction' ? Compaction::fromArray($data) : Message::fromArray($data),
+                (string) $row['created_at'],
+            );
         }
-        return $messages;
+        return $entries;
+    }
+
+    public function head(string $sessionId): ?int
+    {
+        $statement = $this->open()->prepare('SELECT head FROM sessions WHERE id = ?');
+        $statement->execute([$sessionId]);
+        $head = $statement->fetchColumn();
+        return $head === false || $head === null ? null : (int) $head;
     }
 
     public function exists(string $sessionId): bool
     {
-        $this->open();
-        $statement = $this->pdo->prepare('SELECT 1 FROM sessions WHERE id = :id LIMIT 1');
-        $statement->execute(['id' => $sessionId]);
+        $statement = $this->open()->prepare('SELECT 1 FROM sessions WHERE id = ? LIMIT 1');
+        $statement->execute([$sessionId]);
         return $statement->fetchColumn() !== false;
     }
 
     public function list(int $limit = 50): array
     {
-        $this->open();
         $limit = max(1, min(500, $limit));
-        $statement = $this->pdo->query(
-            'SELECT s.id, s.workspace, s.model, s.created_at, s.updated_at, COUNT(m.id) AS message_count '
-            . 'FROM sessions s LEFT JOIN messages m ON m.session_id = s.id '
+        $statement = $this->open()->query(
+            'SELECT s.id, s.workspace, s.model, s.created_at, s.updated_at, COUNT(e.id) AS entry_count '
+            . 'FROM sessions s LEFT JOIN entries e ON e.session_id = s.id '
             . 'GROUP BY s.id ORDER BY s.updated_at DESC LIMIT ' . $limit,
         );
-        return $statement->fetchAll(\PDO::FETCH_ASSOC);
+        return $statement->fetchAll();
     }
 
     public function close(): void
@@ -111,49 +126,107 @@ final class SqliteStore implements SessionStore
         $this->pdo = null;
     }
 
-    private function open(): void
+    private function open(): \PDO
     {
         if ($this->pdo !== null) {
-            return;
+            return $this->pdo;
         }
         $directory = dirname($this->path);
         if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
             throw new \RuntimeException("Cannot create Bia state directory {$directory}.");
         }
-        $this->pdo = new \PDO('sqlite:' . $this->path, options: [
+        $pdo = new \PDO('sqlite:' . $this->path, options: [
             \PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION,
             \PDO::ATTR_DEFAULT_FETCH_MODE => \PDO::FETCH_ASSOC,
         ]);
-        $this->pdo->exec('PRAGMA foreign_keys = ON');
-        $this->pdo->exec('PRAGMA journal_mode = WAL');
-        $this->pdo->exec('PRAGMA busy_timeout = 2500');
-        $this->migrate();
+        $pdo->exec('PRAGMA journal_mode = WAL');
+        $pdo->exec('PRAGMA synchronous = NORMAL');
+        $pdo->exec('PRAGMA busy_timeout = 2500');
+        $this->migrate($pdo);
+        return $this->pdo = $pdo;
     }
 
-    private function migrate(): void
+    private function migrate(\PDO $pdo): void
     {
-        $this->pdo->exec(<<<'SQL'
-            CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
-                workspace TEXT NOT NULL,
-                model TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        SQL);
-        $this->pdo->exec(<<<'SQL'
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-                sequence INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                metadata TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                UNIQUE (session_id, sequence)
-            )
-        SQL);
-        $this->pdo->exec('CREATE INDEX IF NOT EXISTS messages_session_sequence ON messages(session_id, sequence)');
+        $version = (int) $pdo->query('PRAGMA user_version')->fetchColumn();
+        if ($version >= 2) {
+            return;
+        }
+        $pdo->beginTransaction();
+        try {
+            $hadMessages = (bool) $pdo->query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'messages'")->fetchColumn();
+            $hadSessions = (bool) $pdo->query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")->fetchColumn();
+            if ($hadSessions) {
+                $pdo->exec('ALTER TABLE sessions RENAME TO sessions_v1');
+            }
+            $pdo->exec(<<<'SQL'
+                CREATE TABLE sessions (
+                    id TEXT PRIMARY KEY,
+                    workspace TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    head INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+                SQL);
+            $pdo->exec(<<<'SQL'
+                CREATE TABLE entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    parent_id INTEGER,
+                    type TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                SQL);
+            $pdo->exec('CREATE INDEX entries_session ON entries(session_id)');
+            if ($hadSessions) {
+                $pdo->exec('INSERT INTO sessions (id, workspace, model, head, created_at, updated_at) SELECT id, workspace, model, NULL, created_at, updated_at FROM sessions_v1');
+                if ($hadMessages) {
+                    $this->migrateMessages($pdo);
+                    $pdo->exec('DROP TABLE messages');
+                }
+                $pdo->exec('DROP TABLE sessions_v1');
+            }
+            $pdo->exec('PRAGMA user_version = 2');
+            $pdo->commit();
+        } catch (\Throwable $error) {
+            $pdo->rollBack();
+            throw $error;
+        }
+    }
+
+    /**
+     * Turns the first schema's OpenAI-shaped messages into entries.
+     */
+    private function migrateMessages(\PDO $pdo): void
+    {
+        $rows = $pdo->query('SELECT session_id, role, content, metadata, created_at FROM messages ORDER BY session_id, sequence');
+        $insert = $pdo->prepare('INSERT INTO entries (session_id, parent_id, type, data, created_at) VALUES (?, ?, ?, ?, ?)');
+        $head = $pdo->prepare('UPDATE sessions SET head = ? WHERE id = ?');
+        $parents = [];
+        foreach ($rows->fetchAll() as $row) {
+            $content = json_decode((string) $row['content'], true);
+            $metadata = json_decode((string) $row['metadata'], true) ?: [];
+            $calls = [];
+            foreach ($metadata['tool_calls'] ?? [] as $call) {
+                $arguments = json_decode((string) ($call['function']['arguments'] ?? '{}'), true);
+                $calls[] = new ToolCall((string) ($call['id'] ?? ''), (string) ($call['function']['name'] ?? ''), is_array($arguments) ? $arguments : []);
+            }
+            $message = new Message(
+                (string) $row['role'],
+                is_string($content) ? $content : json_encode($content),
+                $calls,
+                toolCallId: isset($metadata['tool_call_id']) ? (string) $metadata['tool_call_id'] : null,
+                toolName: isset($metadata['name']) ? (string) $metadata['name'] : null,
+                ok: (bool) ($metadata['ok'] ?? true),
+                meta: array_filter(['usage' => $metadata['usage'] ?? null, 'finish_reason' => $metadata['finish_reason'] ?? null]),
+            );
+            $session = (string) $row['session_id'];
+            $insert->execute([$session, $parents[$session] ?? null, 'message', json_encode($message->toArray(), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), $row['created_at']]);
+            $parents[$session] = (int) $pdo->lastInsertId();
+            $head->execute([$parents[$session], $session]);
+        }
     }
 
     private static function id(): string

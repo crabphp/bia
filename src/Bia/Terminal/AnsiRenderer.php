@@ -7,6 +7,7 @@ namespace Bia\Terminal;
 use Bia\Contracts\ModelEvent;
 use Bia\Contracts\ModelResult;
 use Bia\Contracts\Renderer;
+use Bia\Contracts\ToolCall;
 use Bia\Contracts\ToolResult;
 
 /**
@@ -43,14 +44,27 @@ final class AnsiRenderer implements Renderer
         }
     }
 
-    public function tool(array $call, ToolResult $result): void
+    public function notice(string $message): void
+    {
+        if ($this->json) {
+            $this->line(json_encode(['type' => 'notice', 'text' => $message], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
+            return;
+        }
+        if ($this->started) {
+            fwrite(STDOUT, PHP_EOL);
+            $this->started = false;
+        }
+        fwrite(STDERR, $this->paint('2', "· {$message}") . PHP_EOL);
+    }
+
+    public function tool(ToolCall $call, ToolResult $result): void
     {
         if ($this->json) {
             $this->line(json_encode([
                 'type' => 'tool_result',
-                'id' => $call['id'],
-                'name' => $call['name'],
-                'arguments' => $call['arguments'],
+                'id' => $call->id,
+                'name' => $call->name,
+                'arguments' => $call->arguments,
                 'ok' => $result->ok,
                 'text' => mb_strcut($result->text, 0, 4096, 'UTF-8'),
                 'bytes' => strlen($result->text),
@@ -62,13 +76,13 @@ final class AnsiRenderer implements Renderer
             $this->started = false;
         }
         $mark = $result->ok ? $this->paint('32', '✓') : $this->paint('31', '✗');
-        $line = "{$mark} {$call['name']}";
-        $subject = self::subject($call['arguments']);
+        $line = "{$mark} {$call->name}";
+        $subject = self::subject($call->arguments);
         if ($subject !== '') {
             $line .= ' ' . $this->paint('2', $subject);
         }
         fwrite(STDERR, $line . PHP_EOL);
-        if (!$result->ok || $call['name'] === 'shell') {
+        if (!$result->ok || $call->name === 'shell') {
             $lines = array_slice(preg_split('/\R/', rtrim($result->text)) ?: [], -3);
             foreach ($lines as $output) {
                 if ($output !== '') {

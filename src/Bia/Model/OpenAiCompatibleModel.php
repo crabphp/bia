@@ -4,16 +4,20 @@ declare(strict_types=1);
 
 namespace Bia\Model;
 
+use Bia\Contracts\Message;
 use Bia\Contracts\Model;
 use Bia\Contracts\ModelEvent;
 use Bia\Contracts\ModelRequest;
 use Bia\Contracts\ModelResult;
+use Bia\Contracts\ToolCall;
+use Bia\Contracts\ToolDefinition;
 use Crab\Contracts\HttpClient\Client;
 use Crab\Engine\Async\Cancellation;
 
 /**
  * Streams Chat Completions-compatible responses, including tdaproxy and other
- * providers that expose an OpenAI-compatible endpoint.
+ * providers that expose an OpenAI-compatible endpoint. This is the only
+ * place that knows the Chat Completions wire format.
  */
 final readonly class OpenAiCompatibleModel implements Model
 {
@@ -51,7 +55,7 @@ final readonly class OpenAiCompatibleModel implements Model
     ): ModelResult {
         $payload = [
             'model' => $request->model !== '' ? $request->model : $this->defaultModel,
-            'messages' => $request->jsonMessages(),
+            'messages' => self::messages($request->messages),
             'stream' => true,
         ];
         if ($this->streamUsage && str_ends_with(rtrim($this->endpoint, '/'), 'chat/completions')) {
@@ -59,7 +63,7 @@ final readonly class OpenAiCompatibleModel implements Model
             $payload['stream_options'] = ['include_usage' => true];
         }
         if ($request->tools !== []) {
-            $payload['tools'] = $request->tools;
+            $payload['tools'] = array_map(static fn (ToolDefinition $tool): array => $tool->openAi(), $request->tools);
         }
         foreach ($request->options as $key => $value) {
             $payload[$key] = $value;
@@ -77,8 +81,10 @@ final readonly class OpenAiCompatibleModel implements Model
                 json: $payload,
                 cancellation: $cancellation,
                 idle: $this->idleTimeout,
-            )
-            ->throw();
+            );
+        if ($response->getStatusCode() >= 400) {
+            throw ModelException::fromAnswer($response->getStatusCode(), (string) $response->getBody());
+        }
 
         $contentType = strtolower($response->getHeaderLine('content-type'));
         if (!str_contains($contentType, 'text/event-stream')) {
@@ -90,23 +96,22 @@ final readonly class OpenAiCompatibleModel implements Model
             if ($text !== '') {
                 $emit(ModelEvent::text($text));
             }
-            $usage = is_array($data['usage'] ?? null) ? $data['usage'] : [];
+            $reasoning = self::reasoning($data);
+            $usage = self::usage($data['usage'] ?? null);
             if ($usage !== []) {
                 $emit(ModelEvent::usage($usage));
             }
-            $finishReason = is_string($data['choices'][0]['finish_reason'] ?? null)
-                ? $data['choices'][0]['finish_reason']
-                : 'stop';
+            $finishReason = is_string($data['choices'][0]['finish_reason'] ?? null) ? $data['choices'][0]['finish_reason'] : 'stop';
             $toolCalls = self::toolCalls($data);
             foreach ($toolCalls as $toolCall) {
-                $emit(ModelEvent::toolCall($toolCall));
+                $emit(ModelEvent::toolCall($toolCall->toArray()));
             }
-            $result = new ModelResult($text, $finishReason, $usage, $toolCalls, $data);
             $emit(ModelEvent::completed(['finish_reason' => $finishReason, 'usage' => $usage]));
-            return $result;
+            return new ModelResult($text, $finishReason, $usage, $toolCalls, $data, $reasoning);
         }
 
         $text = '';
+        $reasoning = '';
         $usage = [];
         $finishReason = 'stop';
         $raw = [];
@@ -120,15 +125,23 @@ final readonly class OpenAiCompatibleModel implements Model
             if (!is_array($data)) {
                 continue;
             }
+            if (isset($data['error'])) {
+                throw ModelException::fromAnswer(500, $event->data);
+            }
             $raw = $data;
             $delta = self::text($data);
             if ($delta !== '') {
                 $text .= $delta;
                 $emit(ModelEvent::text($delta));
             }
+            $thought = self::reasoning($data);
+            if ($thought !== '') {
+                $reasoning .= $thought;
+                $emit(ModelEvent::reasoning($thought));
+            }
             self::collectToolCalls($data, $toolBuffers);
             if (isset($data['usage']) && is_array($data['usage'])) {
-                $usage = $data['usage'];
+                $usage = self::usage($data['usage']);
                 $emit(ModelEvent::usage($usage));
             }
             $reason = $data['choices'][0]['finish_reason'] ?? null;
@@ -136,13 +149,50 @@ final readonly class OpenAiCompatibleModel implements Model
                 $finishReason = $reason;
             }
         }
-        $toolCalls = self::decodeToolBuffers($toolBuffers);
+        $toolCalls = array_map(
+            static fn (array $buffer): ToolCall => self::call($buffer['id'], $buffer['name'], $buffer['arguments']),
+            array_values($toolBuffers),
+        );
         foreach ($toolCalls as $toolCall) {
-            $emit(ModelEvent::toolCall($toolCall));
+            $emit(ModelEvent::toolCall($toolCall->toArray()));
         }
-        $result = new ModelResult($text, $finishReason, $usage, $toolCalls, $raw);
         $emit(ModelEvent::completed(['finish_reason' => $finishReason, 'usage' => $usage]));
-        return $result;
+        return new ModelResult($text, $finishReason, $usage, $toolCalls, $raw, $reasoning);
+    }
+
+    /**
+     * Neutral messages in the Chat Completions format. Reasoning stays out:
+     * Chat Completions takes none back.
+     *
+     * @param list<Message> $messages
+     * @return list<array<string, mixed>>
+     */
+    public static function messages(array $messages): array
+    {
+        $wire = [];
+        foreach ($messages as $message) {
+            if ($message->role === 'tool') {
+                $wire[] = ['role' => 'tool', 'tool_call_id' => (string) $message->toolCallId, 'content' => $message->text];
+                continue;
+            }
+            $item = ['role' => $message->role, 'content' => $message->text];
+            if ($message->role === 'assistant' && $message->toolCalls !== []) {
+                $item['content'] = $message->text === '' ? null : $message->text;
+                $item['tool_calls'] = array_map(static fn (ToolCall $call): array => [
+                    'id' => $call->id,
+                    'type' => 'function',
+                    'function' => [
+                        'name' => $call->name,
+                        // An empty PHP array is a JSON list; arguments are always an object.
+                        'arguments' => $call->error !== null || $call->arguments === []
+                            ? '{}'
+                            : json_encode($call->arguments, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                    ],
+                ], $message->toolCalls);
+            }
+            $wire[] = $item;
+        }
+        return $wire;
     }
 
     /**
@@ -165,8 +215,40 @@ final readonly class OpenAiCompatibleModel implements Model
     }
 
     /**
+     * Reasoning text, as DeepSeek, vLLM and OpenRouter stream it.
+     *
      * @param array<string, mixed> $data
-     * @return list<array{id: string, name: string, arguments: array<string, mixed>}>
+     */
+    private static function reasoning(array $data): string
+    {
+        $part = $data['choices'][0]['delta'] ?? $data['choices'][0]['message'] ?? [];
+        $value = is_array($part) ? ($part['reasoning_content'] ?? $part['reasoning'] ?? '') : '';
+        return is_string($value) ? $value : '';
+    }
+
+    /**
+     * @return array{input?: int, output?: int, cache_read?: int, total?: int}
+     */
+    private static function usage(mixed $usage): array
+    {
+        if (!is_array($usage)) {
+            return [];
+        }
+        $normalized = array_filter([
+            'input' => $usage['prompt_tokens'] ?? $usage['input_tokens'] ?? null,
+            'output' => $usage['completion_tokens'] ?? $usage['output_tokens'] ?? null,
+            'cache_read' => $usage['prompt_tokens_details']['cached_tokens'] ?? $usage['input_tokens_details']['cached_tokens'] ?? null,
+            'total' => $usage['total_tokens'] ?? null,
+        ], static fn (mixed $value): bool => is_int($value));
+        if (!isset($normalized['total']) && isset($normalized['input'], $normalized['output'])) {
+            $normalized['total'] = $normalized['input'] + $normalized['output'];
+        }
+        return $normalized;
+    }
+
+    /**
+     * @param array<string, mixed> $data
+     * @return list<ToolCall>
      */
     private static function toolCalls(array $data): array
     {
@@ -181,49 +263,33 @@ final readonly class OpenAiCompatibleModel implements Model
             }
             $function = is_array($call['function'] ?? null) ? $call['function'] : $call;
             $name = $function['name'] ?? '';
-            $arguments = $function['arguments'] ?? [];
             if (!is_string($name)) {
                 continue;
             }
-            $result[] = self::call((string) ($call['id'] ?? "tool_{$index}"), $name, $arguments);
+            $result[] = self::call((string) ($call['id'] ?? "tool_{$index}"), $name, $function['arguments'] ?? []);
         }
         return $result;
     }
 
     /**
-     * @param array<string, array{id: string, name: string, arguments: string}> $buffers
-     * @return list<array{id: string, name: string, arguments: array<string, mixed>}>
+     * One call. Arguments that are not a JSON object, such as those of a
+     * reply cut off at its length limit, become an error for the model to
+     * see instead of the tool running with none.
      */
-    private static function decodeToolBuffers(array $buffers): array
-    {
-        $result = [];
-        foreach ($buffers as $buffer) {
-            $result[] = self::call($buffer['id'], $buffer['name'], $buffer['arguments']);
-        }
-        return $result;
-    }
-
-    /**
-     * One normalized call. Arguments that are not a JSON object, such as
-     * those of a reply cut off at its length limit, are reported as an error
-     * for the model to see instead of running the tool with none.
-     *
-     * @return array{id: string, name: string, arguments: array<string, mixed>, error?: string}
-     */
-    private static function call(string $id, string $name, mixed $arguments): array
+    private static function call(string $id, string $name, mixed $arguments): ToolCall
     {
         if (is_string($arguments)) {
             $arguments = trim($arguments) === '' ? [] : json_decode($arguments, true);
         }
         if (is_array($arguments) && (!array_is_list($arguments) || $arguments === [])) {
-            return ['id' => $id, 'name' => $name, 'arguments' => $arguments];
+            return new ToolCall($id, $name, $arguments);
         }
-        return [
-            'id' => $id,
-            'name' => $name,
-            'arguments' => [],
-            'error' => "The arguments for {$name} were not a valid JSON object; send the call again with complete arguments.",
-        ];
+        return new ToolCall(
+            $id,
+            $name,
+            [],
+            "The arguments for {$name} were not a valid JSON object; send the call again with complete arguments.",
+        );
     }
 
     /**
@@ -242,11 +308,7 @@ final readonly class OpenAiCompatibleModel implements Model
             }
             $key = (string) ($call['index'] ?? $index);
             $function = is_array($call['function'] ?? null) ? $call['function'] : [];
-            $buffers[$key] ??= [
-                'id' => (string) ($call['id'] ?? "tool_{$key}"),
-                'name' => '',
-                'arguments' => '',
-            ];
+            $buffers[$key] ??= ['id' => (string) ($call['id'] ?? "tool_{$key}"), 'name' => '', 'arguments' => ''];
             if (isset($call['id']) && is_string($call['id'])) {
                 $buffers[$key]['id'] = $call['id'];
             }

@@ -12,9 +12,12 @@ use Bia\Contracts\ModelRequest;
 use Bia\Contracts\ModelResult;
 use Bia\Contracts\Renderer;
 use Bia\Contracts\Tool;
+use Bia\Contracts\ToolCall;
 use Bia\Contracts\ToolContext;
 use Bia\Contracts\ToolDefinition;
 use Bia\Contracts\ToolResult;
+use Bia\Agent\Compactor;
+use Bia\Contracts\Entry;
 use Bia\Session\SqliteStore;
 use Bia\Tool\Registry;
 use Crab\Engine\Async\Async;
@@ -33,11 +36,11 @@ final class AgentTest extends TestCase
         $agent = new Agent($model, 'fake', $registry, $store, $renderer, '/workspace');
 
         $result = $agent->run($session, 'run the tool');
-        $messages = $store->messages($session);
+        $messages = self::messages($store, $session);
 
         self::assertSame('done', $result->text);
         self::assertSame(['user', 'assistant', 'tool', 'assistant'], array_map(static fn (Message $message): string => $message->role, $messages));
-        self::assertSame('echoed hello', $messages[2]->content);
+        self::assertSame('echoed hello', $messages[2]->text);
         self::assertSame(2, $model->calls);
         self::assertSame('done', $renderer->text);
         self::assertSame(['echo'], $renderer->tools, 'The renderer did not hear about the tool result.');
@@ -57,23 +60,23 @@ final class AgentTest extends TestCase
         $agent->run($session, 'sleep three times');
 
         self::assertLessThan(0.5, microtime(true) - $started, 'Read-only tools ran one after another.');
-        $tools = array_values(array_filter($store->messages($session), static fn (Message $m): bool => $m->role === 'tool'));
-        self::assertSame(['a', 'b', 'c'], array_map(static fn (Message $m): string => $m->metadata['tool_call_id'], $tools), 'Results were stored out of call order.');
+        $tools = array_values(array_filter(self::messages($store, $session), static fn (Message $m): bool => $m->role === 'tool'));
+        self::assertSame(['a', 'b', 'c'], array_map(static fn (Message $m): string => (string) $m->toolCallId, $tools), 'Results were stored out of call order.');
     }
 
     public function testUnreadableArgumentsAreAnsweredWithoutRunningTheTool(): void
     {
         [$store, $session] = $this->session();
-        $broken = ['id' => 'x', 'name' => 'echo', 'arguments' => [], 'error' => 'The arguments for echo were not a valid JSON object.'];
+        $broken = new ToolCall('x', 'echo', [], 'The arguments for echo were not a valid JSON object.');
         $tool = new EchoTool();
         $agent = new Agent(new ScriptedModel([[$broken]]), 'fake', (new Registry())->add($tool), $store, new FakeRenderer(), '/workspace');
 
         $agent->run($session, 'go');
-        $messages = $store->messages($session);
+        $messages = self::messages($store, $session);
 
         self::assertSame(0, $tool->runs);
-        self::assertStringContainsString('not a valid JSON object', $messages[2]->content);
-        self::assertSame('{}', $messages[1]->metadata['tool_calls'][0]['function']['arguments']);
+        self::assertStringContainsString('not a valid JSON object', $messages[2]->text);
+        self::assertSame('x', $messages[1]->toolCalls[0]->id);
     }
 
     public function testToolOutputIsMadeValidUtf8AndKeepsItsEnds(): void
@@ -86,34 +89,37 @@ final class AgentTest extends TestCase
             $store,
             new FakeRenderer(),
             '/workspace',
-            maxStoredToolBytes: 1024,
+            maxOutputBytes: 2048,
+            maxOutputLines: 40,
+            outputs: $outputs = sys_get_temp_dir() . '/bia-outputs-' . bin2hex(random_bytes(4)),
         );
 
         $agent->run($session, 'go');
-        $stored = $store->messages($session)[2]->content;
+        $stored = self::messages($store, $session)[2]->text;
 
         self::assertTrue(mb_check_encoding($stored, 'UTF-8'));
-        self::assertLessThan(1100, strlen($stored));
+        self::assertLessThan(2400, strlen($stored));
         self::assertStringStartsWith('START', $stored);
         self::assertStringEndsWith('END', $stored);
-        self::assertStringContainsString('bytes omitted', $stored);
+        self::assertMatchesRegularExpression('#saved at (\S+\.txt)#', $stored);
+        preg_match('#saved at (\S+\.txt)#', $stored, $saved);
+        self::assertStringStartsWith($outputs, $saved[1]);
+        self::assertStringContainsString(str_repeat('x', 100), (string) file_get_contents($saved[1]), 'The full output was not saved.');
     }
 
     public function testAnInterruptedSessionIsRepairedWhenResumed(): void
     {
         [$store, $session] = $this->session();
-        $store->append($session, new Message('user', 'first'));
-        $store->append($session, new Message('assistant', '', [
-            'tool_calls' => [['id' => 'lost', 'type' => 'function', 'function' => ['name' => 'echo', 'arguments' => '{}']]],
-        ]));
+        $store->append($session, Message::user('first'));
+        $store->append($session, new Message('assistant', '', [new ToolCall('lost', 'echo')]));
         $model = new ScriptedModel([]);
         $agent = new Agent($model, 'fake', (new Registry())->add(new EchoTool()), $store, new FakeRenderer(), '/workspace');
 
         $agent->run($session, 'second');
-        $sent = $model->requests[0]->jsonMessages();
+        $sent = $model->requests[0]->messages;
 
-        self::assertSame(['user', 'assistant', 'tool', 'user'], array_column($sent, 'role'));
-        self::assertSame('lost', $sent[2]['tool_call_id']);
+        self::assertSame(['user', 'assistant', 'tool', 'user'], array_map(static fn (Message $m): string => $m->role, $sent));
+        self::assertSame('lost', $sent[2]->toolCallId);
     }
 
     public function testACancelledTurnStillAnswersEveryCall(): void
@@ -129,9 +135,65 @@ final class AgentTest extends TestCase
             self::fail('A cancelled run returned.');
         } catch (\Crab\Engine\Async\CancelledException) {
         }
-        $roles = array_map(static fn (Message $m): string => $m->role, $store->messages($session));
+        $roles = array_map(static fn (Message $m): string => $m->role, self::messages($store, $session));
 
         self::assertSame(['user', 'assistant', 'tool', 'tool'], $roles);
+    }
+
+    public function testALongConversationIsCompactedAndKeepsItsRecentPart(): void
+    {
+        [$store, $session] = $this->session();
+        for ($i = 1; $i <= 6; $i++) {
+            $store->append($session, Message::user("question {$i} " . str_repeat('word ', 400)));
+            $store->append($session, new Message('assistant', "answer {$i} " . str_repeat('word ', 400)));
+        }
+        $model = new ScriptedModel([]);
+        $summarizer = new SummarizingModel();
+        $renderer = new FakeRenderer();
+        $agent = new Agent($model, 'fake', new Registry(), $store, $renderer, '/workspace', new Compactor($summarizer, 'fake', 4096, 1024, 1200));
+
+        $agent->run($session, 'final question');
+        $sent = $model->requests[0]->messages;
+
+        self::assertSame(1, $summarizer->calls);
+        self::assertStringContainsString('compacted', $sent[0]->text);
+        self::assertStringContainsString('SUMMARY OF OLD WORK', $sent[0]->text);
+        self::assertStringContainsString('question 1', $summarizer->transcript, 'The oldest part was not summarized.');
+        self::assertSame('final question', $sent[count($sent) - 1]->text);
+        self::assertLessThan(13, count($sent), 'Nothing was dropped from the context.');
+        self::assertNotEmpty($renderer->notices);
+        $types = array_map(static fn (Entry $entry): string => $entry->payload::class, $store->path($session));
+        self::assertContains(\Bia\Contracts\Compaction::class, $types);
+        self::assertCount(15, $types, 'Compaction rewrote the log instead of appending to it.');
+    }
+
+    public function testCompactionNeverPartsAToolCallFromItsResult(): void
+    {
+        [$store, $session] = $this->session();
+        $store->append($session, Message::user('start ' . str_repeat('word ', 300)));
+        for ($i = 1; $i <= 8; $i++) {
+            $call = new ToolCall("c{$i}", 'echo', ['value' => str_repeat('v', 400)]);
+            $store->append($session, new Message('assistant', '', [$call]));
+            $store->append($session, Message::toolResult($call, str_repeat('result ', 200), true));
+        }
+        $model = new ScriptedModel([]);
+        $agent = new Agent($model, 'fake', (new Registry())->add(new EchoTool()), $store, new FakeRenderer(), '/workspace', new Compactor(new SummarizingModel(), 'fake', 4096, 1024, 1000));
+
+        $agent->run($session, 'go on');
+        $sent = $model->requests[0]->messages;
+
+        self::assertNotSame('tool', $sent[1]->role, 'The kept part starts with a result whose call was summarized away.');
+        $open = [];
+        foreach ($sent as $message) {
+            foreach ($message->toolCalls as $call) {
+                $open[$call->id] = true;
+            }
+            if ($message->role === 'tool') {
+                self::assertArrayHasKey((string) $message->toolCallId, $open);
+                unset($open[(string) $message->toolCallId]);
+            }
+        }
+        self::assertSame([], $open);
     }
 
     /**
@@ -145,11 +207,18 @@ final class AgentTest extends TestCase
 
     /**
      * @param array<string, mixed> $arguments
-     * @return array{id: string, name: string, arguments: array<string, mixed>}
      */
-    private static function call(string $id, string $name, array $arguments): array
+    private static function call(string $id, string $name, array $arguments): ToolCall
     {
-        return ['id' => $id, 'name' => $name, 'arguments' => $arguments];
+        return new ToolCall($id, $name, $arguments);
+    }
+
+    /**
+     * @return list<Message>
+     */
+    private static function messages(SqliteStore $store, string $session): array
+    {
+        return array_values(array_filter(array_map(static fn (Entry $entry): ?Message => $entry->message(), $store->path($session))));
     }
 }
 
@@ -165,7 +234,7 @@ final class ScriptedModel implements Model
     public array $requests = [];
 
     /**
-     * @param list<list<array<string, mixed>>> $turns
+     * @param list<list<ToolCall>> $turns
      */
     public function __construct(private array $turns) {}
 
@@ -176,12 +245,26 @@ final class ScriptedModel implements Model
         $calls = array_shift($this->turns);
         if ($calls !== null) {
             foreach ($calls as $call) {
-                $emit(ModelEvent::toolCall($call));
+                $emit(ModelEvent::toolCall($call->toArray()));
             }
             return new ModelResult('', 'tool_calls', toolCalls: $calls);
         }
         $emit(ModelEvent::text('done'));
         return new ModelResult('done');
+    }
+}
+
+final class SummarizingModel implements Model
+{
+    public int $calls = 0;
+    public string $transcript = '';
+
+    public function stream(ModelRequest $request, callable $emit, ?Cancellation $cancellation = null): ModelResult
+    {
+        $this->calls++;
+        $messages = $request->messages;
+        $this->transcript = end($messages)->text;
+        return new ModelResult('SUMMARY OF OLD WORK');
     }
 }
 
@@ -228,7 +311,7 @@ final class BigTool implements Tool
 
     public function execute(array $arguments, ToolContext $context, ?Cancellation $cancellation = null): ToolResult
     {
-        return new ToolResult('START' . str_repeat('é', 5000) . "\xff\xfe" . str_repeat('x', 3000) . 'END');
+        return new ToolResult("START\n" . str_repeat("é line\n", 500) . "\xff\xfe\n" . str_repeat('x', 3000) . "\nEND");
     }
 }
 
@@ -262,9 +345,19 @@ final class FakeRenderer implements Renderer
         $this->text .= $event->text;
     }
 
-    public function tool(array $call, ToolResult $result): void
+    /**
+     * @var list<string>
+     */
+    public array $notices = [];
+
+    public function tool(ToolCall $call, ToolResult $result): void
     {
-        $this->tools[] = $call['name'];
+        $this->tools[] = $call->name;
+    }
+
+    public function notice(string $message): void
+    {
+        $this->notices[] = $message;
     }
 
     public function finish(ModelResult $result): void {}

@@ -38,7 +38,7 @@ final class ModelTest extends TestCase
         });
 
         self::assertSame('hi!', $result->text);
-        self::assertSame(['total_tokens' => 2], $result->usage);
+        self::assertSame(['total' => 2], $result->usage);
         self::assertSame(['text_delta', 'text_delta', 'usage', 'completed'], array_map(static fn (ModelEvent $event): string => $event->type, $events));
         self::assertCount(1, $http->sent('POST https://proxy.example/v1/chat/completions'));
     }
@@ -65,6 +65,45 @@ final class ModelTest extends TestCase
         self::assertSame(['include_usage' => true], $body['stream_options']);
     }
 
+    public function testAProviderErrorCarriesItsMessageAndSaysWhenTheContextIsFull(): void
+    {
+        $http = new FakeClient([
+            'POST https://proxy.example/v1/chat/completions' => FakeClient::response(
+                400,
+                '{"error":{"message":"This model\'s maximum context length is 8192 tokens.","code":"context_length_exceeded"}}',
+                ['Content-Type' => 'application/json'],
+            ),
+        ]);
+        $model = new OpenAiCompatibleModel($http, 'https://proxy.example/v1', 'key', 'test');
+
+        try {
+            Loop::run(static fn ($cancellation) => $model->stream(new ModelRequest('test', [new Message('user', 'hi')]), static function (): void {}, $cancellation));
+            self::fail('An error answer was taken as a reply.');
+        } catch (\Bia\Model\ModelException $error) {
+            self::assertTrue($error->contextOverflow);
+            self::assertStringContainsString('maximum context length', $error->getMessage());
+        }
+    }
+
+    public function testReasoningIsStreamedApartFromTheAnswer(): void
+    {
+        $http = new FakeClient([
+            'POST https://proxy.example/v1/chat/completions' => FakeClient::response(
+                200,
+                "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think\"}}]}\n\n"
+                . "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n"
+                . "data: [DONE]\n\n",
+                ['Content-Type' => 'text/event-stream'],
+            ),
+        ]);
+        $model = new OpenAiCompatibleModel($http, 'https://proxy.example/v1', 'key', 'test');
+
+        $result = Loop::run(static fn ($cancellation) => $model->stream(new ModelRequest('test', [new Message('user', 'hi')]), static function (): void {}, $cancellation));
+
+        self::assertSame('answer', $result->text);
+        self::assertSame('think', $result->reasoning);
+    }
+
     public function testBrokenToolArgumentsBecomeAnError(): void
     {
         $http = new FakeClient([
@@ -80,7 +119,7 @@ final class ModelTest extends TestCase
 
         $result = Loop::run(static fn ($cancellation) => $model->stream(new ModelRequest('test', [new Message('user', 'hi')]), static function (): void {}, $cancellation));
 
-        self::assertArrayHasKey('error', $result->toolCalls[0]);
-        self::assertSame(['id' => 'c2', 'name' => 'git_diff', 'arguments' => []], $result->toolCalls[1]);
+        self::assertNotNull($result->toolCalls[0]->error);
+        self::assertSame(['id' => 'c2', 'name' => 'git_diff', 'arguments' => []], $result->toolCalls[1]->toArray());
     }
 }

@@ -4,25 +4,30 @@ declare(strict_types=1);
 
 namespace Bia\Agent;
 
+use Bia\Contracts\Compaction;
+use Bia\Contracts\Entry;
 use Bia\Contracts\Message;
 use Bia\Contracts\Model;
 use Bia\Contracts\ModelRequest;
 use Bia\Contracts\ModelResult;
 use Bia\Contracts\Renderer;
 use Bia\Contracts\SessionStore;
+use Bia\Contracts\ToolCall;
 use Bia\Contracts\ToolContext;
 use Bia\Contracts\ToolResult;
+use Bia\Model\ModelException;
 use Bia\Tool\Registry;
 use Crab\Engine\Async\Cancellation;
 use Crab\Engine\Async\Task;
 use Crab\Engine\EventLoop;
 
 /**
- * Runs the model/tool turn loop and persists only message and tool boundaries.
+ * Runs the model/tool turn loop and appends every message and tool result to
+ * the session's log as it completes, never a streamed token.
  *
- * Every tool call the model makes gets a stored result, even when a tool
- * fails or the turn is cancelled, so a session can always be resumed; one
- * left inconsistent by a crash is repaired as it is loaded.
+ * Every tool call gets a stored result, even when a tool fails or the turn
+ * is cancelled. Before a request would overflow the context window, the
+ * older part of the conversation is compacted.
  */
 final readonly class Agent
 {
@@ -33,66 +38,81 @@ final readonly class Agent
         private SessionStore $sessions,
         private Renderer $renderer,
         private string $workspace,
-        private int $maxTurns = 50,
-        private int $maxStoredToolBytes = 65_536,
+        private ?Compactor $compactor = null,
+        private int $maxTurns = 100,
+        private int $maxOutputBytes = 51_200,
+        private int $maxOutputLines = 2000,
+        private ?string $outputs = null,
     ) {
-        if ($this->maxTurns < 1 || $this->maxStoredToolBytes < 256) {
+        if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
         }
     }
 
     public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null): ModelResult
     {
-        $this->sessions->append($sessionId, new Message('user', self::clean($prompt)));
-        $messages = self::repair($this->sessions->messages($sessionId));
-        if ($system !== '') {
-            array_unshift($messages, new Message('system', $system));
-        }
+        $entries = $this->sessions->path($sessionId);
+        $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt)));
+        $definitions = $this->tools->definitions();
+        $retried = false;
 
         for ($turn = 0; $turn < $this->maxTurns; $turn++) {
             $cancellation?->throwIfCancelled();
-            $result = $this->model->stream(
-                new ModelRequest($this->modelName, $messages, $this->tools->definitions()),
-                $this->renderer->event(...),
-                $cancellation,
-            );
-            $assistantMetadata = [];
-            if ($result->toolCalls !== []) {
-                $assistantMetadata['tool_calls'] = array_map(
-                    static fn (array $call): array => [
-                        'id' => $call['id'],
-                        'type' => 'function',
-                        'function' => [
-                            'name' => $call['name'],
-                            'arguments' => isset($call['error']) ? '{}' : self::encode($call['arguments']),
-                        ],
-                    ],
-                    $result->toolCalls,
-                );
+            $context = Context::build($entries);
+            if ($this->compactor !== null) {
+                $tokens = $this->compactor->tokens($context, $system, $definitions);
+                if ($this->compactor->needed($tokens) && ($entry = $this->compactEntries($sessionId, $context, $tokens, $cancellation)) !== null) {
+                    $entries[] = $entry;
+                    $context = Context::build($entries);
+                }
             }
-            $assistantMetadata['finish_reason'] = $result->finishReason;
-            $assistantMetadata['usage'] = $result->usage;
-            $assistant = new Message('assistant', $result->text, $assistantMetadata);
-            $this->sessions->append($sessionId, $assistant);
-            $messages[] = $assistant;
+            $messages = $context->messages();
+            if ($system !== '') {
+                array_unshift($messages, Message::system($system));
+            }
+            try {
+                $result = $this->model->stream(
+                    new ModelRequest($this->modelName, $messages, $definitions),
+                    $this->renderer->event(...),
+                    $cancellation,
+                );
+            } catch (ModelException $error) {
+                // Our estimate was short: compact once and try the same turn again.
+                if (!$error->contextOverflow || $retried || $this->compactor === null) {
+                    throw $error;
+                }
+                $retried = true;
+                $entry = $this->compactEntries($sessionId, $context, $this->compactor->tokens($context, $system, $definitions), $cancellation);
+                if ($entry === null) {
+                    throw $error;
+                }
+                $entries[] = $entry;
+                $turn--;
+                continue;
+            }
+            $entries[] = $this->sessions->append($sessionId, new Message(
+                'assistant',
+                $result->text,
+                $result->toolCalls,
+                $result->reasoning,
+                meta: array_filter(['usage' => $result->usage, 'finish_reason' => $result->finishReason, 'model' => $this->modelName]),
+            ));
             if ($result->toolCalls === []) {
                 $this->renderer->finish($result);
                 return $result;
             }
 
-            $context = new ToolContext($this->workspace, $sessionId);
+            $toolContext = new ToolContext($this->workspace, $sessionId);
             foreach ($this->batches($result->toolCalls) as $batch) {
-                foreach ($this->execute($batch, $context, $cancellation) as $index => $toolResult) {
+                foreach ($this->execute($batch, $toolContext, $cancellation) as $index => $toolResult) {
                     $call = $batch[$index];
                     $this->renderer->tool($call, $toolResult);
-                    $toolMessage = new Message('tool', $this->bound($toolResult->text), [
-                        'tool_call_id' => $call['id'],
-                        'name' => $call['name'],
-                        'ok' => $toolResult->ok,
-                        'data' => $toolResult->data,
-                    ]);
-                    $this->sessions->append($sessionId, $toolMessage);
-                    $messages[] = $toolMessage;
+                    $entries[] = $this->sessions->append($sessionId, Message::toolResult(
+                        $call,
+                        $this->bound($toolResult->text, $sessionId, $call),
+                        $toolResult->ok,
+                        $toolResult->data === [] ? [] : ['data' => $toolResult->data],
+                    ));
                 }
             }
         }
@@ -101,58 +121,46 @@ final readonly class Agent
     }
 
     /**
-     * Gives every assistant tool call a result. A session cut off between a
-     * call and its result (a crash, a kill) would otherwise be refused by
-     * every OpenAI-style API from then on.
+     * Compacts the session now, whatever its size, as `/compact` asks.
      *
-     * @param list<Message> $messages
-     * @return list<Message>
+     * @return Compaction|null Null when there was nothing old enough to summarize.
      */
-    public static function repair(array $messages): array
+    public function compact(string $sessionId, ?Cancellation $cancellation = null): ?Compaction
     {
-        $repaired = [];
-        $pending = [];
-        $flush = static function () use (&$repaired, &$pending): void {
-            foreach ($pending as $id => $name) {
-                $repaired[] = new Message('tool', '[no result: the turn was interrupted]', [
-                    'tool_call_id' => $id,
-                    'name' => $name,
-                    'ok' => false,
-                ]);
-            }
-            $pending = [];
-        };
-        foreach ($messages as $message) {
-            if ($message->role === 'tool') {
-                unset($pending[(string) ($message->metadata['tool_call_id'] ?? '')]);
-                $repaired[] = $message;
-                continue;
-            }
-            $flush();
-            $repaired[] = $message;
-            if ($message->role === 'assistant') {
-                foreach ($message->metadata['tool_calls'] ?? [] as $call) {
-                    $pending[(string) ($call['id'] ?? '')] = (string) ($call['function']['name'] ?? '');
-                }
-            }
+        if ($this->compactor === null) {
+            return null;
         }
-        $flush();
-        return $repaired;
+        $context = Context::build($this->sessions->path($sessionId));
+        $entry = $this->compactEntries($sessionId, $context, $this->compactor->tokens($context, '', $this->tools->definitions()), $cancellation);
+        $payload = $entry?->payload;
+        return $payload instanceof Compaction ? $payload : null;
+    }
+
+    private function compactEntries(string $sessionId, Context $context, int $tokens, ?Cancellation $cancellation): ?Entry
+    {
+        $this->renderer->notice('Compacting the conversation (about ' . self::thousands($tokens) . ' tokens)…');
+        $compaction = $this->compactor?->compact($context, $tokens, $cancellation);
+        if ($compaction === null) {
+            $this->renderer->notice('Nothing old enough to compact.');
+            return null;
+        }
+        $this->renderer->notice('Compacted: about ' . self::thousands($compaction->tokensBefore) . ' → ' . self::thousands($compaction->tokensAfter) . ' tokens.');
+        return $this->sessions->append($sessionId, $compaction);
     }
 
     /**
      * Groups calls so that consecutive read-only calls run together and any
      * other call runs alone, in the order the model gave.
      *
-     * @param list<array{id: string, name: string, arguments: array<string, mixed>, error?: string}> $calls
-     * @return list<list<array{id: string, name: string, arguments: array<string, mixed>, error?: string}>>
+     * @param list<ToolCall> $calls
+     * @return list<list<ToolCall>>
      */
     private function batches(array $calls): array
     {
         $batches = [];
         $reads = [];
         foreach ($calls as $call) {
-            if ($this->tools->permission($call['name']) === 'read' && !isset($call['error'])) {
+            if ($call->error === null && $this->tools->permission($call->name) === 'read') {
                 $reads[] = $call;
                 continue;
             }
@@ -169,7 +177,7 @@ final readonly class Agent
     }
 
     /**
-     * @param list<array{id: string, name: string, arguments: array<string, mixed>, error?: string}> $batch
+     * @param list<ToolCall> $batch
      * @return list<ToolResult>
      */
     private function execute(array $batch, ToolContext $context, ?Cancellation $cancellation): array
@@ -179,7 +187,7 @@ final readonly class Agent
         }
         $loop = EventLoop::current();
         $tasks = array_map(
-            fn (array $call): Task => Task::spawn($loop, fn (): ToolResult => $this->call($call, $context, $cancellation)),
+            fn (ToolCall $call): Task => Task::spawn($loop, fn (): ToolResult => $this->call($call, $context, $cancellation)),
             $batch,
         );
         return array_map(static fn (Task $task): ToolResult => $task->await(), $tasks);
@@ -187,37 +195,75 @@ final readonly class Agent
 
     /**
      * Runs one call; whatever goes wrong becomes its result, for the model to see.
-     *
-     * @param array{id: string, name: string, arguments: array<string, mixed>, error?: string} $call
      */
-    private function call(array $call, ToolContext $context, ?Cancellation $cancellation): ToolResult
+    private function call(ToolCall $call, ToolContext $context, ?Cancellation $cancellation): ToolResult
     {
-        if (isset($call['error'])) {
-            return new ToolResult($call['error'], false);
+        if ($call->error !== null) {
+            return new ToolResult($call->error, false);
         }
         try {
             $cancellation?->throwIfCancelled();
-            return $this->tools->execute($call['name'], $call['arguments'], $context, $cancellation);
+            return $this->tools->execute($call->name, $call->arguments, $context, $cancellation);
         } catch (\Throwable $error) {
             return new ToolResult($error->getMessage(), false, ['error' => $error::class]);
         }
     }
 
     /**
-     * Makes tool output storable and sendable: valid UTF-8, and when too long
-     * its start and its end, where errors and summaries usually are.
+     * Makes tool output storable and sendable: valid UTF-8, and when longer
+     * than the limit, its first and last lines with the full output saved to
+     * a file the model can page through with read_file.
      */
-    private function bound(string $text): string
+    private function bound(string $text, string $sessionId, ToolCall $call): string
     {
         $text = self::clean($text);
-        if (strlen($text) <= $this->maxStoredToolBytes) {
+        $lines = explode("\n", $text);
+        if (strlen($text) <= $this->maxOutputBytes && count($lines) <= $this->maxOutputLines) {
             return $text;
         }
-        $half = intdiv($this->maxStoredToolBytes, 2) - 64;
-        $head = mb_strcut($text, 0, $half, 'UTF-8');
-        $tail = mb_strcut($text, strlen($text) - $half, null, 'UTF-8');
-        $omitted = strlen($text) - strlen($head) - strlen($tail);
-        return "{$head}\n[... {$omitted} bytes omitted ...]\n{$tail}";
+        $saved = $this->save($text, $sessionId, $call);
+        $budget = intdiv($this->maxOutputBytes, 2) - 128;
+        $head = self::take($lines, $budget, intdiv($this->maxOutputLines, 2));
+        $tail = array_reverse(self::take(array_reverse(array_slice($lines, count($head))), $budget, intdiv($this->maxOutputLines, 2)));
+        $omitted = count($lines) - count($head) - count($tail);
+        $note = "[… {$omitted} lines omitted; the output had " . count($lines) . ' lines, ' . strlen($text) . ' bytes'
+            . ($saved !== null ? "; the full output is saved at {$saved}: page through it with read_file offset/limit" : '')
+            . ' …]';
+        return implode("\n", $head) . "\n{$note}\n" . implode("\n", $tail);
+    }
+
+    /**
+     * @param list<string> $lines
+     * @return list<string>
+     */
+    private static function take(array $lines, int $bytes, int $count): array
+    {
+        $taken = [];
+        $used = 0;
+        foreach ($lines as $line) {
+            if (count($taken) >= $count || $used + strlen($line) + 1 > $bytes) {
+                if ($taken === [] && $line !== '') {
+                    $taken[] = mb_strcut($line, 0, $bytes, 'UTF-8') . ' […]';
+                }
+                break;
+            }
+            $taken[] = $line;
+            $used += strlen($line) + 1;
+        }
+        return $taken;
+    }
+
+    private function save(string $text, string $sessionId, ToolCall $call): ?string
+    {
+        if ($this->outputs === null) {
+            return null;
+        }
+        $directory = $this->outputs . '/' . preg_replace('/[^A-Za-z0-9_-]/', '_', $sessionId);
+        $path = $directory . '/' . preg_replace('/[^A-Za-z0-9_-]/', '_', $call->id) . '.txt';
+        if ((!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) || @file_put_contents($path, $text) === false) {
+            return null;
+        }
+        return $path;
     }
 
     private static function clean(string $text): string
@@ -225,14 +271,8 @@ final readonly class Agent
         return mb_check_encoding($text, 'UTF-8') ? $text : mb_scrub($text, 'UTF-8');
     }
 
-    /**
-     * @param array<string, mixed> $arguments
-     */
-    private static function encode(array $arguments): string
+    private static function thousands(int $tokens): string
     {
-        // An empty PHP array is a JSON list; tool arguments are always an object.
-        return $arguments === []
-            ? '{}'
-            : json_encode($arguments, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        return $tokens >= 1000 ? round($tokens / 1000) . 'k' : (string) $tokens;
     }
 }

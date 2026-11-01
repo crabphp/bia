@@ -5,18 +5,29 @@ declare(strict_types=1);
 namespace Bia\Contracts;
 
 /**
- * Durable local conversation storage.
+ * Durable local conversation storage: an append-only log of entries per
+ * session, each pointing at its parent.
  */
 interface SessionStore
 {
-    public function create(string $workspace, string $model, ?string $id = null): string;
-
-    public function append(string $sessionId, Message $message): int;
+    /**
+     * @param int|null $fromEntry An entry to continue from, for a fork; null starts empty.
+     */
+    public function create(string $workspace, string $model, ?string $id = null, ?int $fromEntry = null): string;
 
     /**
-     * @return list<Message>
+     * Appends after the session's head and makes the new entry its head.
+     *
+     * @return Entry The stored entry, with its id.
      */
-    public function messages(string $sessionId): array;
+    public function append(string $sessionId, Message|Compaction $payload): Entry;
+
+    /**
+     * The entries from the root to the session's head, in order.
+     *
+     * @return list<Entry>
+     */
+    public function path(string $sessionId): array;
 
     public function exists(string $sessionId): bool;
 

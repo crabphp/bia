@@ -24,6 +24,11 @@ final readonly class ModelEvent
         return new self('text_delta', $text);
     }
 
+    public static function reasoning(string $text): self
+    {
+        return new self('reasoning_delta', $text);
+    }
+
     /**
      * @param array<string, mixed> $data
      */

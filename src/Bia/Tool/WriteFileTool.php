@@ -11,7 +11,8 @@ use Bia\Contracts\ToolResult;
 use Crab\Engine\Async\Cancellation;
 
 /**
- * Writes one bounded file after the registry's write approval.
+ * Writes a whole file: for new files and full rewrites. Changes to an
+ * existing file go through the edit tool.
  */
 final readonly class WriteFileTool implements Tool
 {
@@ -19,10 +20,10 @@ final readonly class WriteFileTool implements Tool
 
     public function definition(): ToolDefinition
     {
-        return new ToolDefinition('write_file', 'Write text to a workspace file.', [
+        return new ToolDefinition('write_file', 'Create a file, or replace a file\'s whole content. To change part of an existing file, use edit.', [
             'type' => 'object',
             'properties' => [
-                'path' => ['type' => 'string'],
+                'path' => ['type' => 'string', 'description' => 'Workspace-relative path.'],
                 'content' => ['type' => 'string'],
             ],
             'required' => ['path', 'content'],
@@ -33,29 +34,15 @@ final readonly class WriteFileTool implements Tool
     public function execute(array $arguments, ToolContext $context, ?Cancellation $cancellation = null): ToolResult
     {
         $cancellation?->throwIfCancelled();
-        $path = $this->workspace->path((string) ($arguments['path'] ?? ''), allowMissingParents: true);
+        $relative = (string) ($arguments['path'] ?? '');
+        $path = $this->workspace->path($relative, allowMissingParents: true);
         $content = (string) ($arguments['content'] ?? '');
         if (strlen($content) > $this->maxBytes) {
             return new ToolResult("File content exceeds {$this->maxBytes} bytes.", false);
         }
-        $parent = dirname($path);
-        if (!is_dir($parent) && !mkdir($parent, 0777, true) && !is_dir($parent)) {
-            return new ToolResult("Could not create the parent directory for {$arguments['path']}.", false);
-        }
-        $temporary = tempnam($parent, '.bia-write-');
-        if ($temporary === false || file_put_contents($temporary, $content, LOCK_EX) !== strlen($content)) {
-            if ($temporary !== false) {
-                unlink($temporary);
-            }
-            return new ToolResult("Could not write {$arguments['path']}.", false);
-        }
-        // Keep an existing file's mode (an executable stays executable); a new one gets the umask's.
-        $mode = is_file($path) ? fileperms($path) & 0o7777 : 0o666 & ~umask();
-        chmod($temporary, $mode);
-        if (!rename($temporary, $path)) {
-            unlink($temporary);
-            return new ToolResult("Could not replace {$arguments['path']}.", false);
-        }
-        return new ToolResult("Wrote {$arguments['path']}.", true, ['path' => $arguments['path'], 'bytes' => strlen($content)]);
+        $existed = is_file($path);
+        AtomicFile::write($path, $content);
+        $lines = substr_count($content, "\n") + ($content !== '' && !str_ends_with($content, "\n") ? 1 : 0);
+        return new ToolResult(($existed ? 'Replaced' : 'Created') . " {$relative} ({$lines} lines).", true, ['path' => $relative, 'bytes' => strlen($content)]);
     }
 }

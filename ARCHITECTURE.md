@@ -36,10 +36,37 @@ on the event loop, in their own process group, with a timeout, an output cap
 and the turn's cancellation, and without Bia's own credentials in their
 environment. Patch application is checked before it is committed.
 
-Every tool call gets a stored result, even when the tool throws or the turn is
-cancelled, and a session left inconsistent by a crash is repaired as it is
-loaded, so a session can always be resumed. Stored tool output is valid UTF-8
-and, past its limit, keeps its head and tail.
+## Sessions
+
+A session is an append-only log in SQLite. Each entry is a message (in no
+provider's format: text, reasoning, tool calls, or one tool result) or a
+compaction, and points at its parent; a session's head is its newest entry,
+and its history is the path from the head back to the root. A fork is a new
+session whose first entry's parent is an entry of another, so nothing is
+copied or rewritten.
+
+`Agent\Context` turns a path into what is sent: the latest compaction's
+summary, then the entries it kept, then everything after it. It gives every
+tool call a result, so a session cut off by a crash still resumes.
+
+`Agent\Compactor` keeps requests inside the context window. It estimates a
+request from the provider's last reported usage plus a character estimate of
+what followed, and when it would pass `context_window - reserve_tokens` it
+summarizes everything older than the last `keep_tokens`, cutting only at the
+start of a user or assistant message. A provider's context-length error
+triggers one compaction and a retry.
+
+Every tool call gets a stored result, even when the tool throws or the turn
+is cancelled. Stored tool output is valid UTF-8; past 2000 lines or 50 KB the
+model gets its first and last lines and the full output is saved under the
+cache directory, where `read_file` may read it.
+
+## Prompt
+
+`Agent\SystemPrompt` builds the system prompt per run: the configured
+identity, tool guidance, the environment, and the `AGENTS.md` / `CLAUDE.md`
+files from the user's config directory and from the repository root down to
+the working directory, capped at 32 KB.
 
 ## Speed rules
 
