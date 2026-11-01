@@ -70,7 +70,8 @@ final readonly class Config
         unset($explicit['name'], $explicit['provider']);
         $values = self::resolve($values, $explicit);
 
-        if (!isset($explicit['api_key'])) {
+        // <PROVIDER>_API_KEY stands in for a key not given; it does not replace one.
+        if (!isset($explicit['api_key']) && (string) ($values['model']['api_key'] ?? '') === '') {
             foreach (self::keyVariables($values) as $variable) {
                 if (($value = getenv($variable)) !== false && $value !== '') {
                     $values['model']['api_key'] = $value;
@@ -101,19 +102,16 @@ final readonly class Config
             'providers' => [
                 'openai' => [
                     'base_url' => 'https://api.openai.com/v1',
-                    'api_key_env' => 'OPENAI_API_KEY',
                     'context_window' => 400_000,
                 ],
                 'anthropic' => [
                     // Anthropic's OpenAI-compatible endpoint.
                     'base_url' => 'https://api.anthropic.com/v1',
-                    'api_key_env' => 'ANTHROPIC_API_KEY',
                     'context_window' => 200_000,
                 ],
                 'cliproxyapi' => [
                     // CLIProxyAPI on this machine, at its default port.
                     'base_url' => 'http://127.0.0.1:8317/v1',
-                    'api_key_env' => 'CLIPROXYAPI_API_KEY',
                     'context_window' => 200_000,
                 ],
             ],
@@ -122,8 +120,6 @@ final readonly class Config
                 'base_url' => 'https://api.openai.com/v1',
                 'endpoint' => 'chat/completions',
                 'api_key' => null,
-                // The environment variable holding the key, when it is not <PROVIDER>_API_KEY.
-                'api_key_env' => null,
                 'name' => 'gpt-5',
                 // A whole reply may take this long; a server silent for idle_timeout seconds is given up on.
                 'timeout' => 3600.0,
@@ -200,28 +196,26 @@ final readonly class Config
                 | as anthropic/claude-sonnet-4-5. These three are built in; change one,
                 | or add your own under a new name.
                 |
-                | A provider takes any model setting below. Paste its key into api_key,
-                | or leave that out and Bia reads the variable named by api_key_env,
-                | else <NAME>_API_KEY; a variable that is set wins. Only a
-                | model that differs from its provider needs an entry under "models",
-                | e.g. 'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]].
+                | A provider takes any model setting below. Give its key as api_key,
+                | pasted in or read with env(), e.g. 'api_key' => env('MY_KEY').
+                | Without one, Bia reads <NAME>_API_KEY, e.g. CLIPROXYAPI_API_KEY.
+                |
+                | Only a model that differs from its provider needs an entry under
+                | "models", e.g. 'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]].
                 |
                 */
 
                 // 'providers' => [
                 //     'openai' => [
                 //         'base_url' => 'https://api.openai.com/v1',
-                //         'api_key_env' => 'OPENAI_API_KEY',
                 //         'context_window' => 400000,
                 //     ],
                 //     'anthropic' => [
                 //         'base_url' => 'https://api.anthropic.com/v1',
-                //         'api_key_env' => 'ANTHROPIC_API_KEY',
                 //         'context_window' => 200000,
                 //     ],
                 //     'cliproxyapi' => [
                 //         'base_url' => 'http://127.0.0.1:8317/v1',
-                //         'api_key_env' => 'CLIPROXYAPI_API_KEY',  // or 'api_key' => 'sk-...'
                 //         'context_window' => 200000,
                 //     ],
                 // ],
@@ -235,10 +229,10 @@ final readonly class Config
                 | the server, key and context window from that provider. Otherwise
                 | base_url may point at any OpenAI-compatible API.
                 |
-                | The key may be pasted into api_key here, in this file only you can
-                | read; BIA_API_KEY or the provider's variable overrides it when set.
-                | The timeout is how long a whole reply
-                | may take; a server silent for idle_timeout seconds is given up on.
+                | Give the key as api_key, pasted in (only you can read this file) or
+                | read with env(), e.g. env('OPENAI_API_KEY'). BIA_API_KEY overrides
+                | it. The timeout is how long a whole reply may take; a server silent
+                | for idle_timeout seconds is given up on.
                 | The context window is your model's, in tokens; compaction keeps the
                 | conversation below it.
                 |
@@ -248,7 +242,6 @@ final readonly class Config
                 //     'name' => 'gpt-5',
                 //     'base_url' => 'https://api.openai.com/v1',
                 //     'api_key' => null,
-                //     'api_key_env' => null,
                 //     'provider' => 'openai-compatible',
                 //     'endpoint' => 'chat/completions',
                 //     'timeout' => 3600.0,
@@ -447,10 +440,6 @@ final readonly class Config
     {
         $provider = (string) ($values['model']['provider'] ?? 'openai-compatible');
         $variables = [];
-        $named = $values['model']['api_key_env'] ?? null;
-        if (is_string($named) && $named !== '') {
-            $variables[] = $named;
-        }
         $variables[] = strtoupper((string) preg_replace('/[^A-Za-z0-9]+/', '_', $provider)) . '_API_KEY';
         if ($provider === 'openai-compatible' || $provider === 'openai') {
             $variables[] = 'OPENAI_API_KEY';
@@ -480,9 +469,6 @@ final readonly class Config
         }
         if (isset($model['api_key']) && $model['api_key'] !== null && !is_string($model['api_key'])) {
             throw new \InvalidArgumentException('model.api_key must be a string or null.');
-        }
-        if (isset($model['api_key_env']) && (!is_string($model['api_key_env']) || $model['api_key_env'] === '')) {
-            throw new \InvalidArgumentException('api_key_env must name an environment variable.');
         }
         foreach (['timeout', 'idle_timeout'] as $key) {
             if (isset($model[$key]) && (!is_int($model[$key]) && !is_float($model[$key]) || $model[$key] <= 0)) {

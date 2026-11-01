@@ -9,9 +9,11 @@
 - **Providers:** set a model server up once under `providers` and pick any
   of its models as `provider/model` (`--model cliproxyapi/claude-sonnet-4-6`).
   `openai`, `anthropic` and `cliproxyapi` are built in. A provider sets any
-  `model` setting; `models.<name>` overrides it for one model; a new
-  `api_key_env` names the variable holding the key. Explicit `--base-url`,
-  `--api-key` and `BIA_*` variables still win.
+  `model` setting; `models.<name>` overrides it for one model. Its key is
+  `api_key`, pasted in or read with `env()`; without one, `<NAME>_API_KEY` is
+  read. Explicit `--base-url`, `--api-key` and `BIA_*` variables still win.
+- A key set in `config.php` is no longer replaced by `<PROVIDER>_API_KEY`;
+  that variable is only a fallback now. `BIA_API_KEY` still overrides.
 - `bia doctor` shows the model.
 - `bia config` showed `compaction.reserve_tokens` and `keep_tokens` as
   `[configured]`; only key, secret, password and token settings are hidden now.

@@ -228,7 +228,7 @@ return [
     'model' => [
         'base_url' => 'https://api.openai.com/v1',
         'name' => 'gpt-5',
-        'api_key' => null,          // or paste it here; the environment wins
+        'api_key' => env('OPENAI_API_KEY'), // or paste it in
         'timeout' => 3600.0,        // longest a whole reply may take
         'idle_timeout' => 120.0,    // give up on a server silent this long
         'context_window' => 128000, // tokens; set it to your model's
@@ -278,18 +278,17 @@ bia --model anthropic/claude-sonnet-4-5
 export BIA_MODEL=openai/gpt-5      # the default from now on
 ```
 
-Change one, or add your own, under `providers` in your config. Paste a key
-into `api_key`, or leave it out and Bia reads the variable named by
-`api_key_env`, else `<NAME>_API_KEY`; a variable that is set wins over the
-file. Only a model that differs from its provider needs an entry under
-`models`:
+Change one, or add your own, under `providers` in your config. Give the key
+as `api_key`, pasted in or read with `env()`; without one, Bia reads
+`<NAME>_API_KEY`. Only a model that differs from its provider needs an entry
+under `models`:
 
 ```php
 'providers' => [
     'cliproxyapi' => ['api_key' => 'sk-...'],
     'tdaproxy' => [
         'base_url' => 'https://tdaproxy.example/v1',
-        'api_key_env' => 'TDAPROXY_API_KEY', // default: <NAME>_API_KEY
+        'api_key' => env('TDA_TOKEN'),
         'context_window' => 272000,
         'models' => ['gpt-6-mini' => ['context_window' => 128000]],
     ],
@@ -297,9 +296,9 @@ file. Only a model that differs from its provider needs an entry under
 'model' => ['name' => 'tdaproxy/gpt-6-astra'],
 ```
 
-A provider takes any `model` setting (`base_url`, `api_key`, `api_key_env`,
-`endpoint`, `timeout`, `idle_timeout`, `context_window`). `--base-url`,
-`--api-key`, `BIA_BASE_URL` and `BIA_API_KEY` still override it. A prefix that
+A provider takes any `model` setting (`base_url`, `api_key`, `endpoint`,
+`timeout`, `idle_timeout`, `context_window`). `--base-url`, `--api-key`,
+`BIA_BASE_URL` and `BIA_API_KEY` still override it. A prefix that
 names no provider stays part of the model name, so `meta/llama-4` on
 OpenRouter works as before. A project's `.bia/config.json` may pick a
 provider's model but never define or change a provider.
@@ -328,7 +327,7 @@ with the offending keys named. `bia init` creates one.
 |---|---|
 | `BIA_API_KEY` | `model.api_key` |
 | `OPENAI_API_KEY` | `model.api_key` for the default provider |
-| `<PROVIDER>_API_KEY` | `model.api_key` for that provider, unless it names its own `api_key_env` |
+| `<PROVIDER>_API_KEY` | `model.api_key` for that provider, when its `api_key` is not set |
 | `BIA_BASE_URL` | `model.base_url` |
 | `BIA_MODEL` | `model.name`, e.g. `cliproxyapi/claude-sonnet-4-6` |
 | `BIA_PROVIDER` | `model.provider` |

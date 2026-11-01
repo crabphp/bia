@@ -122,7 +122,7 @@ final class ConfigTest extends TestCase
             <?php return ['providers' => [
                 'cliproxy' => [
                     'base_url' => 'http://127.0.0.1:8317/v1',
-                    'api_key_env' => 'BIA_TEST_CLIPROXY_KEY',
+                    'api_key' => env('BIA_TEST_CLIPROXY_KEY'),
                     'context_window' => 272000,
                     'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]],
                 ],
@@ -157,6 +157,21 @@ final class ConfigTest extends TestCase
             putenv('XDG_CONFIG_HOME');
         }
         self::assertDirectoryExists($home);
+    }
+
+    public function testAKeyInTheFileBeatsTheProviderVariable(): void
+    {
+        $this->global("<?php return ['providers' => ['cliproxyapi' => ['api_key' => 'pasted']]];");
+        putenv('CLIPROXYAPI_API_KEY=from-environment');
+        try {
+            self::assertSame('pasted', Config::load($this->directory(), ['model' => ['name' => 'cliproxyapi/x']])->get('model.api_key'));
+            putenv('BIA_API_KEY=explicit');
+            self::assertSame('explicit', Config::load($this->directory(), ['model' => ['name' => 'cliproxyapi/x']])->get('model.api_key'));
+        } finally {
+            putenv('CLIPROXYAPI_API_KEY');
+            putenv('BIA_API_KEY');
+            putenv('XDG_CONFIG_HOME');
+        }
     }
 
     public function testAnthropicOpenAiAndCliProxyApiAreBuiltIn(): void
