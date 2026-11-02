@@ -7,6 +7,7 @@ namespace Bia\Terminal;
 use Bia\Agent\Agent;
 use Bia\Config\Config;
 use Bia\Contracts\Message;
+use Bia\Contracts\ToolResult;
 use Bia\Contracts\SessionStore;
 use Bia\Model\ModelCatalog;
 use Bia\Tui\Editor;
@@ -16,6 +17,7 @@ use Bia\Tui\Markdown;
 use Bia\Tui\Surface;
 use Bia\Tui\SelectList;
 use Bia\Tui\Spinner;
+use Bia\Tui\Screen;
 use Bia\Tui\Style;
 use Bia\Tui\Terminal;
 use Crab\Engine\Async\Cancellation;
@@ -35,7 +37,8 @@ use Crab\Engine\Suspension;
  */
 final class Chat
 {
-    private const PLACEHOLDER = 'Ask anything · / commands · @ files';
+    /** Whether Ctrl-O opened every tool call's output. */
+    private bool $opened = false;
 
     /**
      * Bia, the fat cat this is named for, all amber: the working beer's
@@ -77,7 +80,7 @@ final class Chat
     public function __construct(
         private readonly Terminal $terminal,
         private readonly Surface $region,
-        TuiRenderer $renderer,
+        private readonly TuiRenderer $renderer,
         private Config $config,
         private readonly \Closure $makeAgent,
         private readonly SessionStore $sessions,
@@ -139,6 +142,7 @@ final class Chat
                 }
             })
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout <server>]')
+            ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
             ->add('exit', 'Leave Bia', function (string $_): void {
                 $this->running = false;
@@ -271,6 +275,12 @@ final class Chat
         }
         if ($key->is('ctrl-l')) {
             $this->region->clear();
+            return;
+        }
+        if ($key->is('ctrl-o')) {
+            // Every tool call's output, opened or closed again.
+            $this->opened = !$this->opened;
+            $this->region->folds($this->opened);
             return;
         }
         if ($this->menuKind === 'model' || $this->menuKind === 'session') {
@@ -422,11 +432,13 @@ final class Chat
                 $work($cancellation);
                 $finished = true;
             } catch (CancelledException) {
-                $this->lineStart();
+                $this->renderer->catchUp();
+                $this->region->gap();
                 $this->region->print(Style::dim('· stopped') . "\n");
             } catch (\Throwable $error) {
                 // One failed turn (a 429, a dropped connection) does not end the conversation.
-                $this->lineStart();
+                $this->renderer->catchUp();
+                $this->region->gap();
                 $this->region->print(Style::error('bia: ' . $error->getMessage()) . "\n");
             } finally {
                 $this->turn = null;
@@ -450,16 +462,15 @@ final class Chat
 
     private function echo(string $text): void
     {
-        $this->lineStart();
+        $this->region->gap();
         // The user's words on a shaded background, a line at a time, set apart from the answer.
-        // Fullscreen pads a shaded row inside its colour itself; inline, the bar brings its own space.
-        $pad = $this->region->page() > 0 ? '' : ' ';
         $lines = explode("\n", $text);
-        $shown = Style::bar($pad . '› ' . array_shift($lines));
+        $shown = Style::bar('› ' . array_shift($lines));
         foreach ($lines as $line) {
-            $shown .= "\n" . Style::bar($pad . '  ' . $line);
+            $shown .= "\n" . Style::bar('  ' . $line);
         }
-        $this->region->print("\n" . $shown . "\n\n");
+        $this->region->print($shown . "\n");
+        $this->region->gap();
     }
 
     private function model(string $name): void
@@ -503,10 +514,10 @@ final class Chat
             $this->agent = ($this->makeAgent)($config);
             $this->config = $config;
             $this->contextTokens = null;
-            $this->lineStart();
+            $this->region->gap();
             $this->region->print(Style::dim('· model: ' . $config->modelLabel()) . "\n");
         } catch (\Throwable $error) {
-            $this->lineStart();
+            $this->region->gap();
             $this->region->print(Style::error('bia: ' . $error->getMessage()) . "\n");
         }
     }
@@ -517,7 +528,7 @@ final class Chat
         $this->sessionId = null;
         $this->used = false;
         $this->contextTokens = null;
-        $this->lineStart();
+        $this->region->gap();
         $this->region->print(Style::dim('· new session') . "\n");
     }
 
@@ -554,8 +565,8 @@ final class Chat
         $this->sessionId = $id;
         $this->used = true;
         $this->contextTokens = null;
-        $this->lineStart();
-        $this->region->print("\n" . Style::dim("· resumed {$id}") . "\n");
+        $this->region->gap();
+        $this->region->print(Style::dim("· resumed {$id}") . "\n");
         $this->replay($id);
     }
 
@@ -565,7 +576,7 @@ final class Chat
     private function leaving(): void
     {
         if ($this->used && $this->sessionId !== null) {
-            $this->lineStart();
+            $this->region->gap();
             $this->region->print(Style::dim("· left {$this->sessionId}") . "\n");
         }
     }
@@ -590,19 +601,43 @@ final class Chat
         if (count($entries) > count($shown)) {
             $this->region->print(Style::dim('· ' . (count($entries) - count($shown)) . ' earlier entries') . "\n");
         }
+        // Calls that worked in a row are one line, as they were shown.
+        $gathered = new Gathered();
+        $settle = function () use (&$gathered): void {
+            if (!$gathered->empty()) {
+                $this->region->fold($gathered->line(), $gathered->lines());
+                $gathered = new Gathered();
+            }
+        };
+        // As it was shown live: a blank line between the answer's text and a run of tool calls.
+        $kind = null;
+        $begin = function (string $next) use (&$kind): void {
+            if ($kind !== $next) {
+                $this->region->gap();
+                $kind = $next;
+            }
+        };
         foreach ($shown as $entry) {
             $payload = $entry->payload;
+            if ($payload instanceof Message && $payload->role === 'tool') {
+                continue;
+            }
+            if (!$payload instanceof Message || $payload->role === 'user' || $payload->text !== '') {
+                $settle();
+            }
             if (!$payload instanceof Message) {
-                $this->lineStart();
+                $begin('note');
                 $this->region->print(Style::dim('· the conversation before here was summarized') . "\n");
                 continue;
             }
             if ($payload->role === 'user') {
                 $this->echo($payload->text);
+                $kind = 'user';
             } elseif ($payload->role === 'assistant') {
-                if ($payload->text !== '') {
+                if (trim($payload->text) !== '') {
+                    $begin('text');
                     $markdown = new Markdown();
-                    foreach (explode("\n", rtrim($payload->text, "\n")) as $line) {
+                    foreach (explode("\n", trim($payload->text, "\n")) as $line) {
                         foreach ($markdown->line($line) as $done) {
                             $this->region->print($done . "\n");
                         }
@@ -612,16 +647,25 @@ final class Chat
                     }
                 }
                 foreach ($payload->toolCalls as $call) {
+                    $begin('work');
                     $result = $results[$call->id] ?? null;
                     if ($result === null) {
+                        $settle();
                         $subject = AnsiRenderer::subject($call->arguments);
                         $this->region->print(Style::dim('·') . " {$call->name}" . ($subject !== '' ? ' ' . Style::dim($subject) : '') . "\n");
                         continue;
                     }
                     $data = is_array($result->meta['data'] ?? null) ? $result->meta['data'] : [];
-                    foreach (TuiRenderer::toolLines($call, $result->ok, $result->text, $data) as $line) {
-                        $this->region->print($line . "\n");
+                    $toolResult = new ToolResult($result->text, $result->ok, $data);
+                    if (Gathered::takes($call, $toolResult)) {
+                        $gathered->add($call, $toolResult);
+                        continue;
                     }
+                    $settle();
+                    $this->region->fold(
+                        implode("\n", TuiRenderer::toolLines($call, $result->ok, $result->text, $data)),
+                        implode("\n", TuiRenderer::toolLines($call, $result->ok, $result->text, $data, open: true)),
+                    );
                 }
                 $usage = $payload->meta['usage'] ?? null;
                 if (is_array($usage)) {
@@ -630,6 +674,7 @@ final class Chat
                 }
             }
         }
+        $settle();
         $this->lineStart();
     }
 
@@ -705,7 +750,7 @@ final class Chat
             return;
         }
         $status = $manager?->status() ?? [];
-        $this->lineStart();
+        $this->region->gap();
         if ($status === []) {
             $this->region->print(Style::dim('No MCP servers · add them to ' . $this->config->configDirectory() . '/mcp.json') . "\n");
             return;
@@ -728,8 +773,26 @@ final class Chat
      */
     private function note(string $text): void
     {
-        $this->lineStart();
+        $this->region->gap();
         $this->region->print(Style::dim("· {$text}") . "\n");
+    }
+
+    /**
+     * Sets how answers appear, for this conversation: `tui.render` in the config sets it for good.
+     */
+    private function render(string $mode): void
+    {
+        $mode = strtolower(trim($mode));
+        if ($mode === '') {
+            $this->note('render: ' . $this->renderer->current() . ' · ' . implode(', ', TuiRenderer::MODES));
+            return;
+        }
+        if (!in_array($mode, TuiRenderer::MODES, true)) {
+            $this->note('render: one of ' . implode(', ', TuiRenderer::MODES));
+            return;
+        }
+        $this->renderer->mode($mode);
+        $this->note("render: {$mode}");
     }
 
     private function help(string $_): void
@@ -741,9 +804,9 @@ final class Chat
             Type while Bia works: Enter steers it, at its next step.
             TEXT;
         if ($this->region->page() > 0) {
-            $keys .= "\nWheel or PageUp/PageDown scroll · drag to select and copy";
+            $keys .= "\nWheel or PageUp/PageDown scroll · drag to select and copy · click a tool call to open it, Ctrl-O all";
         }
-        $this->lineStart();
+        $this->region->gap();
         $this->region->print(Style::dim($this->commands->help() . "\n\n" . $keys) . "\n");
     }
 
@@ -835,7 +898,10 @@ final class Chat
 
     private function draw(): void
     {
-        $width = max(20, $this->terminal->columns());
+        // The live lines keep the output's margin; their rules span the screen, as shaded rows do.
+        $margin = Screen::MARGIN;
+        $columns = max(20, $this->terminal->columns());
+        $width = max(20, $columns - 2 * $margin);
         $lines = [];
         if ($this->spinner !== null) {
             $lines[] = $this->spinner->render($width, hint: 'esc to stop');
@@ -843,7 +909,7 @@ final class Chat
         foreach ($this->steering as $waiting) {
             $lines[] = Style::dim(Style::truncate('  ↳ ' . strtok($waiting, "\n"), $width));
         }
-        $rule = Style::dim(str_repeat('─', $width));
+        $rule = Style::dim(str_repeat('─', $columns));
         $cursor = null;
         if (in_array($this->menuKind, ['confirm', 'model', 'session'], true)) {
             $lines[] = $rule;
@@ -854,7 +920,7 @@ final class Chat
                 array_push($lines, ...($this->menu?->render($width, $this->menuTitle) ?? []));
             }
         } else {
-            [$rows, [$row, $column]] = $this->editor->render($width, self::PLACEHOLDER);
+            [$rows, [$row, $column]] = $this->editor->render($width);
             // Suggestions open above the input, so the input does not move as they come and go.
             if ($this->menu !== null) {
                 array_push($lines, ...$this->menu->render($width));
@@ -873,6 +939,13 @@ final class Chat
             }
         }
         $lines[] = $this->status($width);
+        $pad = str_repeat(' ', $margin);
+        $lines = array_map(static fn (string $line): string => $line === $rule || $line === '' ? $line : $pad . $line, $lines);
+        // A blank line sets the live lines apart from the output, as blocks are.
+        array_unshift($lines, '');
+        if ($cursor !== null) {
+            $cursor = [$cursor[0] + 1, $cursor[1] + $margin];
+        }
         $this->region->set($lines, $cursor);
     }
 

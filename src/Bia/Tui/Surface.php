@@ -27,6 +27,32 @@ interface Surface
     public function draft(string $text): void;
 
     /**
+     * Adds a finished line that opens: shown as given closed, as a tool's
+     * call with a summary, and in full once opened, as by a click on it.
+     * Either may hold several lines.
+     */
+    public function fold(string $closed, string $open): void;
+
+    /**
+     * Opens every line that opens, or closes them all.
+     */
+    public function folds(bool $open): void;
+
+    /**
+     * Characters that just appeared at the end of the streaming line, for
+     * power mode to drop into place. Where the
+     * output is the terminal's own, nothing.
+     */
+    public function burst(string $chars): void;
+
+    /**
+     * Sets what comes next apart by one blank line: none at the very top,
+     * and never a second. Blocks (the user's message, the answer, a run of
+     * tool calls) are spaced so, and nothing inside one.
+     */
+    public function gap(): void;
+
+    /**
      * Whether the output printed so far ends a line, with no draft after it.
      */
     public function atLineStart(): bool;

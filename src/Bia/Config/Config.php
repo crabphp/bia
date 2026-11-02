@@ -224,6 +224,8 @@ final readonly class Config
             'tui' => [
                 // The whole terminal, scrolled by Bia with the input kept at the bottom; false draws inline.
                 'fullscreen' => true,
+                // How answers appear: normal, as they arrive; smooth, a steady flow; power, dropping into place.
+                'render' => 'normal',
             ],
             'storage' => [
                 'path' => $stateHome . '/bia/bia.sqlite',
@@ -437,10 +439,15 @@ final readonly class Config
                 | bottom while the output scrolls. false draws inline instead, in the
                 | terminal's own scrollback.
                 |
+                | render is how answers appear: normal, as the text arrives; smooth,
+                | evened out to a steady flow; power, each character falling into
+                | place with a flash (fullscreen only). /render switches it.
+                |
                 */
 
                 // 'tui' => [
                 //     'fullscreen' => true,
+                //     'render' => 'normal',
                 // ],
 
                 /*
@@ -618,6 +625,10 @@ final readonly class Config
             if (isset($model[$key]) && (!is_int($model[$key]) && !is_float($model[$key]) || $model[$key] <= 0)) {
                 throw new \InvalidArgumentException("model.{$key} must be a positive number.");
             }
+        }
+        $render = $values['tui']['render'] ?? 'normal';
+        if (!in_array($render, ['normal', 'smooth', 'power'], true)) {
+            throw new \InvalidArgumentException('tui.render must be normal, smooth, or power.');
         }
         $fallback = $values['fallback'] ?? [];
         if (!is_array($fallback) || !array_is_list($fallback['models'] ?? []) || array_filter((array) ($fallback['models'] ?? []), static fn (mixed $name): bool => !is_string($name) || $name === '') !== []) {

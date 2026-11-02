@@ -44,7 +44,7 @@ final readonly class ShellTool implements Tool
             return new ToolResult('Shell command must not be empty.', false);
         }
         $timeout = max(0.1, min(600.0, (float) ($arguments['timeout'] ?? $this->defaultTimeout)));
-        $result = $this->process->run(['/bin/sh', '-c', $command], $this->workspace->root(), $timeout, $this->maxBytes, cancellation: $cancellation);
+        $result = $this->process->run(['/bin/sh', '-c', $command], $this->workspace->root(), $timeout, $this->maxBytes, cancellation: $cancellation, output: $context->output);
         if ($result->timedOut) {
             return new ToolResult($result->output . "\n[command timed out after {$timeout}s]", false, ['exit_code' => null]);
         }

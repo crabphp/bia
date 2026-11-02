@@ -7,6 +7,7 @@ namespace Bia\Tests;
 use Bia\Contracts\ModelEvent;
 use Bia\Contracts\ModelResult;
 use Bia\Contracts\ToolCall;
+use Bia\Contracts\ToolResult;
 use Bia\Terminal\Commands;
 use Bia\Terminal\History;
 use Bia\Terminal\Stats;
@@ -198,9 +199,9 @@ final class TuiTest extends TestCase
         rewind($output);
         $screen = (string) stream_get_contents($output);
         self::assertStringContainsString("input\r\nstatus", $screen);
-        self::assertStringContainsString("hello world\r\npartial\r\ninput", $screen, 'The unfinished line stays above the region.');
+        self::assertStringContainsString(" hello world\r\n partial\r\ninput", $screen, 'The unfinished line stays above the region, set in by the margin as all output is.');
         self::assertStringContainsString("\e[1A\e[J", $screen, 'Redrawing goes back to the top of the region and clears it.');
-        self::assertStringEndsWith("partial\r\n\e[?25l\e[?2026l\e[?25h", $screen, 'Closing finishes the line and removes the region.');
+        self::assertStringEndsWith(" partial\r\n\e[?25l\e[?2026l\e[?25h", $screen, 'Closing finishes the line and removes the region.');
     }
 
     public function testSlashCommandsRunAndComplete(): void
@@ -338,6 +339,37 @@ final class TuiTest extends TestCase
         self::assertNull($screen->pointer('down', 1, 8), 'The live lines below are not selected.');
     }
 
+    public function testAToolCallOpensToItsOutputOnAClick(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        $output = fopen('php://memory', 'w+');
+        $screen = new Screen(new Terminal(STDIN, $output, [30, 8]));
+        $screen->set(['input']);
+        $screen->print("before\n");
+        $screen->fold('✓ shell ls · 2 lines', "✓ shell ls\n  a.php\n  b.php");
+        $screen->print("after\n");
+        $screen->flush();
+        self::assertSame([' before', ' ✓ shell ls · 2 lines', ' after'], array_slice(self::screenRows($output, 8), 0, 3));
+
+        $screen->pointer('down', 3, 2);
+        $screen->pointer('up', 3, 2);
+        $screen->flush();
+        self::assertSame([' before', ' ✓ shell ls', '   a.php', '   b.php', ' after'], array_slice(self::screenRows($output, 8), 0, 5), 'A click opens it in place.');
+
+        $screen->pointer('down', 3, 3);
+        $screen->pointer('up', 3, 3);
+        $screen->flush();
+        self::assertSame(' ✓ shell ls · 2 lines', self::screenRows($output, 8)[1], 'A click on any of its lines closes it.');
+
+        $screen->folds(true);
+        $screen->flush();
+        self::assertSame('   b.php', self::screenRows($output, 8)[3], 'Ctrl-O opens them all.');
+        $screen->pointer('down', 3, 1);
+        $screen->pointer('up', 3, 1);
+        $screen->flush();
+        self::assertSame('   b.php', self::screenRows($output, 8)[3], 'A click elsewhere changes nothing.');
+    }
+
     public function testShadedRowsSpanTheScreenWithTheirPaddingInside(): void
     {
         EventLoop::install(new StreamSelectEventLoop());
@@ -403,11 +435,11 @@ final class TuiTest extends TestCase
         self::assertSame(['  • item'], $markdown->line('  - item'));
         self::assertSame(["\e[2m│ said\e[0m"], $markdown->line('> said'));
         self::assertSame(['a __init__ b'], $markdown->line('a __init__ b'));
-        self::assertSame(["\e[2mtext\e[0m"], $markdown->line('```text'), 'A fence is not shown; it only names its language.');
-        self::assertSame(["\e[48;5;235m\e[36m# not a heading\e[39m\e[K\e[0m"], $markdown->line('# not a heading'), 'Inside a code block, nothing is markup, and it sits on its panel.');
+        self::assertSame([], $markdown->line('```text'), 'A fence and its language label are not shown.');
+        self::assertSame(["  \e[36m# not a heading\e[39m"], $markdown->line('# not a heading'), 'Inside a code block, nothing is markup; it is set in, with no background.');
         self::assertSame([], $markdown->line('```'));
         $markdown->line('```php');
-        self::assertSame(["\e[48;5;235m\e[36mreturn\e[39m \e[33m'x'\e[39m; \e[2m// done\e[22m\e[K\e[0m"], $markdown->line("return 'x'; // done"), 'A block in a known language is highlighted.');
+        self::assertSame(["  \e[36mreturn\e[39m \e[33m'x'\e[39m; \e[2m// done\e[22m"], $markdown->line("return 'x'; // done"), 'A block in a known language is highlighted.');
         $markdown->line('```');
         self::assertSame('half **open', $markdown->preview('half **open'), 'A marker not yet closed waits.');
     }
@@ -464,6 +496,55 @@ final class TuiTest extends TestCase
         self::assertSame([' Title', ' next bold'], array_slice(self::screenRows($output, 6), 0, 2));
     }
 
+    public function testACallShowsItsOutputWhileItRunsThenJoinsTheOthers(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        $output = fopen('php://memory', 'w+');
+        $screen = new Screen(new Terminal(STDIN, $output, [60, 10]));
+        $renderer = new TuiRenderer($screen);
+        $read = new ToolCall('1', 'read_file', ['path' => 'a.php']);
+        $renderer->running($read, '');
+        $renderer->tool($read, new ToolResult('a'));
+        $screen->flush();
+        self::assertSame(' ✓ Read 1 file', self::screenRows($output, 10)[0], 'Even one call done is a count; what it read, it opens to.');
+
+        $shell = new ToolCall('2', 'shell', ['command' => 'composer test']);
+        $renderer->running($shell, '');
+        $renderer->running($shell, "one\ntwo\nthree\nfour\nfive\nsix\n");
+        $screen->flush();
+        self::assertSame([
+            ' ✓ Read 1 file',
+            ' · shell composer test',
+            '   …',
+            '   four',
+            '   five',
+            '   six',
+        ], array_slice(self::screenRows($output, 10), 0, 6), 'While it runs, the end of its output is shown, under a mark for what is above.');
+
+        $renderer->tool($shell, new ToolResult("one\ntwo\nthree\nfour\nfive\nsix"));
+        $search = new ToolCall('3', 'search', ['pattern' => 'foo']);
+        $renderer->running($search, '');
+        $renderer->tool($search, new ToolResult('c'));
+        $screen->flush();
+        self::assertSame([' ✓ Read 1 file, ran 1 command, searched 1', ''], array_slice(self::screenRows($output, 10), 0, 2), 'Done, it joins the calls before it, its output folded away.');
+
+        $gone = new ToolCall('4', 'read_file', ['path' => 'gone.php']);
+        $renderer->running($gone, '');
+        $renderer->tool($gone, new ToolResult('No such file.', false));
+        $renderer->finish(new ModelResult(''));
+        $screen->flush();
+        self::assertSame([
+            ' ✓ Read 1 file, ran 1 command, searched 1',
+            ' ✗ read_file gone.php',
+            '   No such file.',
+        ], array_slice(self::screenRows($output, 10), 0, 3), 'A failure is shown on its own, with why.');
+
+        $screen->pointer('down', 3, 1);
+        $screen->pointer('up', 3, 1);
+        $screen->flush();
+        self::assertSame(['   one', '   two', '   three', '   four', '   five', '   six', ' ✓ search foo', '   c', ' ✗ read_file gone.php', '   No such file.'], self::screenRows($output, 10), 'Opened, the group shows each call with its whole output.');
+    }
+
     public function testAToolCallShowsTheChangeItMade(): void
     {
         $diff = Diff::between("a\nb\nc\nd\ne\nf\n", "a\nB\nc\nd\ne\nF\n");
@@ -474,7 +555,7 @@ final class TuiTest extends TestCase
 
         $long = Diff::between('', implode("\n", range(1, 100)));
         self::assertSame('…' . (100 - Diff::LIMIT), end($long), 'A big change is cut, and what is left is counted.');
-        self::assertStringEndsWith('… 84 more', end(...[TuiRenderer::toolLines(new ToolCall('2', 'write_file', []), true, '', ['diff' => $long])]));
+        self::assertStringEndsWith('… 90 more', end(...[TuiRenderer::toolLines(new ToolCall('2', 'write_file', []), true, '', ['diff' => $long])]));
 
         self::assertSame(['=src/a.php', '@3', ' keep', '-old', '+new'], Diff::ofPatch("diff --git a/src/a.php b/src/a.php\n--- a/src/a.php\n+++ b/src/a.php\n@@ -3,2 +3,2 @@\n keep\n-old\n+new\n"));
     }

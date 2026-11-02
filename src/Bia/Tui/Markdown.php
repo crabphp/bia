@@ -7,7 +7,7 @@ namespace Bia\Tui;
 /**
  * Renders a model's markdown for the terminal a line at a time, as it
  * streams: headings and bold in bold, lists with a bullet, quotes dim,
- * inline code in the accent, code blocks on a dark panel and highlighted,
+ * inline code in the accent, code blocks set in two columns and highlighted,
  * and tables with their columns lined up.
  *
  * A table is held back until it ends, as its columns' widths depend on all
@@ -16,9 +16,6 @@ namespace Bia\Tui;
  */
 final class Markdown
 {
-    /** A code block's panel: a dark background, as wide as the terminal. */
-    private const PANEL = "\e[48;5;235m";
-
     private ?string $fence = null;
     /** The open code block's highlighter, when its language is known. */
     private ?Highlight $code = null;
@@ -47,10 +44,7 @@ final class Markdown
             $opening = $this->fence === null;
             $this->fence = $opening ? str_repeat($match[1][0], 3) : null;
             $this->code = $opening && $match[2] !== '' ? Highlight::for($match[2]) : null;
-            // The fences are not shown: an opening one only names its language.
-            if ($opening && $match[2] !== '') {
-                $out[] = Style::dim($match[2]);
-            }
+            // Fences and language labels are not shown; the language is used only for highlighting.
             return $out;
         }
         $out[] = $this->render($line, $this->code !== null ? $this->code->line(...) : null);
@@ -266,9 +260,12 @@ final class Markdown
     private function render(string $line, ?\Closure $highlight = null): string
     {
         if ($this->fence !== null) {
-            // A code block, on its panel; colours inside end only themselves, so the panel stays.
+            // A code block, set in under the text, as what belongs under a line is; no background.
+            if ($line === '') {
+                return '';
+            }
             $code = $highlight !== null ? $highlight($line) : (Style::color() ? "\e[36m{$line}\e[39m" : $line);
-            return Style::color() ? self::PANEL . $code . "\e[K\e[0m" : $line;
+            return '  ' . $code;
         }
         if (preg_match('/^(#{1,6})\s+(.*)$/', $line, $match) === 1) {
             return Style::bold(self::inline($match[2], bold: false));

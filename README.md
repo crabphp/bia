@@ -168,6 +168,7 @@ completes.
 | `/compact` | Summarize the conversation so far now |
 | `/clear` | Clear the screen |
 | `/stats` | Show or hide live stats at the top right: drawing (fps, ms a frame), first token and tokens a second, tokens in and out, memory |
+| `/render [normal\|smooth\|power]` | How answers appear: `normal` as the text arrives; `smooth` evened out to a steady flow of characters; `power` each character dropping into place and landing with a flash (fullscreen). `tui.render` in your config sets the default |
 | `/help` | List commands and keys |
 | `/exit`, `/quit` | Leave |
 
@@ -216,6 +217,13 @@ it failed:
   FAILURES!
   Tests: 41, Assertions: 97, Failures: 1.
 ```
+
+In a conversation, a command's output streams below it while it runs. Once
+done, the calls that worked in a row fold into one line (`✓ Ran 3 commands,
+read 7 files`), so the answer stays in view; a call that failed shows why, and
+an edit the first lines of its diff. Click a line to open it to every call's
+whole output, or the whole diff, and click again to close it; Ctrl-O opens or
+closes them all.
 
 ### Scripting
 

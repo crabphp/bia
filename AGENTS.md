@@ -21,9 +21,9 @@ or load a terminal UI framework just to print help or stream a model reply.
   components take keys and return lines and never write to the terminal;
   only the two `Surface`s, `Screen` and `Region`, and `Terminal` do. Keep the
   theme minimal: dim, one accent, green and red, a grey shade behind the
-  user's messages, green and red tints behind a diff's lines, for code only
-  the accent, yellow and dim, and the spinner's beer in foam white, amber and
-  grey; nothing when `NO_COLOR` is set.
+  user's messages and nothing else, for code only
+  the accent, yellow and dim, and the spinner's beer in foam white, amber and grey,
+  and power mode's landing flash in amber; nothing when `NO_COLOR` is set.
 - Rendering runs on every streamed line: keep `Markdown` and `Highlight` to
   one pass a line, with no library, and measure before adding to them.
 - Draw through the `Surface`, never with a direct write while the chat runs, or
@@ -31,6 +31,64 @@ or load a terminal UI framework just to print help or stream a model reply.
 - Tools run with full permission by default; do not make approval the default.
 - A project's `.agents/bia.json` is untrusted data. Never `require` a project
   file, and never let it set where requests or keys go.
+
+## Design system
+
+Every change to what a conversation shows follows these rules, in both
+`Screen` (fullscreen) and `Region` (inline). Do not add an exception; change
+the rule here first, with the user's agreement.
+
+**Space across**
+- Every row of output and of the live lines is set in by `Screen::MARGIN`
+  (one column). The `Surface` applies it; a component never pads a line's
+  start itself.
+- The user's message is the only shaded row: it and a rule (`─`) span the
+  full width, the message's margin inside its colour. Nothing else has a
+  background: not code, not a diff (its `+` and `-` are green and red).
+- What belongs under a line is indented two columns: a tool's output, a
+  diff's lines, a running command's output, a group opened, a code block.
+- Code has no background: inline code is the accent, a code block is set in
+  and highlighted.
+- A marker is one character and one space: `›` the user, `✓` done, `✗`
+  failed, `·` running or a note, `•` a bullet. Rows a line wraps into hang
+  under the text after its marker.
+
+**Space down**
+- Blocks are: the banner, the user's message, the answer's text, a run of
+  tool calls and notes, and the live lines at the bottom. Exactly one blank
+  line separates two blocks: start each with `Surface::gap()`, which never
+  makes a second one and none at the top.
+- Nothing inside a block is blank, except the answer's own paragraph breaks;
+  an answer's leading blank lines are dropped. Shaded rows have no blank rows
+  of padding.
+
+**Words**
+- A line starts with a capital, unless it starts with a name: a tool, a
+  command, a path, a model (`✓ Ran 3 commands, read 7 files`, but
+  `✓ shell composer test`).
+- Terse: counts and names, not sentences; dim for what is secondary.
+
+**Tool calls**
+- A call's line is its mark in colour (`✓` green, `✗` red, `·` dim), then
+  its words dim: the answer is what is read first.
+- Running: its name and subject, then the last three lines of its output,
+  live, under a `…` when there is more.
+- Done: calls that worked, in a row, fold into one line of counts, even a
+  single one (`✓ Ran 1 command`). A failure
+  shows its last three lines; an edit, the first ten lines of its diff.
+- Everything folded opens in place with a click, and all of it with Ctrl-O.
+
+**Render modes**
+- `normal` shows text as it arrives; `smooth` paces it through `Tui\Pacer`;
+  `power` paces it and draws `Tui\Effects` over it. Effects only ever draw
+  over a frame: they change nothing kept, nothing copied, and nothing once
+  they have settled. Anything else drawn first catches the paced text up.
+
+**Checking**
+- A change to what is shown is not done until it was looked at in a real
+  terminal: run Bia in a named tmux session against a scripted
+  OpenAI-compatible server and read `tmux capture-pane`, fullscreen and
+  inline. Kill only that session, never the tmux server.
 
 ## Fast path
 

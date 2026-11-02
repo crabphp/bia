@@ -20,10 +20,12 @@ use Crab\Engine\EventLoop;
 final class Screen implements Surface
 {
     /** Columns kept clear on each side of the output, so text does not touch the window's edges. */
-    private const MARGIN = 1;
+    public const MARGIN = 1;
 
     /** @var array<int, string> Finished lines, by number. */
     private array $done = [];
+    /** @var array<int, array{0: string, 1: string}> Lines that open, by number: as shown closed, and open. */
+    private array $folds = [];
     /** @var array<int, list<string>> Finished lines wrapped at $width, by number. */
     private array $wrapped = [];
     /** Number of the oldest line kept, and of the next to finish. */
@@ -50,6 +52,10 @@ final class Screen implements Surface
     /** @var array{0: array{0: int, 1: int, 2: int}, 1: array{0: int, 1: int, 2: int}}|null Where a selection starts and where it is dragged to: line, row, column. */
     private ?array $selection = null;
     private bool $dragging = false;
+    /** Power mode's characters dropping into place; null until the first burst. */
+    private ?Effects $effects = null;
+    /** The timer that clears a selection once copied. */
+    private ?string $fade = null;
     /** @var list<string> Lines over the top right, as asked and as last drawn. */
     private array $overlay = [];
     private array $overlayShown = [];
@@ -78,8 +84,78 @@ final class Screen implements Surface
         foreach ($parts as $line) {
             $this->done[$this->next++] = $line;
         }
+        $this->trim();
+        $this->schedule();
+    }
+
+    public function burst(string $chars): void
+    {
+        ($this->effects ??= new Effects())->burst($chars, microtime(true));
+        $this->schedule();
+    }
+
+    public function gap(): void
+    {
+        if ($this->partial . $this->draft !== '') {
+            $this->print("\n");
+        }
+        if ($this->next > $this->start && $this->done[$this->next - 1] !== '') {
+            $this->print("\n");
+        }
+    }
+
+    public function fold(string $closed, string $open): void
+    {
+        if ($this->partial . $this->draft !== '') {
+            $this->print("\n");
+        }
+        $this->folds[$this->next] = [$closed, $open];
+        $this->done[$this->next++] = $closed;
+        $this->tail = "\n";
+        $this->trim();
+        $this->schedule();
+    }
+
+    public function folds(bool $open): void
+    {
+        foreach ($this->folds as $line => $fold) {
+            $this->done[$line] = $fold[$open ? 1 : 0];
+            unset($this->wrapped[$line]);
+        }
+        $this->keepPlace();
+        $this->schedule();
+    }
+
+    /**
+     * Opens a line that opens, or closes it, keeping it where it is on the
+     * screen while scrolled back.
+     */
+    private function toggle(int $line): void
+    {
+        $this->done[$line] = $this->done[$line] === $this->folds[$line][0] ? $this->folds[$line][1] : $this->folds[$line][0];
+        unset($this->wrapped[$line]);
+        $this->keepPlace();
+        $this->schedule();
+    }
+
+    /**
+     * After lines changed their rows, a top inside one starts at its first row.
+     */
+    private function keepPlace(): void
+    {
+        if ($this->top !== null) {
+            $this->top = [$this->top[0], 0];
+        }
+        $this->selection = null;
+    }
+
+    /**
+     * Forgets the oldest lines past what is kept.
+     */
+    private function trim(): void
+    {
         while ($this->next - $this->start > $this->keep) {
-            unset($this->done[$this->start], $this->wrapped[$this->start]);
+            unset($this->done[$this->start], $this->wrapped[$this->start], $this->folds[$this->start]);
             $this->start++;
         }
         if ($this->top !== null && $this->top[0] < $this->start) {
@@ -88,7 +164,6 @@ final class Screen implements Surface
         if ($this->selection !== null && min($this->selection[0][0], $this->selection[1][0]) < $this->start) {
             $this->selection = null; // its lines are no longer kept
         }
-        $this->schedule();
     }
 
     public function draft(string $text): void
@@ -128,7 +203,7 @@ final class Screen implements Surface
         $this->entered = false;
         $out = '';
         foreach ($this->done as $line) {
-            $out .= $line . "\r\n";
+            $out .= str_replace("\n", "\r\n", $line) . "\r\n";
         }
         if ($this->partial . $this->draft !== '') {
             $out .= str_replace("\n", "\r\n", $this->partial . $this->draft) . "\r\n";
@@ -147,6 +222,7 @@ final class Screen implements Surface
     {
         $this->done = [];
         $this->wrapped = [];
+        $this->folds = [];
         $this->start = $this->next;
         $this->top = null;
         $this->selection = null;
@@ -216,7 +292,15 @@ final class Screen implements Surface
             }
             return $rows;
         }
-        return $this->wrapped[$line] ??= $this->wrap($this->done[$line]);
+        if (!isset($this->wrapped[$line])) {
+            // A line that opens may hold several, as a tool's output does.
+            $rows = [];
+            foreach (explode("\n", $this->done[$line]) as $part) {
+                array_push($rows, ...$this->wrap($part));
+            }
+            $this->wrapped[$line] = $rows;
+        }
+        return $this->wrapped[$line];
     }
 
     /**
@@ -336,6 +420,10 @@ final class Screen implements Surface
     {
         [$x, $y] = [$column - 1, $row - 1];
         if ($action === 'down') {
+            if ($this->fade !== null) {
+                EventLoop::current()->cancel($this->fade);
+                $this->fade = null;
+            }
             $this->selection = null;
             $this->dragging = false;
             if ($y < count($this->onScreen) && $this->onScreen[$y] !== null) {
@@ -364,11 +452,20 @@ final class Screen implements Surface
             }
             return null;
         }
-        // Released: a click without a drag selects nothing; a drag is copied.
+        // Released: a click without a drag selects nothing; a drag is copied, to where it was let go.
         $this->dragging = false;
+        $y = max(0, min($y, count($this->onScreen) - 1));
+        for (; $y > 0 && ($this->onScreen[$y] ?? null) === null; $y--);
+        if (($this->onScreen[$y] ?? null) !== null && $this->selection[0] !== [...$this->onScreen[$y], max(0, $x)]) {
+            $this->selection[1] = [...$this->onScreen[$y], max(0, $x)];
+        }
         [$anchor, $focus] = $this->selection;
         if ($anchor === $focus) {
+            // A click: on a line that opens, it opens or closes.
             $this->selection = null;
+            if (isset($this->folds[$anchor[0]])) {
+                $this->toggle($anchor[0]);
+            }
             $this->schedule();
             return null;
         }
@@ -377,6 +474,12 @@ final class Screen implements Surface
             return null; // only blank space: nothing worth the clipboard
         }
         $this->terminal->copy($text);
+        // Copied on letting go: the selection shows a moment, then clears, so it is plain nothing more is needed.
+        $this->fade = EventLoop::current()->delay(0.35, function (): void {
+            $this->fade = null;
+            $this->selection = null;
+            $this->schedule();
+        });
         return $text;
     }
 
@@ -511,6 +614,23 @@ final class Screen implements Surface
             $this->onScreen[$height - 1] = null;
         }
         $this->outputHeight = $height;
+        $moving = false;
+        if ($this->effects !== null && $this->effects->active($now = microtime(true))) {
+            // Where the text streams: the last row of the unfinished line, when the newest output is shown.
+            $at = null;
+            $end = 0;
+            if ($this->top === null) {
+                for ($index = count($placed) - 1; $index >= 0; $index--) {
+                    if ($placed[$index][0] >= $this->next) {
+                        $at = $index;
+                        $end = Style::width($placed[$index][2]);
+                        break;
+                    }
+                }
+            }
+            $output = $this->effects->apply(array_pad($output, $height, ''), $at, $end, $now);
+            $moving = true;
+        }
         $frame = array_merge(array_pad($output, $height, ''), $lines);
 
         if ($this->overlay !== $this->overlayShown) {
@@ -539,6 +659,9 @@ final class Screen implements Surface
             [$row, $column] = $this->cursor;
             $row = min(count($lines) - 1, max(0, $row - $cut));
             $cursor = "\e[" . ($height + $row + 1) . ';' . ($column + 1) . "H\e[?25h";
+        }
+        if ($moving) {
+            $this->schedule(); // still moving: the next frame too
         }
         if ($out === '' && $cursor === $this->shownCursor && $this->entered) {
             return;

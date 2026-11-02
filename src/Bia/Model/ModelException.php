@@ -30,7 +30,19 @@ final class ModelException extends \RuntimeException
     {
         // A server failing passes; one that does not do what was asked (501, 505) does not.
         return in_array($this->status, [408, 425, 429], true)
-            || ($this->status >= 500 && $this->status <= 599 && !in_array($this->status, [501, 505], true));
+            || ($this->status >= 500 && $this->status <= 599 && !in_array($this->status, [501, 505], true))
+            || $this->garbled();
+    }
+
+    /**
+     * A proxy that turns Chat Completions into OpenAI's Responses API now
+     * and then loses a message's role on the way, and the same request
+     * passes when sent again: "Invalid value: ''. Supported values are:
+     * 'assistant', 'system', ...". The request was right; try it again.
+     */
+    public function garbled(): bool
+    {
+        return $this->status === 400 && preg_match("/Invalid value: ''\\. Supported values are: 'assistant'/", $this->getMessage()) === 1;
     }
 
     /**

@@ -359,6 +359,7 @@ final class Application
             $terminal = new Terminal();
             $region = $config->get('tui.fullscreen') === false ? new Region($terminal) : new Screen($terminal);
             $renderer = new TuiRenderer($region);
+            $renderer->mode((string) $config->get('tui.render', 'normal'));
             $chat = null;
             $ask = static function (string $question) use (&$chat): bool {
                 return $chat instanceof Chat && $chat->confirm($question);

@@ -12,6 +12,12 @@ interface Renderer
     public function event(ModelEvent $event): void;
 
     /**
+     * A tool call is running: told once as it starts, with no output, then
+     * with each piece of output it makes, for a tool that streams it.
+     */
+    public function running(ToolCall $call, string $output): void;
+
+    /**
      * A tool call has finished.
      */
     public function tool(ToolCall $call, ToolResult $result): void;

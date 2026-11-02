@@ -109,7 +109,7 @@ final class Fallback implements Model
     private static function passes(ModelException | NetworkException $error): bool
     {
         return $error instanceof NetworkException
-            || $error->transient()
+            || ($error->transient() && !$error->garbled()) // garbled: the same model again, not another
             || in_array($error->status, [401, 402, 403], true);
     }
 

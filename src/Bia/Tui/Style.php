@@ -262,6 +262,49 @@ final class Style
     }
 
     /**
+     * A styled row with one column of it drawn over by a sprite: the
+     * character there, or the space past the row's end, gives way, and the
+     * style around it carries on after. The sprite is one column wide.
+     */
+    public static function place(string $row, int $column, string $sprite): string
+    {
+        preg_match_all('/\e\[[0-9;?]*[ -\/]*[@-~]|./us', $row, $tokens);
+        $before = '';
+        $after = '';
+        $active = '';
+        $resume = '';
+        $at = 0;
+        foreach ($tokens[0] as $token) {
+            if ($token[0] === "\e") {
+                if (preg_match('/^\e\[([0-9;]*)m$/', $token, $sgr) === 1) {
+                    $active = $sgr[1] === '' || $sgr[1] === '0' ? '' : $active . $token;
+                }
+                if ($at <= $column) {
+                    $before .= $token;
+                } else {
+                    $after .= $token;
+                }
+                continue;
+            }
+            $width = mb_strwidth($token, 'UTF-8');
+            if ($at + $width <= $column) {
+                $before .= $token;
+            } elseif ($at > $column) {
+                $after .= $token;
+            } else {
+                // The character under the sprite; a wide one leaves a space for its other half.
+                $before .= $at < $column ? ' ' : '';
+                $resume = $active . ($at + $width > $column + 1 ? ' ' : '');
+            }
+            $at += $width;
+        }
+        if ($at < $column) {
+            $before .= str_repeat(' ', $column - $at);
+        }
+        return $before . "\e[0m" . $sprite . "\e[0m" . $resume . $after;
+    }
+
+    /**
      * A styled row with the columns from one up to another drawn in inverse,
      * as selected; the rest keeps its style.
      */

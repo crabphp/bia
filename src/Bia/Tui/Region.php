@@ -40,6 +40,8 @@ final class Region implements Surface
     private ?string $frame = null;
     private string $last = '';
     private string $tail = "\n";
+    /** The last two characters printed, to know a blank line ends the output. */
+    private string $end = '';
 
     /**
      * @param int $keep Bytes of finished output kept to print again after a resize.
@@ -60,9 +62,38 @@ final class Region implements Surface
             return;
         }
         $this->pending .= $this->draft . $text;
+        $this->end = substr($this->end . $this->draft . $text, -2);
         $this->draft = '';
         $this->tail = $text[-1];
         $this->schedule();
+    }
+
+    /**
+     * The terminal keeps what was printed: a line is shown closed, and stays so.
+     */
+    public function fold(string $closed, string $open): void
+    {
+        if (!$this->atLineStart()) {
+            $this->print("\n");
+        }
+        $this->print($closed . "\n");
+    }
+
+    public function folds(bool $open): void {}
+
+    public function burst(string $chars): void
+    {
+        // Inline, the rows above belong to the terminal's scrollback: nothing may be drawn over them.
+    }
+
+    public function gap(): void
+    {
+        if (!$this->atLineStart()) {
+            $this->print("\n");
+        }
+        if ($this->end !== '' && $this->end !== "\n\n") {
+            $this->print("\n");
+        }
     }
 
     public function draft(string $text): void
@@ -138,6 +169,7 @@ final class Region implements Surface
     {
         $this->flush();
         $this->transcript = '';
+        $this->end = '';
         $this->drawn = false;
         $this->terminal->write("\e[H\e[2J" . ($scrollback ? "\e[3J" : ''));
         $this->redraw();
@@ -213,12 +245,12 @@ final class Region implements Surface
         $text = $this->partial . $this->pending;
         $this->pending = '';
         $end = strrpos($text, "\n");
-        $finished = $end === false ? '' : substr($text, 0, $end + 1);
+        $finished = $end === false ? '' : self::margin(substr($text, 0, $end + 1));
         $this->partial = $end === false ? $text : substr($text, $end + 1);
 
         $rows = [];
         foreach ($this->partial . $this->draft === '' ? [] : explode("\n", $this->partial . $this->draft) as $part) {
-            array_push($rows, ...Style::wrapAnsi($part, $columns)); // a draft may span lines
+            array_push($rows, ...Style::wrapAnsi(self::margin($part), $columns)); // a draft may span lines
         }
         $offset = count($rows);
         array_push($rows, ...$this->lines);
@@ -260,6 +292,20 @@ final class Region implements Surface
         $this->terminal->write($out . "\e[?2026l");
         $this->frameMs = (hrtime(true) - $began) / 1e6;
         $this->frames[] = microtime(true);
+    }
+
+    /**
+     * Whole lines set in by the margin, as the Screen sets them: a plain line
+     * after a column of space, a shaded one with that space inside its colour.
+     */
+    private static function margin(string $lines): string
+    {
+        $space = str_repeat(' ', Screen::MARGIN);
+        return (string) preg_replace_callback(
+            '/^((?:\e\[[0-9;]*m)*)(?=[^\n])/m',
+            static fn (array $m): string => $m[1] . $space,
+            $lines,
+        );
     }
 
     /**

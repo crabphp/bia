@@ -78,6 +78,20 @@ final class FallbackTest extends TestCase
         self::assertSame(['opus'], $this->asked);
     }
 
+    public function testARoleLostByAProxyIsNotPassedOn(): void
+    {
+        $garbled = ModelException::fromAnswer(400, '{"error":{"message":"Invalid value: \'\'. Supported values are: \'assistant\', \'system\'."}}');
+        $fallback = $this->fallback(['opus' => [$garbled], 'gpt' => []]);
+
+        try {
+            $fallback->stream(new ModelRequest('opus', []), static function (): void {});
+            self::fail('It is thrown, for the agent to try the same model again.');
+        } catch (ModelException $error) {
+            self::assertTrue($error->garbled());
+        }
+        self::assertSame(['opus'], $this->asked, 'Not a provider down: no other model, no rest.');
+    }
+
     public function testAnAnswerCutOffPartwayIsNotPassedOn(): void
     {
         $fallback = $this->fallback(['opus' => [[new ModelException('broke', 500), 'half']], 'gpt' => []]);

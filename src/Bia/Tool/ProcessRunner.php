@@ -32,6 +32,7 @@ final readonly class ProcessRunner
 
     /**
      * @param list<string> $command
+     * @param (\Closure(string): void)|null $output Told its output as it comes.
      */
     public function run(
         array $command,
@@ -40,6 +41,7 @@ final readonly class ProcessRunner
         int $maxBytes = 1_048_576,
         ?string $stdin = null,
         ?Cancellation $cancellation = null,
+        ?\Closure $output = null,
     ): SubprocessResult {
         return Subprocess::run(
             $command,
@@ -49,6 +51,7 @@ final readonly class ProcessRunner
             timeout: $timeout,
             maxBytes: $maxBytes,
             cancellation: $cancellation,
+            output: $output,
         );
     }
 

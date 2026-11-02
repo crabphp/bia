@@ -78,6 +78,17 @@ final class AgentTest extends TestCase
         self::assertTrue((new ModelException('overloaded', 529))->transient());
     }
 
+    public function testARoleLostByAProxyIsTriedAgain(): void
+    {
+        [$store, $session] = $this->session();
+        $garbled = ModelException::fromAnswer(400, '{"error":{"message":"Invalid value: \'\'. Supported values are: \'assistant\', \'system\', \'developer\', and \'user\'."}}');
+        $model = new FlakyModel([[$garbled, '']]);
+        $agent = new Agent($model, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', retryDelays: [0.0]);
+
+        self::assertSame('done', $agent->run($session, 'hi')->text, 'The same request passes when sent again.');
+        self::assertSame(2, $model->calls);
+    }
+
     public function testTriesStopAfterTheLastWait(): void
     {
         [$store, $session] = $this->session();
@@ -469,4 +480,6 @@ final class FakeRenderer implements Renderer
     }
 
     public function finish(ModelResult $result): void {}
+
+    public function running(ToolCall $call, string $output): void {}
 }

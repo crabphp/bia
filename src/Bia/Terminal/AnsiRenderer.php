@@ -57,6 +57,11 @@ final class AnsiRenderer implements Renderer
         fwrite(STDERR, $this->paint('2', "· {$message}") . PHP_EOL);
     }
 
+    public function running(ToolCall $call, string $output): void
+    {
+        // A finished call is shown whole; a script reads the result, not a stream.
+    }
+
     public function tool(ToolCall $call, ToolResult $result): void
     {
         if ($this->json) {

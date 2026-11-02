@@ -288,6 +288,13 @@ final readonly class Agent
         }
         try {
             $cancellation?->throwIfCancelled();
+            $this->renderer->running($call, '');
+            $context = new ToolContext(
+                $context->workspace,
+                $context->sessionId,
+                $context->metadata,
+                fn (string $output) => $this->renderer->running($call, $output),
+            );
             return $this->tools->execute($call->name, $call->arguments, $context, $cancellation);
         } catch (\Throwable $error) {
             return new ToolResult($error->getMessage(), false, ['error' => $error::class]);
