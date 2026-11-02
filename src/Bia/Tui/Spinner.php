@@ -5,15 +5,23 @@ declare(strict_types=1);
 namespace Bia\Tui;
 
 /**
- * The working indicator: a beer and two clinking, in turn, what is
- * happening and for how long.
+ * The working indicator: a small beer, what is happening and for how long.
+ *
+ * The beer is three half blocks, each white foam over amber beer, and a
+ * grey handle; a bubble steps through it. Without colour the bubble is a
+ * lower half block, so it still moves.
  */
 final class Spinner
 {
-    private const FRAMES = ['🍺', '🍻'];
+    private const CELLS = 3;
 
-    /** Frames a second: a slow clink, calm beside the counting seconds. */
-    private const RATE = 2.0;
+    /** Steps a second: the bubble through three cells, then a rest. */
+    private const RATE = 4.0;
+
+    private const FOAM = 255;
+    private const BEER = 214;
+    private const BUBBLE = 222;
+    private const GLASS = 245;
 
     private float $since;
 
@@ -33,12 +41,29 @@ final class Spinner
     {
         $now ??= microtime(true);
         $elapsed = max(0, $now - $this->since);
-        $frame = self::FRAMES[(int) ($elapsed * self::RATE) % count(self::FRAMES)];
         $time = $elapsed < 60 ? (int) $elapsed . 's' : intdiv((int) $elapsed, 60) . 'm ' . ((int) $elapsed % 60) . 's';
         $tail = $time . ($hint !== '' ? " · {$hint}" : '');
-        // The frame is two columns wide, then a space before the label and one after it.
-        $room = $width - mb_strwidth($frame, 'UTF-8') - 2 - mb_strwidth($tail, 'UTF-8');
-        $label = Style::truncate($this->label . '…', max(1, $room));
-        return $frame . ' ' . $label . ' ' . Style::dim($tail);
+        // The beer is four columns, then a space before the label and one after it.
+        $label = Style::truncate($this->label . '…', max(1, $width - self::CELLS - 3 - mb_strwidth($tail, 'UTF-8')));
+        return self::beer((int) ($elapsed * self::RATE) % (self::CELLS + 1)) . ' ' . $label . ' ' . Style::dim($tail);
+    }
+
+    /**
+     * @param int $bubble The cell the bubble is in; past the last, none.
+     */
+    private static function beer(int $bubble): string
+    {
+        if (!Style::color()) {
+            $cells = '';
+            for ($i = 0; $i < self::CELLS; $i++) {
+                $cells .= $i === $bubble ? '▄' : '▀';
+            }
+            return $cells . ')';
+        }
+        $cells = '';
+        for ($i = 0; $i < self::CELLS; $i++) {
+            $cells .= "\e[38;5;" . self::FOAM . ';48;5;' . ($i === $bubble ? self::BUBBLE : self::BEER) . 'm▀';
+        }
+        return $cells . "\e[0m\e[38;5;" . self::GLASS . "m)\e[0m";
     }
 }

@@ -153,10 +153,16 @@ final class TuiTest extends TestCase
     public function testTheSpinnerShowsWhatAndHowLong(): void
     {
         $spinner = new Spinner('Running shell', since: 100.0);
-        self::assertSame('🍺 Running shell… 5s · esc to stop', $spinner->render(80, now: 105.3, hint: 'esc to stop'));
-        self::assertSame('🍻 Running shell… 5s', $spinner->render(80, now: 105.6), 'Half a second on, the mugs clink.');
-        self::assertSame('🍺 Running shell… 1m 5s', $spinner->render(80, now: 165.0));
-        self::assertSame(20, Style::width($spinner->render(20, now: 105.3)), 'The two-column mug is counted in the width.');
+        self::assertSame('▀▄▀) Running shell… 5s · esc to stop', $spinner->render(80, now: 105.3, hint: 'esc to stop'), 'Without colour the bubble is a lower half.');
+        self::assertSame('▀▀▄) Running shell… 5s', $spinner->render(80, now: 105.5), 'A quarter second on, the bubble has moved.');
+        self::assertSame('▀▀▀) Running shell… 1m 5s', $spinner->render(80, now: 165.75), 'Then it rests.');
+        self::assertSame(20, Style::width($spinner->render(20, now: 105.3)), 'The beer is counted in the width.');
+        Style::enable(true);
+        self::assertSame(
+            "\e[38;5;255;48;5;214m▀\e[38;5;255;48;5;222m▀\e[38;5;255;48;5;214m▀\e[0m\e[38;5;245m)\e[0m",
+            explode(' ', $spinner->render(80, now: 105.3))[0],
+            'In colour, each cell is foam over beer, and the bubble lighter.',
+        );
     }
 
     public function testTheRegionRedrawsOnlyTheBottomAndKeepsFinishedOutput(): void
