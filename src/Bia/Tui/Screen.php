@@ -220,16 +220,23 @@ final class Screen implements Surface
     }
 
     /**
-     * A line as rows inside the margins: wrapped to the width between them,
-     * each row set in from the left.
+     * A line as rows: text inside the margins, wrapped to the width between
+     * them and set in from the left; a shaded line, one that fills its row
+     * with its background, from edge to edge, its padding inside its colour.
      *
      * @return list<string>
      */
     private function wrap(string $line): array
     {
-        $margin = str_repeat(' ', self::MARGIN);
+        $space = str_repeat(' ', self::MARGIN);
+        if (str_contains($line, "\e[K")) {
+            // Shaded: the whole width, the margin's space inside the colour, on every row it takes.
+            preg_match('/^(?:\e\[[0-9;]*m)*/', $line, $style);
+            $padded = $style[0] . $space . substr($line, strlen($style[0]));
+            return Style::wrapAnsi($padded, max(1, $this->width), max(self::MARGIN, self::hang($padded)));
+        }
         return array_map(
-            static fn (string $row): string => $row === '' ? '' : $margin . $row,
+            static fn (string $row): string => $row === '' ? '' : $space . $row,
             Style::wrapAnsi($line, max(1, $this->width - 2 * self::MARGIN), self::hang($line)),
         );
     }
@@ -386,13 +393,13 @@ final class Screen implements Surface
         $lines = [];
         for ($line = $start[0]; $line <= $end[0]; $line++) {
             $text = '';
-            [$rows, $joins] = $this->plain($line);
+            [$rows, $joins, $margin] = $this->plain($line);
             $first = $line === $start[0] ? $start[1] : 0;
             $last = $line === $end[0] ? min($end[1], count($rows) - 1) : count($rows) - 1;
             for ($row = $first; $row <= $last; $row++) {
                 // Mouse columns count the margin; the rows' text does not.
-                $from = [$line, $row] === [$start[0], $start[1]] ? max(0, $start[2] - self::MARGIN) : 0;
-                $to = [$line, $row] === [$end[0], $end[1]] ? $end[2] + 1 - self::MARGIN : PHP_INT_MAX;
+                $from = [$line, $row] === [$start[0], $start[1]] ? max(0, $start[2] - $margin) : 0;
+                $to = [$line, $row] === [$end[0], $end[1]] ? $end[2] + 1 - $margin : PHP_INT_MAX;
                 $piece = Style::columns($rows[$row], $from, $to);
                 // A row after the first starts with the wrap's hanging indent, not the line's own text.
                 $text .= $row > 0 ? ltrim($piece, ' ') : $piece;
@@ -409,14 +416,16 @@ final class Screen implements Surface
      * A line's rows as plain text, without the margin and the background's
      * fill; and what was between each row and the next in the line itself:
      * the space a row was broken at, a line break in a draft, or nothing
-     * where a word was cut.
+     * where a word was cut; and the margin its rows have.
      *
-     * @return array{list<string>, list<string>}
+     * @return array{list<string>, list<string>, int}
      */
     private function plain(int $line): array
     {
-        $rows = array_map(static fn (string $row): string => rtrim((string) substr(Style::strip($row), self::MARGIN)), $this->rows($line));
-        $original = Style::strip($line >= $this->next ? $this->partial . $this->draft : $this->done[$line]);
+        $raw = $line >= $this->next ? $this->partial . $this->draft : $this->done[$line];
+        $margin = self::MARGIN; // outside a plain row, inside a shaded row's colour: the same columns either way
+        $rows = array_map(static fn (string $row): string => rtrim((string) substr(Style::strip($row), $margin)), $this->rows($line));
+        $original = Style::strip($raw);
         $joins = [];
         $at = 0;
         foreach ($rows as $index => $row) {
@@ -428,7 +437,7 @@ final class Screen implements Surface
             $joins[] = $following === false ? '' : substr($original, $end, $following - $end);
             $at = $following === false ? $end : $following;
         }
-        return [$rows, $joins];
+        return [$rows, $joins, $margin];
     }
 
     /**

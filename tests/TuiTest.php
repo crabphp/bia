@@ -338,6 +338,26 @@ final class TuiTest extends TestCase
         self::assertNull($screen->pointer('down', 1, 8), 'The live lines below are not selected.');
     }
 
+    public function testShadedRowsSpanTheScreenWithTheirPaddingInside(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        Style::enable(true);
+        $output = fopen('php://memory', 'w+');
+        $screen = new Screen(new Terminal(STDIN, $output, [12, 5]));
+        $screen->set(['input']);
+        $screen->print("plain text\n" . "\e[48;5;235mcode()\e[K\e[0m\n");
+        $screen->flush();
+        $rows = self::screenRows($output, 5);
+        self::assertSame(' plain text', $rows[0], 'Text is set in by the margin.');
+        self::assertSame(' code()     ', $rows[1], 'A shaded row spans the screen, its padding inside its colour.');
+        rewind($output);
+        self::assertStringContainsString("\e[2;1H\e[2K\e[48;5;235m code()", (string) stream_get_contents($output), 'Its colour starts at the edge.');
+
+        self::assertNull($screen->pointer('down', 1, 2));
+        self::assertNull($screen->pointer('drag', 12, 2));
+        self::assertSame('code()', $screen->pointer('up', 12, 2), 'Copied, it is its text alone.');
+    }
+
     public function testStatsCountTheTurnAndTheSession(): void
     {
         $stats = new Stats();

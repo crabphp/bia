@@ -443,10 +443,12 @@ final class Chat
     {
         $this->lineStart();
         // The user's words on a shaded background, a line at a time, set apart from the answer.
+        // Fullscreen pads a shaded row inside its colour itself; inline, the bar brings its own space.
+        $pad = $this->region->page() > 0 ? '' : ' ';
         $lines = explode("\n", $text);
-        $shown = Style::bar(' › ' . array_shift($lines));
+        $shown = Style::bar($pad . '› ' . array_shift($lines));
         foreach ($lines as $line) {
-            $shown .= "\n" . Style::bar('   ' . $line);
+            $shown .= "\n" . Style::bar($pad . '  ' . $line);
         }
         $this->region->print("\n" . $shown . "\n\n");
     }
