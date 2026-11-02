@@ -41,6 +41,12 @@ final class Screen implements Surface
     private string $shownCursor = '';
     private bool $entered = false;
     private ?string $frame = null;
+    /** @var list<array{0: int, 1: int}|null> The line and row on each output row of the screen, as last drawn. */
+    private array $onScreen = [];
+    private int $outputHeight = 0;
+    /** @var array{0: array{0: int, 1: int, 2: int}, 1: array{0: int, 1: int, 2: int}}|null Where a selection starts and where it is dragged to: line, row, column. */
+    private ?array $selection = null;
+    private bool $dragging = false;
 
     /**
      * @param int $keep Finished lines kept to scroll back to and to print on closing.
@@ -69,6 +75,9 @@ final class Screen implements Surface
         }
         if ($this->top !== null && $this->top[0] < $this->start) {
             $this->top = [$this->start, 0];
+        }
+        if ($this->selection !== null && min($this->selection[0][0], $this->selection[1][0]) < $this->start) {
+            $this->selection = null; // its lines are no longer kept
         }
         $this->schedule();
     }
@@ -131,6 +140,7 @@ final class Screen implements Surface
         $this->wrapped = [];
         $this->start = $this->next;
         $this->top = null;
+        $this->selection = null;
         $this->redraw();
     }
 
@@ -255,12 +265,128 @@ final class Screen implements Surface
      */
     private function from(array $top, int $limit): array
     {
+        return array_column($this->placed($top, $limit), 2);
+    }
+
+    /**
+     * As from(), each row with the line and the row of it that it is.
+     *
+     * @param array{0: int, 1: int} $top
+     * @return list<array{0: int, 1: int, 2: string}>
+     */
+    private function placed(array $top, int $limit): array
+    {
         [$line, $row] = $top;
-        $rows = [];
-        for (; $line <= $this->next && count($rows) < $limit; $line++, $row = 0) {
-            array_push($rows, ...array_slice($this->rows($line), $row, $limit - count($rows)));
+        $placed = [];
+        for (; $line <= $this->next && count($placed) < $limit; $line++, $row = 0) {
+            foreach (array_slice($this->rows($line), $row, $limit - count($placed)) as $offset => $text) {
+                $placed[] = [$line, $row + $offset, $text];
+            }
         }
-        return $rows;
+        return $placed;
+    }
+
+    public function pointer(string $action, int $column, int $row): ?string
+    {
+        [$x, $y] = [$column - 1, $row - 1];
+        if ($action === 'down') {
+            $this->selection = null;
+            $this->dragging = false;
+            if ($y < count($this->onScreen) && $this->onScreen[$y] !== null) {
+                $at = [...$this->onScreen[$y], max(0, $x)];
+                $this->selection = [$at, $at];
+                $this->dragging = true;
+            }
+            $this->schedule();
+            return null;
+        }
+        if ($this->selection === null || !$this->dragging) {
+            return null;
+        }
+        if ($action === 'drag') {
+            // Dragging past an edge scrolls, to select more than a screen.
+            if ($y <= 0) {
+                $this->scroll(-1);
+            } elseif ($y >= $this->outputHeight - 1 && $this->top !== null) {
+                $this->scroll(1);
+            }
+            $y = max(0, min($y, count($this->onScreen) - 1));
+            for (; $y > 0 && ($this->onScreen[$y] ?? null) === null; $y--);
+            if (($this->onScreen[$y] ?? null) !== null) {
+                $this->selection[1] = [...$this->onScreen[$y], max(0, $x)];
+                $this->schedule();
+            }
+            return null;
+        }
+        // Released: a click without a drag selects nothing; a drag is copied.
+        $this->dragging = false;
+        [$anchor, $focus] = $this->selection;
+        if ($anchor === $focus) {
+            $this->selection = null;
+            $this->schedule();
+            return null;
+        }
+        $text = $this->selected();
+        if (trim($text) === '') {
+            return null; // only blank space: nothing worth the clipboard
+        }
+        $this->terminal->copy($text);
+        return $text;
+    }
+
+    /**
+     * The selected text, plain: rows a line was wrapped into are joined
+     * again, and each line loses the spaces at its end.
+     */
+    private function selected(): string
+    {
+        if ($this->selection === null) {
+            return '';
+        }
+        [$start, $end] = $this->ordered();
+        $lines = [];
+        for ($line = $start[0]; $line <= $end[0]; $line++) {
+            $text = '';
+            $rows = $this->rows($line);
+            $first = $line === $start[0] ? $start[1] : 0;
+            $last = $line === $end[0] ? min($end[1], count($rows) - 1) : count($rows) - 1;
+            for ($row = $first; $row <= $last; $row++) {
+                $from = [$line, $row] === [$start[0], $start[1]] ? $start[2] : 0;
+                $to = [$line, $row] === [$end[0], $end[1]] ? $end[2] + 1 : PHP_INT_MAX;
+                $text .= Style::columns(Style::strip($rows[$row]), $from, $to);
+            }
+            $lines[] = rtrim($text);
+        }
+        return implode("\n", $lines);
+    }
+
+    /**
+     * The selection's two ends, first one first.
+     *
+     * @return array{0: array{0: int, 1: int, 2: int}, 1: array{0: int, 1: int, 2: int}}
+     */
+    private function ordered(): array
+    {
+        [$a, $b] = $this->selection;
+        return $a <= $b ? [$a, $b] : [$b, $a];
+    }
+
+    /**
+     * A row with the selected part of it in inverse.
+     */
+    private function mark(int $line, int $row, string $text): string
+    {
+        if ($this->selection === null) {
+            return $text;
+        }
+        [$start, $end] = $this->ordered();
+        $here = [$line, $row];
+        if ($here < [$start[0], $start[1]] || $here > [$end[0], $end[1]]) {
+            return $text;
+        }
+        $from = $here === [$start[0], $start[1]] ? $start[2] : 0;
+        $to = $here === [$end[0], $end[1]] ? $end[2] + 1 : $this->width;
+        return Style::invert($text, $from, $to);
     }
 
     /**
@@ -279,6 +405,8 @@ final class Screen implements Surface
             $this->width = $columns;
             $this->wrapped = [];
             $this->shown = [];
+            // Rows are wrapped afresh, so where a selection was is gone.
+            $this->selection = null;
             if ($this->top !== null) {
                 $this->top = [$this->top[0], 0];
             }
@@ -287,17 +415,21 @@ final class Screen implements Surface
         $cut = count($this->lines) - count($lines);
         $height = $screenRows - count($lines);
 
-        if ($this->top === null) {
-            $output = $this->from($this->bottomTop($height), $height);
-        } else {
-            $output = $this->from($this->top, $height);
-            $below = $this->countFrom($this->top, $height + 1);
-            if ($below <= $height) {
-                $this->top = null;
-            } else {
-                $output[$height - 1] = Style::dim('↓');
-            }
+        $placed = $this->placed($this->top ?? $this->bottomTop($height), $height);
+        if ($this->top !== null && $this->countFrom($this->top, $height + 1) <= $height) {
+            $this->top = null;
         }
+        $output = [];
+        $this->onScreen = [];
+        foreach ($placed as [$line, $row, $text]) {
+            $output[] = $this->mark($line, $row, $text);
+            $this->onScreen[] = [$line, $row];
+        }
+        if ($this->top !== null && count($output) >= $height) {
+            $output[$height - 1] = Style::dim('↓');
+            $this->onScreen[$height - 1] = null;
+        }
+        $this->outputHeight = $height;
         $frame = array_merge(array_pad($output, $height, ''), $lines);
 
         $out = '';

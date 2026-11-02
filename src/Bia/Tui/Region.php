@@ -147,6 +147,11 @@ final class Region implements Surface
 
     public function follow(): void {}
 
+    public function pointer(string $action, int $column, int $row): ?string
+    {
+        return null; // the terminal selects its own scrollback
+    }
+
     public function page(): int
     {
         return 0;

@@ -93,8 +93,9 @@ final class Terminal
     }
 
     /**
-     * The alternate screen, with the mouse wheel reported as keys: the whole
-     * terminal for the program, given back as it was on leaving.
+     * The alternate screen, with the mouse reported as keys (the wheel, and
+     * presses, drags and releases for selecting): the whole terminal for the
+     * program, given back as it was on leaving.
      */
     public function alternate(bool $on): void
     {
@@ -102,7 +103,16 @@ final class Terminal
             return;
         }
         $this->alternate = $on;
-        $this->write($on ? "\e[?1049h\e[H\e[2J\e[?1000h\e[?1006h" : "\e[?1006l\e[?1000l\e[?1049l");
+        $this->write($on ? "\e[?1049h\e[H\e[2J\e[?1002h\e[?1006h" : "\e[?1006l\e[?1002l\e[?1000l\e[?1049l");
+    }
+
+    /**
+     * Puts text on the clipboard through the terminal itself (OSC 52), which
+     * works over SSH too, where the terminal allows it.
+     */
+    public function copy(string $text): void
+    {
+        $this->write("\e]52;c;" . base64_encode($text) . "\a");
     }
 
     public function leave(): void

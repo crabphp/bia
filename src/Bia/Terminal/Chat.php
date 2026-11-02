@@ -186,6 +186,14 @@ final class Chat
             $this->region->scroll($key->is('wheel-up') ? -3 : 3);
             return;
         }
+        if ($key->is('mouse-down', 'mouse-drag', 'mouse-up')) {
+            [$column, $row] = array_map('intval', explode(',', $key->text) + [1 => '0']);
+            $copied = $this->region->pointer(substr($key->name, 6), $column, $row);
+            if ($copied !== null && $copied !== '') {
+                $this->say('Copied', 1.5);
+            }
+            return;
+        }
         if ($key->is('mouse')) {
             return;
         }
@@ -537,7 +545,7 @@ final class Chat
             Type while Bia works: Enter queues the message for after the turn.
             TEXT;
         if ($this->region->page() > 0) {
-            $keys .= "\nWheel or PageUp/PageDown scroll · Shift-drag selects text";
+            $keys .= "\nWheel or PageUp/PageDown scroll · drag to select and copy";
         }
         $this->lineStart();
         $this->region->print(Style::dim($this->commands->help() . "\n\n" . $keys) . "\n");

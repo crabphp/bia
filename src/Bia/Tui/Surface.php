@@ -72,4 +72,12 @@ interface Surface
      * Rows a page scroll moves; 0 where the terminal does the scrolling itself.
      */
     public function page(): int;
+
+    /**
+     * The left mouse button, at a column and row counted from 1: "down"
+     * starts a selection, "drag" extends it, "up" ends it and copies it.
+     *
+     * @return string|null The text copied, on an "up" that ends a selection.
+     */
+    public function pointer(string $action, int $column, int $row): ?string;
 }

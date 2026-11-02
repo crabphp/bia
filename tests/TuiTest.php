@@ -249,12 +249,12 @@ final class TuiTest extends TestCase
 
     public function testTheMouseWheelIsReadAsKeys(): void
     {
-        $buffer = "\e[<64;10;5M\e[<65;10;5M\e[<0;3;4M\e[<0;3;4m\e[M`!!";
-        $names = [];
+        $buffer = "\e[<64;10;5M\e[<65;10;5M\e[<0;3;4M\e[<32;7;4M\e[<0;9;5m\e[<2;1;1M\e[<2;1;1m\e[M`!!";
+        $keys = [];
         while (($key = Keys::take($buffer)) !== null) {
-            $names[] = $key->name;
+            $keys[] = $key->text === '' ? $key->name : "{$key->name}:{$key->text}";
         }
-        self::assertSame(['wheel-up', 'wheel-down', 'mouse', 'mouse', 'wheel-up'], $names);
+        self::assertSame(['wheel-up', 'wheel-down', 'mouse-down:3,4', 'mouse-drag:7,4', 'mouse-up:9,5', 'mouse', 'mouse', 'wheel-up'], $keys, 'The left button selects; another is only a mouse.');
 
         $buffer = "\e[<64;10";
         self::assertNull(Keys::take($buffer), 'Half a mouse report waits for the rest.');
@@ -295,6 +295,30 @@ final class TuiTest extends TestCase
         $all = (string) stream_get_contents($output);
         self::assertStringContainsString("\e[?1049h", $all, 'It draws on the alternate screen.');
         self::assertStringContainsString("\e[?1049lline 1\r\nline 2\r\n", $all, 'Closing prints the output on the main screen.');
+    }
+
+    public function testDraggingSelectsAndCopiesTheOutput(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        $output = fopen('php://memory', 'w+');
+        $screen = new Screen(new Terminal(STDIN, $output, [10, 6]));
+        $screen->set(['input']);
+        $screen->print("first line\nthis one wraps over\nlast\n");
+        $screen->flush();
+        // Rows: "first line", "this one w", "raps over", "last".
+
+        self::assertNull($screen->pointer('down', 7, 1));
+        self::assertNull($screen->pointer('drag', 4, 3));
+        $screen->flush();
+        self::assertSame("line\nthis one wraps", $screen->pointer('up', 4, 3), 'A wrapped line is copied whole, without the break the screen gave it.');
+        rewind($output);
+        $written = (string) stream_get_contents($output);
+        self::assertStringContainsString("\e]52;c;" . base64_encode("line\nthis one wraps") . "\a", $written, 'It goes to the clipboard through the terminal.');
+        self::assertStringContainsString("first \e[0m\e[7mline\e[0m", $written, 'The selection is drawn in inverse.');
+
+        self::assertNull($screen->pointer('down', 2, 2));
+        self::assertNull($screen->pointer('up', 2, 2), 'A click without a drag copies nothing.');
+        self::assertNull($screen->pointer('down', 1, 6), 'The live lines below are not selected.');
     }
 
     public function testMarkdownIsRenderedALineAtATime(): void

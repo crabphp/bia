@@ -176,6 +176,68 @@ final class Style
         return $rows;
     }
 
+    /**
+     * The part of plain text from one display column up to, not with, another.
+     */
+    public static function columns(string $text, int $from, int $to): string
+    {
+        $out = '';
+        $at = 0;
+        foreach (mb_str_split($text, 1, 'UTF-8') as $char) {
+            if ($at >= $to) {
+                break;
+            }
+            if ($at >= $from) {
+                $out .= $char;
+            }
+            $at += mb_strwidth($char, 'UTF-8');
+        }
+        return $out;
+    }
+
+    /**
+     * A styled row with the columns from one up to another drawn in inverse,
+     * as selected; the rest keeps its style.
+     */
+    public static function invert(string $row, int $from, int $to): string
+    {
+        preg_match_all('/\e\[[0-9;?]*[ -\/]*[@-~]|./us', $row, $tokens);
+        $before = '';
+        $inside = '';
+        $after = '';
+        $active = '';
+        $at = 0;
+        foreach ($tokens[0] as $token) {
+            if ($token[0] === "\e") {
+                if (preg_match('/^\e\[([0-9;]*)m$/', $token, $sgr) === 1) {
+                    $active = $sgr[1] === '' || $sgr[1] === '0' ? '' : $active . $token;
+                }
+                if ($at < $from) {
+                    $before .= $token;
+                } elseif ($at >= $to) {
+                    $after .= $token;
+                }
+                continue;
+            }
+            $width = mb_strwidth($token, 'UTF-8');
+            if ($at < $from) {
+                $before .= $token;
+            } elseif ($at < $to) {
+                $inside .= $token;
+                if ($at + $width >= $to) {
+                    $after = $active; // what follows takes up the style where the selection ends
+                }
+            } else {
+                $after .= $token;
+            }
+            $at += $width;
+        }
+        if ($inside === '') {
+            return $row;
+        }
+        return $before . "\e[0m\e[7m" . $inside . "\e[0m" . $after;
+    }
+
     private static function paint(string $code, string $text): string
     {
         return self::color() && $text !== '' ? "\e[{$code}m{$text}\e[0m" : $text;

@@ -81,37 +81,47 @@ final class Keys
     }
 
     /**
-     * A mouse report, as SGR (`ESC [ < b ; x ; y M`) or the older X10 form
-     * (`ESC [ M` and three bytes): the wheel as "wheel-up" and "wheel-down",
-     * any other button as "mouse". A report not yet whole is "pending", to
-     * wait for the rest; null when the buffer holds none.
+     * A mouse report, as SGR (`ESC [ < b ; x ; y M`, `m` on release) or the
+     * older X10 form (`ESC [ M` and three bytes): the wheel as "wheel-up" and
+     * "wheel-down"; the left button as "mouse-down", "mouse-drag" and
+     * "mouse-up", with "column,row" (from 1) as the text; any other as
+     * "mouse". A report not yet whole is "pending", to wait for the rest;
+     * null when the buffer holds none.
      */
     private static function mouse(string &$buffer): ?Key
     {
         if (str_starts_with($buffer, "\e[<")) {
-            if (preg_match('/^\e\[<(\d+);\d+;\d+[Mm]/', $buffer, $match) !== 1) {
+            if (preg_match('/^\e\[<(\d+);(\d+);(\d+)([Mm])/', $buffer, $match) !== 1) {
                 return preg_match('/^\e\[<[\d;]*$/', $buffer) === 1 ? new Key('pending') : null;
             }
             $buffer = (string) substr($buffer, strlen($match[0]));
-            return self::button((int) $match[1]);
+            return self::button((int) $match[1], (int) $match[2], (int) $match[3], $match[4] === 'm');
         }
         if (str_starts_with($buffer, "\e[M")) {
             if (strlen($buffer) < 6) {
                 return new Key('pending');
             }
             $button = ord($buffer[3]) - 32;
+            [$column, $row] = [ord($buffer[4]) - 32, ord($buffer[5]) - 32];
             $buffer = (string) substr($buffer, 6);
-            return self::button($button);
+            // X10 says a release as button 3, without which button.
+            return self::button($button, $column, $row, ($button & 3) === 3 && ($button & 64) === 0);
         }
         return null;
     }
 
-    private static function button(int $button): Key
+    private static function button(int $button, int $column, int $row, bool $release): Key
     {
-        // Bit 6 marks the wheel; shift, alt and ctrl add 4, 8 and 16.
-        return match ($button & ~(4 | 8 | 16)) {
-            64 => new Key('wheel-up'),
-            65 => new Key('wheel-down'),
+        // Shift, alt and ctrl add 4, 8 and 16; motion adds 32; the wheel is 64 and 65.
+        $plain = $button & ~(4 | 8 | 16);
+        if ($plain === 64 || $plain === 65) {
+            return new Key($plain === 64 ? 'wheel-up' : 'wheel-down');
+        }
+        $at = "{$column},{$row}";
+        return match (true) {
+            $release && ($plain & 3) !== 1 && ($plain & 3) !== 2 => new Key('mouse-up', $at),
+            ($plain & ~32) === 0 && ($plain & 32) !== 0 => new Key('mouse-drag', $at),
+            $plain === 0 => new Key('mouse-down', $at),
             default => new Key('mouse'),
         };
     }
