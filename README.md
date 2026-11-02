@@ -144,10 +144,10 @@ the bottom of the screen is live:
 ✓ shell composer test
   OK (12 tests, 30 assertions)
 Fixed: add() subtracted.
-⠴ Thinking… 4s · esc to stop
-  queued: now update the changelog
+▀▀▀) Thinking… 4s · esc to stop
+  ↳ now update the changelog
 ────────────────────────────────────────────────────────────────
-› Ask anything · / for commands · @ for files
+› Ask anything · / commands · @ files
 ────────────────────────────────────────────────────────────────
 ~/code/my-app (main)                 tdaproxy/gpt-6-astra · 9k/272k (3%)
 ```
@@ -174,7 +174,7 @@ the highlighted one.
 
 | Key | Effect |
 |---|---|
-| Enter | Send; while Bia works, queue the message for after the turn |
+| Enter | Send; while Bia works, steer it: the message reaches Bia at its next step |
 | Ctrl-J, Alt-Enter, or `\` then Enter | New line; a paste keeps its lines |
 | Up / Down | Move between lines, then through earlier prompts (kept across runs) |
 | Esc | Stop the turn, or close a menu |

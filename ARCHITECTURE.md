@@ -52,7 +52,9 @@ terminal's own, as in Pi and Claude Code.
 
 `Terminal\Chat` composes them. Keys are read the whole time, in the
 operation's fiber; a turn runs in a task of its own, so the next message can
-be typed while it runs and Enter queues it. Esc or Ctrl-C cancels the turn's
+be typed while it runs: Enter steers it, joining the message to the
+conversation at the agent's next tool step (`Agent::run`'s `steer`), or
+sending it right after when no step is left. Esc or Ctrl-C cancels the turn's
 `Cancellation`. A tool whose permission is `ask` suspends the turn's fiber on
 a picker until it is answered. `/model` lists every keyed provider's models
 at once through `Model\ModelCatalog` and rebuilds the agent from

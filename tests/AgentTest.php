@@ -28,6 +28,24 @@ use PHPUnit\Framework\TestCase;
 
 final class AgentTest extends TestCase
 {
+    public function testTheUserSteersBetweenSteps(): void
+    {
+        [$store, $session] = $this->session();
+        $model = new ScriptedModel([[self::call('call-1', 'echo', ['value' => 'wrong file'])]]);
+        $asked = 0;
+        $steer = static function () use (&$asked): array {
+            return $asked++ === 0 ? ['no, the other file'] : [];
+        };
+        $agent = new Agent($model, 'fake', (new Registry())->add(new EchoTool()), $store, new FakeRenderer(), '/workspace');
+
+        $agent->run($session, 'fix it', steer: $steer);
+
+        self::assertSame(1, $asked, 'Asked once, after the one tool step, not before the first request.');
+        $second = array_map(static fn (Message $m): string => $m->role . ':' . $m->text, $model->requests[1]->messages);
+        self::assertSame(['user:fix it', 'assistant:', 'tool:echoed wrong file', 'user:no, the other file'], array_slice($second, -4), 'The message follows the tool results, before the next step.');
+        self::assertContains('user:no, the other file', array_map(static fn (Message $m): string => $m->role . ':' . $m->text, self::messages($store, $session)), 'It is kept in the session.');
+    }
+
     public function testAPassingFailureIsTriedAgain(): void
     {
         [$store, $session] = $this->session();

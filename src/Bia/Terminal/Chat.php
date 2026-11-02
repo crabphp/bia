@@ -28,9 +28,10 @@ use Crab\Engine\Suspension;
  * The interactive conversation: output scrolls, and below it the live
  * region holds the spinner, the input, a menu and the status line.
  *
- * Keys are read all the time, so the next message can be typed while a turn
- * runs; Enter then queues it. Esc or Ctrl-C stops the turn; Ctrl-C on an
- * empty input twice, or Ctrl-D, leaves.
+ * Keys are read all the time, so a message can be typed while a turn runs;
+ * Enter then steers it: the message joins the conversation at Bia's next
+ * step, never waiting for the turn to end. Esc or Ctrl-C stops the turn;
+ * Ctrl-C on an empty input twice, or Ctrl-D, leaves.
  */
 final class Chat
 {
@@ -49,7 +50,7 @@ final class Chat
     private ?Spinner $spinner = null;
     private ?Cancellation $turn = null;
     /** @var list<string> */
-    private array $queue = [];
+    private array $steering = [];
     private ?Suspension $confirming = null;
     private string $notice = '';
     private float $noticeUntil = 0.0;
@@ -308,7 +309,8 @@ final class Chat
             return;
         }
         if ($this->turn !== null) {
-            $this->queue[] = $text;
+            // Bia is working: the message steers it, at its next step.
+            $this->steering[] = $text;
             return;
         }
         $this->ask($text);
@@ -320,12 +322,32 @@ final class Chat
         $sessionId = $this->sessionId ??= $this->sessions->create($this->workspace, $this->config->modelLabel());
         $this->used = true;
         $this->echo($text);
-        $this->work('Thinking', fn (Cancellation $cancellation) => $this->agent?->run($sessionId, $text, $this->system, $cancellation));
+        $this->work('Thinking', fn (Cancellation $cancellation) => $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...)));
     }
 
     /**
-     * Runs a piece of agent work in the background with the spinner on, then
-     * the next queued message.
+     * What the user wrote while Bia worked, handed to the agent at a step:
+     * shown where it joins the conversation.
+     *
+     * @return list<string>
+     */
+    private function steer(): array
+    {
+        $messages = $this->steering;
+        $this->steering = [];
+        foreach ($messages as $message) {
+            $this->echo($message);
+        }
+        if ($messages !== []) {
+            $this->draw();
+        }
+        return $messages;
+    }
+
+    /**
+     * Runs a piece of agent work in the background with the spinner on.
+     * What was written for it and not handed over by its end is sent next;
+     * after a stop or a failure, it goes back to the input instead.
      *
      * @param \Closure(Cancellation): mixed $work
      */
@@ -336,8 +358,10 @@ final class Chat
         $this->spinner = new Spinner($label);
         $this->startTicker();
         Task::spawn(EventLoop::current(), function () use ($work, $cancellation): void {
+            $finished = false;
             try {
                 $work($cancellation);
+                $finished = true;
             } catch (CancelledException) {
                 $this->lineStart();
                 $this->region->print(Style::dim('· stopped') . "\n");
@@ -350,8 +374,15 @@ final class Chat
                 $this->spinner = null;
                 $this->stopTicker();
                 $this->lineStart();
-                if ($this->running && $this->queue !== []) {
-                    $this->ask(array_shift($this->queue));
+                $left = implode("\n\n", $this->steering);
+                $this->steering = [];
+                if ($left !== '' && $this->running) {
+                    if ($finished) {
+                        $this->ask($left); // Bia had no step left to take it at: it goes on with it
+                    } else {
+                        $draft = $this->editor->text();
+                        $this->editor->set($draft === '' ? $left : $left . "\n\n" . $draft);
+                    }
                 }
                 $this->draw();
             }
@@ -547,7 +578,7 @@ final class Chat
             Enter send · Ctrl-J or Alt-Enter or \ then Enter: new line · Up/Down history
             Tab complete · Esc stop the turn or close a menu · Ctrl-C stop, clear, or twice to leave
             Ctrl-W delete word · Ctrl-U delete to line start · Ctrl-L clear screen · Ctrl-D leave
-            Type while Bia works: Enter queues the message for after the turn.
+            Type while Bia works: Enter steers it, at its next step.
             TEXT;
         if ($this->region->page() > 0) {
             $keys .= "\nWheel or PageUp/PageDown scroll · drag to select and copy";
@@ -643,8 +674,8 @@ final class Chat
         if ($this->spinner !== null) {
             $lines[] = $this->spinner->render($width, hint: 'esc to stop');
         }
-        foreach ($this->queue as $queued) {
-            $lines[] = Style::dim(Style::truncate('  queued: ' . strtok($queued, "\n"), $width));
+        foreach ($this->steering as $waiting) {
+            $lines[] = Style::dim(Style::truncate('  ↳ ' . strtok($waiting, "\n"), $width));
         }
         $rule = Style::dim(str_repeat('─', $width));
         $cursor = null;

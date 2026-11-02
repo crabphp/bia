@@ -63,15 +63,27 @@ final readonly class Agent
         }
     }
 
-    public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null): ModelResult
+    /**
+     * @param \Closure(): list<string>|null $steer Asked after each tool step for what the user wrote
+     *        meanwhile: each message joins the conversation there, before the model's next step.
+     */
+    public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null): ModelResult
     {
         $entries = $this->sessions->path($sessionId);
         $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt)));
         $definitions = $this->tools->definitions();
         $retried = false;
+        $stepped = false;
 
         for ($turn = 0; $turn < $this->maxTurns; $turn++) {
             $cancellation?->throwIfCancelled();
+            if ($stepped && $steer !== null) {
+                // After the tool results, where a user message may follow them: the user steers.
+                foreach ($steer() as $message) {
+                    $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($message)));
+                }
+            }
+            $stepped = false;
             $context = Context::build($entries);
             if ($this->compactor !== null) {
                 $tokens = $this->compactor->tokens($context, $system, $definitions);
@@ -125,6 +137,7 @@ final readonly class Agent
                     ));
                 }
             }
+            $stepped = true;
         }
 
         throw new \RuntimeException("The agent reached its {$this->maxTurns}-turn limit.");
