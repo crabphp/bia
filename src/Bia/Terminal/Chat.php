@@ -511,7 +511,12 @@ final class Chat
                 if ($payload->text !== '') {
                     $markdown = new Markdown();
                     foreach (explode("\n", rtrim($payload->text, "\n")) as $line) {
-                        $this->region->print($markdown->line($line) . "\n");
+                        foreach ($markdown->line($line) as $done) {
+                            $this->region->print($done . "\n");
+                        }
+                    }
+                    foreach ($markdown->finish() as $done) {
+                        $this->region->print($done . "\n");
                     }
                 }
                 foreach ($payload->toolCalls as $call) {

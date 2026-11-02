@@ -31,6 +31,8 @@ final class TuiRenderer implements Renderer
     private Markdown $markdown;
     /** The answer's line still streaming, as the model wrote it. */
     private string $line = '';
+    /** Whether a draft of ours is on screen: the streaming line, or a table not yet whole. */
+    private bool $drafting = false;
 
     public function __construct(private readonly Surface $region)
     {
@@ -186,31 +188,39 @@ final class TuiRenderer implements Renderer
 
     private function text(string $delta): void
     {
-        if ($this->line !== '' && $this->region->atLineStart()) {
+        if ($this->drafting && $this->region->atLineStart()) {
             // The draft was kept by something printed after it, as a stopped turn's note.
             $this->line = '';
-            $this->markdown->reset();
+            $this->markdown = new Markdown();
         }
         $this->line .= $delta;
         while (($end = strpos($this->line, "\n")) !== false) {
             $this->region->draft('');
-            $this->region->print($this->markdown->line(substr($this->line, 0, $end)) . "\n");
+            foreach ($this->markdown->line(substr($this->line, 0, $end)) as $done) {
+                $this->region->print($done . "\n");
+            }
             $this->line = substr($this->line, $end + 1);
         }
-        $this->region->draft($this->line === '' ? '' : $this->markdown->preview($this->line));
+        // What is not finished: the line still streaming, and a table not yet whole.
+        $preview = $this->markdown->preview($this->line);
+        $this->region->draft($preview);
+        $this->drafting = $preview !== '';
     }
 
     /**
-     * Finishes the answer's last line, rendered, and starts afresh.
+     * Finishes the answer, rendered: its last line and a table left open, and starts afresh.
      */
     private function end(): void
     {
-        if ($this->line !== '') {
-            $this->region->draft('');
-            $this->region->print($this->markdown->line($this->line));
-            $this->line = '';
+        $this->region->draft('');
+        $done = $this->line !== '' ? $this->markdown->line($this->line) : [];
+        array_push($done, ...$this->markdown->finish());
+        if ($done !== []) {
+            $this->region->print(implode("\n", $done));
         }
-        $this->markdown->reset();
+        $this->line = '';
+        $this->markdown = new Markdown();
+        $this->drafting = false;
     }
 
     private function lineStart(): void

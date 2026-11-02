@@ -43,7 +43,7 @@ the engine, kept able to move into the framework when a second user needs it:
 | `Editor` | Multi-line input with history, word moves and paste |
 | `SelectList` | A filtered list for pickers and completion menus; keys in, lines out |
 | `Spinner`, `Fuzzy`, `Style` | The working line, fuzzy ranking, and the minimal theme with display-width measuring and styled wrapping |
-| `Markdown` | A streamed answer's markdown, a line at a time (about 1 µs a line): headings and bold, bullets, quotes, fences, inline code; the line still streaming is drawn again as it grows |
+| `Markdown` | A streamed answer's markdown, a line at a time (about 1 µs a line): headings and bold, bullets, quotes, inline code; code blocks on a dark panel, fences hidden, highlighted by language; tables with aligned columns, held back until whole but drawn as far as they have come (a row costs about 1 µs to redraw) |
 | `Highlight` | Basic syntax highlighting in one split a line (about 5 µs): keywords, strings, comments, for code blocks and diffs |
 
 Components hold no terminal: they take keys and return lines, so they are

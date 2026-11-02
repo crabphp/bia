@@ -201,8 +201,8 @@ final class Region implements Surface
         $this->partial = $end === false ? $text : substr($text, $end + 1);
 
         $rows = [];
-        if ($this->partial . $this->draft !== '') {
-            $rows = Style::wrapAnsi($this->partial . $this->draft, $columns);
+        foreach ($this->partial . $this->draft === '' ? [] : explode("\n", $this->partial . $this->draft) as $part) {
+            array_push($rows, ...Style::wrapAnsi($part, $columns)); // a draft may span lines
         }
         $offset = count($rows);
         array_push($rows, ...$this->lines);

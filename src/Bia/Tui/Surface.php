@@ -21,7 +21,8 @@ interface Surface
     /**
      * Shows the unfinished line as given, after the output: each draft takes
      * the place of the last, and printing anything keeps the draft as it is.
-     * A line that streams in can so be drawn again as more of it arrives.
+     * A line that streams in can so be drawn again as more of it arrives; a
+     * draft may hold several lines, as a table does until it is whole.
      */
     public function draft(string $text): void;
 

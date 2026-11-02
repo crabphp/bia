@@ -122,7 +122,7 @@ final class Screen implements Surface
             $out .= $line . "\r\n";
         }
         if ($this->partial . $this->draft !== '') {
-            $out .= $this->partial . $this->draft . "\r\n";
+            $out .= str_replace("\n", "\r\n", $this->partial . $this->draft) . "\r\n";
         }
         $this->terminal->write($out . "\e[?25h");
     }
@@ -199,8 +199,13 @@ final class Screen implements Surface
     private function rows(int $line): array
     {
         if ($line >= $this->next) {
-            $line = $this->partial . $this->draft;
-            return $line === '' ? [] : Style::wrapAnsi($line, $this->width);
+            // The unfinished line, and a draft that may span lines, as a table being drawn does.
+            $text = $this->partial . $this->draft;
+            $rows = [];
+            foreach ($text === '' ? [] : explode("\n", $text) as $part) {
+                array_push($rows, ...Style::wrapAnsi($part, $this->width));
+            }
+            return $rows;
         }
         return $this->wrapped[$line] ??= Style::wrapAnsi($this->done[$line], $this->width);
     }

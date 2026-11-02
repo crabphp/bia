@@ -325,18 +325,40 @@ final class TuiTest extends TestCase
     {
         Style::enable(true);
         $markdown = new Markdown();
-        self::assertSame("\e[1mTitle\e[0m", $markdown->line('## Title'));
-        self::assertSame("a \e[1mbold\e[0m and \e[36mco**de**\e[0m", $markdown->line('a **bold** and `co**de**`'), 'Code is left as it is inside.');
-        self::assertSame('  • item', $markdown->line('  - item'));
-        self::assertSame("\e[2m│ said\e[0m", $markdown->line('> said'));
-        self::assertSame('a __init__ b', $markdown->line('a __init__ b'));
-        self::assertSame("\e[2m```text\e[0m", $markdown->line('```text'));
-        self::assertSame("\e[36m# not a heading\e[0m", $markdown->line('# not a heading'), 'Inside a code block, nothing is markup.');
-        self::assertSame("\e[2m```\e[0m", $markdown->line('```'));
+        self::assertSame(["\e[1mTitle\e[0m"], $markdown->line('## Title'));
+        self::assertSame(["a \e[1mbold\e[0m and \e[36mco**de**\e[0m"], $markdown->line('a **bold** and `co**de**`'), 'Code is left as it is inside.');
+        self::assertSame(['  • item'], $markdown->line('  - item'));
+        self::assertSame(["\e[2m│ said\e[0m"], $markdown->line('> said'));
+        self::assertSame(['a __init__ b'], $markdown->line('a __init__ b'));
+        self::assertSame(["\e[2mtext\e[0m"], $markdown->line('```text'), 'A fence is not shown; it only names its language.');
+        self::assertSame(["\e[48;5;235m\e[36m# not a heading\e[39m\e[K\e[0m"], $markdown->line('# not a heading'), 'Inside a code block, nothing is markup, and it sits on its panel.');
+        self::assertSame([], $markdown->line('```'));
         $markdown->line('```php');
-        self::assertSame("\e[36mreturn\e[39m \e[33m'x'\e[39m; \e[2m// done\e[22m", $markdown->line("return 'x'; // done"), 'A block in a known language is highlighted.');
+        self::assertSame(["\e[48;5;235m\e[36mreturn\e[39m \e[33m'x'\e[39m; \e[2m// done\e[22m\e[K\e[0m"], $markdown->line("return 'x'; // done"), 'A block in a known language is highlighted.');
         $markdown->line('```');
         self::assertSame('half **open', $markdown->preview('half **open'), 'A marker not yet closed waits.');
+    }
+
+    public function testATableIsDrawnWithItsColumnsLinedUp(): void
+    {
+        $markdown = new Markdown();
+        self::assertSame([], $markdown->line('| Name | Size |'), 'A table is held back until it is whole.');
+        self::assertSame([], $markdown->line('|---|--:|'));
+        self::assertSame([], $markdown->line('| bia | 3 MB |'));
+        self::assertSame("Name  │ Size\n──────┼─────\nbia   │ 3 MB\ncodex │", $markdown->preview('| codex'), 'While it streams, it is drawn as far as it has come, the row arriving in its place.');
+        self::assertSame([], $markdown->line('| codex | 516 MB |'));
+        self::assertSame(
+            ['Name  │   Size', '──────┼───────', 'bia   │   3 MB', 'codex │ 516 MB', 'after'],
+            $markdown->line('after'),
+            'A line after it ends the table: columns as wide as their widest cell, aligned as asked.',
+        );
+        $text = new Markdown();
+        self::assertSame([], $text->line('| not a table |'));
+        self::assertSame(['| not a table |', 'plain'], $text->line('plain'), 'A bar line without a separator under it is only text.');
+        $open = new Markdown();
+        $open->line('| a | b |');
+        $open->line('|---|---|');
+        self::assertSame(['a │ b', '──┼──'], $open->finish(), 'A table still open at the end of the answer is finished as it is.');
     }
 
     public function testCodeIsHighlightedInOnePassALineAtATime(): void
