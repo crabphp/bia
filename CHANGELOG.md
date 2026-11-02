@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- While the model thinks, the spinner says so in beer words, as Claude Code
+  has its verbs: Drinking, Brewing, Fermenting… a new one every ten seconds.
+- `/stats` shows live drawing, model speed, token and memory figures at the
+  top right.
+- Ctrl-C clears what is typed first, even while Bia works; on an empty input
+  it stops the turn.
+- The banner's cat is drawn in pixels, amber like the working beer.
+- A 501 or 505 from the model's server is not retried.
 - **A terminal UI for conversations,** inline like Pi's: output scrolls, and
   the live lines at the bottom hold a spinner with what Bia is doing and for
   how long, the input, menus and a status line (workspace, git branch, model,

@@ -47,6 +47,12 @@ final class Screen implements Surface
     /** @var array{0: array{0: int, 1: int, 2: int}, 1: array{0: int, 1: int, 2: int}}|null Where a selection starts and where it is dragged to: line, row, column. */
     private ?array $selection = null;
     private bool $dragging = false;
+    /** @var list<string> Lines over the top right, as asked and as last drawn. */
+    private array $overlay = [];
+    private array $overlayShown = [];
+    /** @var list<float> When the frames of the last second were written. */
+    private array $frames = [];
+    private float $frameMs = 0.0;
 
     /**
      * @param int $keep Finished lines kept to scroll back to and to print on closing.
@@ -404,6 +410,7 @@ final class Screen implements Surface
 
     private function render(): void
     {
+        $began = hrtime(true);
         $columns = $this->terminal->columns();
         $screenRows = $this->terminal->rows();
         if ($columns !== $this->width) {
@@ -437,11 +444,25 @@ final class Screen implements Surface
         $this->outputHeight = $height;
         $frame = array_merge(array_pad($output, $height, ''), $lines);
 
+        if ($this->overlay !== $this->overlayShown) {
+            // The rows it covered, or covers now, are drawn again under it.
+            for ($index = 0; $index < max(count($this->overlay), count($this->overlayShown)); $index++) {
+                unset($this->shown[$index]);
+            }
+            $this->overlayShown = $this->overlay;
+        }
         $out = '';
         foreach ($frame as $index => $row) {
             if (($this->shown[$index] ?? null) !== $row) {
                 // Cleared before it is written: erasing after would take a full row's last character.
                 $out .= "\e[" . ($index + 1) . ";1H\e[2K" . $row . "\e[0m";
+            }
+        }
+        if ($out !== '' && $this->overlay !== []) {
+            // Over the top right of the output, after the rows, so a row drawn again does not hide it.
+            foreach (array_slice($this->overlay, 0, $height) as $index => $line) {
+                $column = max(1, $columns - Style::width($line) - 1);
+                $out .= "\e[" . ($index + 1) . ";{$column}H\e[2m " . $line . " \e[0m";
             }
         }
         $cursor = '';
@@ -460,5 +481,22 @@ final class Screen implements Surface
         $this->shown = $frame;
         $this->shownCursor = $cursor;
         $this->terminal->write("\e[?2026h\e[?25l" . $out . ($cursor !== '' ? $cursor : '') . "\e[?2026l");
+        $this->frameMs = (hrtime(true) - $began) / 1e6;
+        $this->frames[] = microtime(true);
+    }
+
+    public function overlay(array $lines): void
+    {
+        if ($lines !== $this->overlay) {
+            $this->overlay = $lines;
+            $this->schedule();
+        }
+    }
+
+    public function metrics(): array
+    {
+        $now = microtime(true);
+        $this->frames = array_values(array_filter($this->frames, static fn (float $at): bool => $now - $at < 1.0));
+        return ['fps' => count($this->frames), 'frame' => $this->frameMs];
     }
 }

@@ -31,7 +31,7 @@ bia "find why the login test fails and fix it"
   for the model, and the full output is saved where `read_file` can page
   through it.
 - **Concurrent reads:** consecutive read-only tool calls run at the same time.
-- **Cancellable:** Ctrl-C stops the current turn, its model request and any
+- **Cancellable:** Ctrl-C (or Esc) stops the current turn, its model request and any
   running command, and returns to the prompt; a second Ctrl-C quits.
 - **Clean subprocesses:** commands run in their own process group, so nothing
   a command starts in the background outlives it.
@@ -165,6 +165,7 @@ completes.
 | `/new` | Start a new session |
 | `/compact` | Summarize the conversation so far now |
 | `/clear` | Clear the screen |
+| `/stats` | Show or hide live stats at the top right: drawing (fps, ms a frame), first token and tokens a second, tokens in and out, memory |
 | `/help` | List commands and keys |
 | `/exit`, `/quit` | Leave |
 
@@ -178,7 +179,7 @@ the highlighted one.
 | Ctrl-J, Alt-Enter, or `\` then Enter | New line; a paste keeps its lines |
 | Up / Down | Move between lines, then through earlier prompts (kept across runs) |
 | Esc | Stop the turn, or close a menu |
-| Ctrl-C | Stop the turn; else clear the input; on an empty input, twice to leave |
+| Ctrl-C | Clear the input, even while Bia works; on an empty input, stop the turn, or twice to leave |
 | Ctrl-D | Leave, on an empty input |
 | Ctrl-W, Ctrl-U, Ctrl-K | Delete a word, to the line start, to the line end |
 | Ctrl-A / Ctrl-E, Ctrl-Left / Ctrl-Right | Line start and end, word moves |

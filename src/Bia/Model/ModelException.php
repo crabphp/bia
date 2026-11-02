@@ -28,7 +28,9 @@ final class ModelException extends \RuntimeException
      */
     public function transient(): bool
     {
-        return in_array($this->status, [408, 425, 429], true) || ($this->status >= 500 && $this->status <= 599);
+        // A server failing passes; one that does not do what was asked (501, 505) does not.
+        return in_array($this->status, [408, 425, 429], true)
+            || ($this->status >= 500 && $this->status <= 599 && !in_array($this->status, [501, 505], true));
     }
 
     /**

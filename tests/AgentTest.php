@@ -74,6 +74,8 @@ final class AgentTest extends TestCase
             self::assertSame(400, $error->status);
         }
         self::assertSame(1, $model->calls);
+        self::assertFalse((new ModelException('not implemented', 501))->transient(), 'A server that does not do what was asked will not later.');
+        self::assertTrue((new ModelException('overloaded', 529))->transient());
     }
 
     public function testTriesStopAfterTheLastWait(): void

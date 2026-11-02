@@ -9,6 +9,7 @@ use Bia\Contracts\ModelResult;
 use Bia\Contracts\ToolCall;
 use Bia\Terminal\Commands;
 use Bia\Terminal\History;
+use Bia\Terminal\Stats;
 use Bia\Terminal\TuiRenderer;
 use Bia\Tool\Diff;
 use Bia\Tui\Highlight;
@@ -148,6 +149,16 @@ final class TuiTest extends TestCase
         self::assertSame('src/app.php', $sorted[0]);
         self::assertNotContains('README.md', $sorted);
         self::assertNull(Fuzzy::score('zz', 'src/app.php'));
+    }
+
+    public function testThinkingIsShownAsAPlayfulWordThatChanges(): void
+    {
+        $spinner = new Spinner('Thinking', since: 100.0, word: 0);
+        self::assertStringContainsString(Spinner::WORDS[0] . '…', $spinner->render(80, now: 101.0));
+        self::assertStringContainsString(Spinner::WORDS[1] . '…', $spinner->render(80, now: 111.0), 'A new word every ten seconds.');
+        self::assertStringNotContainsString('Thinking', $spinner->render(80, now: 101.0));
+        $spinner->label('Running shell');
+        self::assertStringContainsString('Running shell…', $spinner->render(80, now: 101.0), 'Real work keeps its own label.');
     }
 
     public function testTheSpinnerShowsWhatAndHowLong(): void
@@ -319,6 +330,42 @@ final class TuiTest extends TestCase
         self::assertNull($screen->pointer('down', 2, 2));
         self::assertNull($screen->pointer('up', 2, 2), 'A click without a drag copies nothing.');
         self::assertNull($screen->pointer('down', 1, 6), 'The live lines below are not selected.');
+    }
+
+    public function testStatsCountTheTurnAndTheSession(): void
+    {
+        $stats = new Stats();
+        $drawing = ['fps' => 60, 'frame' => 0.42];
+        self::assertSame(['60 fps · 0.4 ms', 'in 0 · out 0', 'mem 1 MB'], $stats->lines($drawing, memory: 1048576), 'Before any turn, no model figures.');
+
+        $stats->turnStarted(now: 100.0);
+        self::assertSame('first token … · – tok/s', $stats->lines($drawing, 0)[1], 'Waiting for the first token.');
+        $stats->streamed(400, now: 100.8);
+        $stats->streamed(400, now: 102.8);
+        self::assertSame('first token 800 ms · 100 tok/s', $stats->lines($drawing, 0)[1], 'Estimated from the text: 800 bytes, about 200 tokens, over 2 s.');
+        $stats->usage(['input' => 12_400, 'output' => 150]);
+        self::assertSame('first token 800 ms · 75 tok/s', $stats->lines($drawing, 0)[1], 'Exact once the provider says.');
+        self::assertSame('in 12.4k · out 150', $stats->lines($drawing, 0)[2]);
+        $stats->turnStarted(now: 200.0);
+        $stats->usage(['input' => 600, 'output' => 50]);
+        self::assertSame('in 13.0k · out 200', $stats->lines($drawing, 0)[2], 'The session adds up across turns.');
+    }
+
+    public function testTheScreenDrawsStatsOverTheTopRight(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        $output = fopen('php://memory', 'w+');
+        $screen = new Screen(new Terminal(STDIN, $output, [30, 6]));
+        $screen->set(['input']);
+        $screen->print("a long line of conversation\n");
+        $screen->overlay(['60 fps', 'mem 44 MB']);
+        $screen->flush();
+        $rows = self::screenRows($output, 6);
+        self::assertStringEndsWith(' 60 fps ', $rows[0], 'Over the top right, after the row under it.');
+        self::assertSame(1, $screen->metrics()['fps'], 'One frame drawn in the last second.');
+        $screen->overlay([]);
+        $screen->flush();
+        self::assertSame('a long line of conversation', self::screenRows($output, 6)[0], 'Hidden again, the row under it is whole.');
     }
 
     public function testMarkdownIsRenderedALineAtATime(): void

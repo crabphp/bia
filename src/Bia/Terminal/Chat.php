@@ -37,8 +37,13 @@ final class Chat
 {
     private const PLACEHOLDER = 'Ask anything · / commands · @ files';
 
-    /** Bia, the fat cat this is named for. */
-    private const MASCOT = ['▙▄▄▄▄▄▟', '█▙███▟█'];
+    /**
+     * Bia, the fat cat this is named for, as pixels drawn two to a character:
+     * W white (her ears), Y amber (her body, the working beer's colour), . nothing
+     * (around her, and her eyes).
+     */
+    private const MASCOT = ['W.....W', 'YYYYYYY', 'Y.YYY.Y', 'YYYYYYY'];
+    private const MASCOT_COLOURS = ['W' => 255, 'Y' => 214];
 
     private readonly Editor $editor;
     private readonly Commands $commands;
@@ -61,6 +66,10 @@ final class Chat
     private string $place;
     /** Whether the session has messages, so that leaving names it for `bia resume`. */
     private bool $used = false;
+    /** Counts as things happen, shown or not, so turning /stats on shows the whole session. */
+    private readonly Stats $stats;
+    private bool $showStats = false;
+    private ?string $statsTicker = null;
 
     /**
      * @param \Closure(Config): Agent $makeAgent Builds the agent for a model, as /model switches.
@@ -83,6 +92,7 @@ final class Chat
         private readonly bool $pickSession = false,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
+        $this->stats = new Stats();
         $this->editor = new Editor($this->history->load());
         $this->place = self::place($this->workspace);
         $renderer->listen(
@@ -92,6 +102,10 @@ final class Chat
             function (array $usage): void {
                 $total = $usage['total'] ?? null;
                 $this->contextTokens = is_int($total) && $total > 0 ? $total : (int) ($usage['input'] ?? 0) + (int) ($usage['output'] ?? 0);
+                $this->stats->usage($usage);
+            },
+            function (int $bytes): void {
+                $this->stats->streamed($bytes);
             },
         );
         $this->commands = (new Commands())
@@ -107,6 +121,19 @@ final class Chat
             })
             ->add('clear', 'Clear the screen', function (string $_): void {
                 $this->region->clear(scrollback: true);
+            })
+            ->add('stats', 'Show or hide live stats', function (string $_): void {
+                $this->showStats = !$this->showStats;
+                if ($this->showStats) {
+                    // Kept current while idle too, once a second.
+                    $this->statsTicker ??= EventLoop::current()->repeat(1.0, fn () => $this->draw());
+                } else {
+                    if ($this->statsTicker !== null) {
+                        EventLoop::current()->cancel($this->statsTicker);
+                        $this->statsTicker = null;
+                    }
+                    $this->region->overlay([]);
+                }
             })
             ->add('help', 'Commands and keys', $this->help(...))
             ->add('exit', 'Leave Bia', function (string $_): void {
@@ -173,6 +200,9 @@ final class Chat
                 $loop->cancel($resize);
             }
             $this->stopTicker();
+            if ($this->statsTicker !== null) {
+                $loop->cancel($this->statsTicker);
+            }
             $this->region->close();
             $this->terminal->leave();
             if ($this->used && $this->sessionId !== null) {
@@ -264,18 +294,23 @@ final class Chat
         $this->suggest();
     }
 
+    /**
+     * Ctrl-C undoes the nearest thing: what is typed first, even while Bia
+     * works, then a menu, then the turn, and twice on nothing, Bia itself.
+     */
     private function interrupt(): void
     {
-        if ($this->turn !== null) {
-            $this->turn->cancel();
+        if (!$this->editor->empty()) {
+            $this->editor->clear();
+            $this->closeMenu();
             return;
         }
         if ($this->menu !== null) {
             $this->closeMenu();
             return;
         }
-        if (!$this->editor->empty()) {
-            $this->editor->clear();
+        if ($this->turn !== null) {
+            $this->turn->cancel();
             return;
         }
         if (microtime(true) - $this->exitArmed < 2.0) {
@@ -299,7 +334,7 @@ final class Chat
         $this->region->follow();
         if (Commands::looksLikeOne($text)) {
             $name = strtolower((string) strtok(substr($text, 1), " \n"));
-            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'clear'], true)) {
+            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'clear', 'stats'], true)) {
                 $this->say("Busy · Esc to stop");
                 return;
             }
@@ -356,6 +391,7 @@ final class Chat
         $cancellation = new Cancellation();
         $this->turn = $cancellation;
         $this->spinner = new Spinner($label);
+        $this->stats->turnStarted();
         $this->startTicker();
         Task::spawn(EventLoop::current(), function () use ($work, $cancellation): void {
             $finished = false;
@@ -576,7 +612,7 @@ final class Chat
     {
         $keys = <<<'TEXT'
             Enter send · Ctrl-J or Alt-Enter or \ then Enter: new line · Up/Down history
-            Tab complete · Esc stop the turn or close a menu · Ctrl-C stop, clear, or twice to leave
+            Tab complete · Esc stop the turn or close a menu · Ctrl-C clear the input, else stop, or twice to leave
             Ctrl-W delete word · Ctrl-U delete to line start · Ctrl-L clear screen · Ctrl-D leave
             Type while Bia works: Enter steers it, at its next step.
             TEXT;
@@ -698,6 +734,14 @@ final class Chat
             array_push($lines, ...$rows);
             $lines[] = $rule;
         }
+        if ($this->showStats) {
+            $stats = $this->stats->lines($this->region->metrics());
+            if ($this->region->page() > 0) {
+                $this->region->overlay($stats); // fullscreen: over the top right
+            } else {
+                $lines[] = Style::dim(Style::truncate(implode(' · ', $stats), $width)); // inline: no corner stays
+            }
+        }
         $lines[] = $this->status($width);
         $this->region->set($lines, $cursor);
     }
@@ -710,8 +754,41 @@ final class Chat
         $room = max(0, $width - 10);
         $top = Style::bold('bia') . ' ' . Style::dim(Style::truncate("{$this->version} · {$this->config->modelLabel()}", max(0, $room - 4)));
         $bottom = Style::dim(Style::truncate($this->place, $room));
-        return Style::accent(self::MASCOT[0]) . '   ' . $top . "\n"
-            . Style::accent(self::MASCOT[1]) . '   ' . $bottom . "\n\n";
+        [$first, $second] = self::mascot();
+        return $first . '   ' . $top . "\n" . $second . '   ' . $bottom . "\n\n";
+    }
+
+    /**
+     * The mascot's two lines: each character is a pixel over a pixel, the
+     * top one in the text colour and the bottom one behind it. Without
+     * colour, the shape alone.
+     *
+     * @return array{string, string}
+     */
+    private static function mascot(): array
+    {
+        $colour = Style::color();
+        $lines = [];
+        for ($y = 0; $y < count(self::MASCOT); $y += 2) {
+            $line = '';
+            for ($x = 0, $n = strlen(self::MASCOT[$y]); $x < $n; $x++) {
+                [$top, $low] = [self::MASCOT[$y][$x], self::MASCOT[$y + 1][$x]];
+                [$char, $fg, $bg] = match (true) {
+                    $top === '.' && $low === '.' => [' ', null, null],
+                    $top === '.' => ['▄', $low, null],
+                    $low === '.' => ['▀', $top, null],
+                    $top === $low => ['█', $top, null],
+                    default => ['▀', $top, $low],
+                };
+                if (!$colour || $fg === null) {
+                    $line .= $char;
+                    continue;
+                }
+                $line .= "\e[38;5;" . self::MASCOT_COLOURS[$fg] . ($bg !== null ? ';48;5;' . self::MASCOT_COLOURS[$bg] : '') . "m{$char}\e[0m";
+            }
+            $lines[] = $line;
+        }
+        return [$lines[0], $lines[1]];
     }
 
     private function status(int $width): string

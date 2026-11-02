@@ -24,6 +24,9 @@ final class Region implements Surface
     private string $pending = '';
     private string $partial = '';
     private string $draft = '';
+    /** @var list<float> When the frames of the last second were written. */
+    private array $frames = [];
+    private float $frameMs = 0.0;
     /** Row of the region the terminal's cursor is on, counted from its top. */
     private int $at = 0;
     /** The width the region was last drawn at; 0 before the first frame. */
@@ -152,6 +155,18 @@ final class Region implements Surface
         return null; // the terminal selects its own scrollback
     }
 
+    public function overlay(array $lines): void
+    {
+        // Inline, the output scrolls away in the terminal's own scrollback: no corner stays.
+    }
+
+    public function metrics(): array
+    {
+        $now = microtime(true);
+        $this->frames = array_values(array_filter($this->frames, static fn (float $at): bool => $now - $at < 1.0));
+        return ['fps' => count($this->frames), 'frame' => $this->frameMs];
+    }
+
     public function page(): int
     {
         return 0;
@@ -173,6 +188,7 @@ final class Region implements Surface
      */
     private function render(bool $now = false): void
     {
+        $began = hrtime(true);
         $columns = $this->terminal->columns();
         $fresh = $this->drawn && $this->columns !== 0 && $columns !== $this->columns;
         if ($fresh && !$now) {
@@ -242,6 +258,8 @@ final class Region implements Surface
             $out .= "\e[?25l";
         }
         $this->terminal->write($out . "\e[?2026l");
+        $this->frameMs = (hrtime(true) - $began) / 1e6;
+        $this->frames[] = microtime(true);
     }
 
     /**

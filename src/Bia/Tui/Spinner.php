@@ -23,13 +23,28 @@ final class Spinner
     private const BUBBLE = 222;
     private const GLASS = 245;
 
+    /**
+     * What "Thinking" is shown as, the way Claude Code has its verbs: Bia's
+     * beer, and a bit of cooking.
+     */
+    public const WORDS = [
+        'Drinking', 'Brewing', 'Fermenting', 'Frothing', 'Pouring', 'Hopping', 'Malting',
+        'Clinking', 'Mulling', 'Distilling', 'Bubbling', 'Foaming', 'Chilling', 'Cooking',
+    ];
+
+    /** Seconds a word stays before the next. */
+    private const WORD_SECONDS = 10.0;
+
     private float $since;
+    private int $word;
 
     public function __construct(
         private string $label = 'Working',
         ?float $since = null,
+        ?int $word = null,
     ) {
         $this->since = $since ?? microtime(true);
+        $this->word = $word ?? random_int(0, count(self::WORDS) - 1);
     }
 
     public function label(string $label): void
@@ -43,8 +58,11 @@ final class Spinner
         $elapsed = max(0, $now - $this->since);
         $time = $elapsed < 60 ? (int) $elapsed . 's' : intdiv((int) $elapsed, 60) . 'm ' . ((int) $elapsed % 60) . 's';
         $tail = $time . ($hint !== '' ? " · {$hint}" : '');
+        $label = $this->label === 'Thinking'
+            ? self::WORDS[($this->word + (int) ($elapsed / self::WORD_SECONDS)) % count(self::WORDS)]
+            : $this->label;
         // The beer is four columns, then a space before the label and one after it.
-        $label = Style::truncate($this->label . '…', max(1, $width - self::CELLS - 3 - mb_strwidth($tail, 'UTF-8')));
+        $label = Style::truncate($label . '…', max(1, $width - self::CELLS - 3 - mb_strwidth($tail, 'UTF-8')));
         return self::beer((int) ($elapsed * self::RATE) % (self::CELLS + 1)) . ' ' . $label . ' ' . Style::dim($tail);
     }
 

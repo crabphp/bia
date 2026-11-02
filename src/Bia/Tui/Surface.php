@@ -75,6 +75,23 @@ interface Surface
     public function page(): int;
 
     /**
+     * Lines shown over the top right of the output, as live statistics are;
+     * none to show nothing. Where the output is the terminal's own, inline,
+     * there is no corner to keep, and they are not drawn.
+     *
+     * @param list<string> $lines
+     */
+    public function overlay(array $lines): void;
+
+    /**
+     * How it draws: the frames written in the last second, and the time the
+     * last one took, in milliseconds.
+     *
+     * @return array{fps: int, frame: float}
+     */
+    public function metrics(): array;
+
+    /**
      * The left mouse button, at a column and row counted from 1: "down"
      * starts a selection, "drag" extends it, "up" ends it and copies it.
      *

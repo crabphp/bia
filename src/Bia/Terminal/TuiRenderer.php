@@ -28,6 +28,8 @@ final class TuiRenderer implements Renderer
     private \Closure $activity;
     /** @var \Closure(array<string, mixed>): void */
     private \Closure $usage;
+    /** @var \Closure(int): void|null */
+    private ?\Closure $streamed = null;
     private Markdown $markdown;
     /** The answer's line still streaming, as the model wrote it. */
     private string $line = '';
@@ -44,11 +46,13 @@ final class TuiRenderer implements Renderer
     /**
      * @param \Closure(string): void $activity Told what the agent is doing.
      * @param \Closure(array<string, mixed>): void $usage Told the token usage of each request.
+     * @param \Closure(int): void|null $streamed Told the bytes of answer text as they arrive.
      */
-    public function listen(\Closure $activity, \Closure $usage): void
+    public function listen(\Closure $activity, \Closure $usage, ?\Closure $streamed = null): void
     {
         $this->activity = $activity;
         $this->usage = $usage;
+        $this->streamed = $streamed;
     }
 
     public function event(ModelEvent $event): void
@@ -56,6 +60,9 @@ final class TuiRenderer implements Renderer
         switch ($event->type) {
             case 'text_delta':
                 ($this->activity)('Writing');
+                if ($this->streamed !== null) {
+                    ($this->streamed)(strlen($event->text));
+                }
                 $this->text($event->text);
                 return;
             case 'reasoning_delta':
