@@ -119,61 +119,127 @@ final class Style
     }
 
     /**
-     * A line of styled text split into rows of at most the given columns.
-     * Colour carries across a split: a row that ends inside a style resets
-     * it, and the next row starts it again. Tabs become spaces, and other
-     * control characters and non-colour escape codes are dropped, as they
-     * would move the cursor. An empty line is one empty row.
+     * A line of styled text split into rows of at most the given columns,
+     * between words: a row ends at its last space, and only a word longer
+     * than a whole row is cut. The space a row ends at is not kept, nor are
+     * spaces at the start of the row after it.
      *
+     * Colour carries across a split: a row that ends inside a style resets
+     * it, and the next row starts it again. A line that erases to its end
+     * (`\e[K`) has each of its rows filled with its background to the full
+     * width, with spaces, so that it ends where the rows end. Tabs become
+     * spaces; other control characters and escape codes that move the
+     * cursor are dropped. An empty line is one empty row.
+     *
+     * @param int $indent Columns each row after the first starts in by, as under a bullet; inside the line's style, so a shaded line's indent is shaded too.
      * @return list<string>
      */
-    public static function wrapAnsi(string $line, int $width): array
+    public static function wrapAnsi(string $line, int $width, int $indent = 0): array
     {
         $width = max(1, $width);
-        if (!preg_match('/[^\x20-\x7e]/', $line)) {
-            return strlen($line) <= $width ? [$line] : str_split($line, $width);
+        $indent = max(0, min($indent, $width - 1));
+        if (strlen($line) <= $width && !preg_match('/[^\x20-\x7e]/', $line)) {
+            return [$line]; // short plain text: the common case, measured for free
         }
         preg_match_all('/\e\[[0-9;?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\\\)?|\e.?|./us', $line, $tokens);
+        $fill = str_contains($line, "\e[K");
         $rows = [];
-        $row = '';
+        // The row being made, as cells: [text, columns, kind]; and the style open where it starts.
+        $row = [];
+        $start = '';
         $used = 0;
-        $active = '';
-        // A line that erases to its end fills its rows with its background: each row it wraps onto too.
-        $fill = str_contains($line, "\e[K") ? "\e[K" : '';
+        $leading = false;
         foreach ($tokens[0] as $token) {
             if ($token[0] === "\e") {
-                if (preg_match('/^\e\[([0-9;]*)m$/', $token, $sgr) === 1) {
-                    $active = $sgr[1] === '' || $sgr[1] === '0' ? '' : $active . $token;
-                    $row .= $token;
-                } elseif ($token === "\e[K") {
-                    $row .= $token;
+                if (preg_match('/^\e\[[0-9;]*m$/', $token) === 1) {
+                    $row[] = [$token, 0, self::STYLE];
+                } elseif ($token === "\e[K" && $used < $width) {
+                    $row[] = [str_repeat(' ', $width - $used), $width - $used, self::FILL];
+                    $used = $width;
                 }
                 continue;
             }
+            $count = 1;
             if ($token === "\t") {
-                $token = ' ';
-                $count = 8 - $used % 8;
+                [$token, $count] = [' ', 8 - $used % 8];
             } elseif (ord($token) < 0x20 || $token === "\x7f") {
                 continue;
-            } else {
-                $count = 1;
             }
+            $space = $token === ' ';
             $w = mb_strwidth($token, 'UTF-8');
             for ($i = 0; $i < $count; $i++) {
+                if ($space && $leading) {
+                    continue; // no row starts with the spaces it was broken at
+                }
+                $leading = false;
                 if ($used + $w > $width && $used > 0) {
-                    $rows[] = $active !== '' ? $row . $fill . "\e[0m" : $row;
-                    $row = $active;
-                    $used = 0;
-                    if ($count > 1) {
-                        break; // a tab ends at the row's end
+                    // Back to the row's last space, unless this is one, or the word fills the row.
+                    $split = null;
+                    for ($k = count($row) - 1; !$space && $k > 0; $k--) {
+                        if ($row[$k][2] === self::SPACE) {
+                            $split = $k;
+                            break;
+                        }
+                    }
+                    $left = $split === null ? $row : array_slice($row, 0, $split);
+                    $right = $split === null ? [] : array_slice($row, $split + 1);
+                    while ($left !== [] && $left[array_key_last($left)][2] === self::SPACE) {
+                        array_pop($left); // a row broken between words does not end in spaces either
+                    }
+                    $rows[] = self::row($start, $left, $width, $fill);
+                    $start = self::open($start, $left);
+                    $row = $indent > 0 ? [[str_repeat(' ', $indent), $indent, self::INDENT], ...$right] : $right;
+                    $used = array_sum(array_column($row, 1));
+                    if ($space) {
+                        $leading = true;
+                        continue;
                     }
                 }
-                $row .= $token;
+                $row[] = [$token, $w, $space ? self::SPACE : self::TEXT];
                 $used += $w;
             }
         }
-        $rows[] = $row;
+        $rows[] = self::row($start, $row, $width, $fill);
         return $rows;
+    }
+
+    private const TEXT = 0;
+    private const SPACE = 1;
+    private const STYLE = 2;
+    private const FILL = 3;
+    /** The hanging indent a row after the first starts with: not a break between words. */
+    private const INDENT = 4;
+
+    /**
+     * A row made of its cells, after the style open where it starts; filled
+     * to the width when its line is, and reset when it ends inside a style.
+     *
+     * @param list<array{string, int, int}> $cells
+     */
+    private static function row(string $start, array $cells, int $width, bool $fill): string
+    {
+        $text = $start . implode('', array_column($cells, 0));
+        $open = self::open($start, $cells);
+        if ($open === '') {
+            return $text;
+        }
+        $used = array_sum(array_column($cells, 1));
+        return $text . ($fill && $used < $width ? str_repeat(' ', $width - $used) : '') . "\e[0m";
+    }
+
+    /**
+     * The style open after some cells, from the one open before them.
+     *
+     * @param list<array{string, int, int}> $cells
+     */
+    private static function open(string $start, array $cells): string
+    {
+        foreach ($cells as [$text, , $kind]) {
+            if ($kind === self::STYLE) {
+                $start = $text === "\e[0m" || $text === "\e[m" ? '' : $start . $text;
+            }
+        }
+        return $start;
     }
 
     /**

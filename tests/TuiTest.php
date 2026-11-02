@@ -245,14 +245,18 @@ final class TuiTest extends TestCase
 
     public function testStyledTextWrapsWithItsColourCarriedOver(): void
     {
-        self::assertSame(['abcd', 'ef'], Style::wrapAnsi('abcdef', 4));
+        self::assertSame(['abcd', 'ef'], Style::wrapAnsi('abcdef', 4), 'A word longer than the row is cut.');
+        self::assertSame(['the quick', 'brown fox', 'jumps'], Style::wrapAnsi('the quick brown fox jumps', 10), 'Rows end between words, and the space a row ends at is not kept.');
+        self::assertSame(['a', 'b'], Style::wrapAnsi('a      b', 3), 'No row starts with the spaces it was broken at.');
+        self::assertSame(['• one two', '  three'], Style::wrapAnsi('• one two three', 10, indent: 2), 'Rows after the first hang under the text, past the bullet.');
+        self::assertSame(["\e[48;5;236m › hi there\e[0m", "\e[48;5;236m   friend  \e[0m"], Style::wrapAnsi("\e[48;5;236m › hi there friend\e[K\e[0m", 11, indent: 3), 'A shaded line shades its indent too.');
         self::assertSame([''], Style::wrapAnsi('', 4));
         self::assertSame(["\e[36mabcd\e[0m", "\e[36mef\e[0m"], Style::wrapAnsi("\e[36mabcdef\e[0m", 4), 'A row ending inside a colour resets it; the next starts it again.');
-        self::assertSame(['a   ', 'b'], Style::wrapAnsi("a\tb", 4), 'A tab ends at the row it is on.');
+        self::assertSame(['a', 'b'], Style::wrapAnsi("a\tb", 4), 'A tab at the end of a row is a break between words, like a space.');
         self::assertSame(['ab'], Style::wrapAnsi("a\e[2Kb\x07", 4), 'Codes that move the cursor are dropped.');
         self::assertSame(['日本', '語'], Style::wrapAnsi('日本語', 5));
         self::assertSame(
-            ["\e[100mabcd\e[K\e[0m", "\e[100mef\e[K\e[0m"],
+            ["\e[100mabcd\e[0m", "\e[100mef  \e[0m"],
             Style::wrapAnsi("\e[100mabcdef\e[K\e[0m", 4),
             'A shaded bar fills every row it wraps onto.',
         );
@@ -282,23 +286,23 @@ final class TuiTest extends TestCase
             $screen->print("line {$i}\n");
         }
         $screen->flush();
-        self::assertSame(['line 7', 'line 8', 'line 9', 'line 10', 'input', 'status'], self::screenRows($output, 6), 'It follows the newest output.');
+        self::assertSame([' line 7', ' line 8', ' line 9', ' line 10', 'input', 'status'], self::screenRows($output, 6), 'It follows the newest output, set in by its margin.');
 
         $screen->scroll(-3);
         $screen->flush();
-        self::assertSame(['line 4', 'line 5', 'line 6', '↓', 'input', 'status'], self::screenRows($output, 6));
+        self::assertSame([' line 4', ' line 5', ' line 6', '↓', 'input', 'status'], self::screenRows($output, 6));
 
         $screen->print("line 11\n");
         $screen->flush();
-        self::assertSame('line 4', self::screenRows($output, 6)[0], 'New output does not move what is being read.');
+        self::assertSame(' line 4', self::screenRows($output, 6)[0], 'New output does not move what is being read.');
 
         $screen->scroll(-100);
         $screen->flush();
-        self::assertSame('line 1', self::screenRows($output, 6)[0], 'Scrolling stops at the oldest line.');
+        self::assertSame(' line 1', self::screenRows($output, 6)[0], 'Scrolling stops at the oldest line.');
 
         $screen->scroll(100);
         $screen->flush();
-        self::assertSame(['line 8', 'line 9', 'line 10', 'line 11', 'input', 'status'], self::screenRows($output, 6), 'Scrolling to the end follows again.');
+        self::assertSame([' line 8', ' line 9', ' line 10', ' line 11', 'input', 'status'], self::screenRows($output, 6), 'Scrolling to the end follows again.');
         self::assertSame(3, $screen->page());
 
         $screen->close();
@@ -312,24 +316,26 @@ final class TuiTest extends TestCase
     {
         EventLoop::install(new StreamSelectEventLoop());
         $output = fopen('php://memory', 'w+');
-        $screen = new Screen(new Terminal(STDIN, $output, [10, 6]));
+        $screen = new Screen(new Terminal(STDIN, $output, [10, 8]));
         $screen->set(['input']);
         $screen->print("first line\nthis one wraps over\nlast\n");
         $screen->flush();
-        // Rows: "first line", "this one w", "raps over", "last".
+        // Eight columns inside the margins, broken between words:
+        // " first", " line", " this one", " wraps", " over", " last".
+        self::assertSame([' first', ' line', ' this one', ' wraps', ' over', ' last'], array_slice(self::screenRows($output, 8), 0, 6));
 
-        self::assertNull($screen->pointer('down', 7, 1));
-        self::assertNull($screen->pointer('drag', 4, 3));
+        self::assertNull($screen->pointer('down', 2, 2));
+        self::assertNull($screen->pointer('drag', 6, 4));
         $screen->flush();
-        self::assertSame("line\nthis one wraps", $screen->pointer('up', 4, 3), 'A wrapped line is copied whole, without the break the screen gave it.');
+        self::assertSame("line\nthis one wraps", $screen->pointer('up', 6, 4), 'A wrapped line is copied whole: the space at its break given back, the margin left out.');
         rewind($output);
         $written = (string) stream_get_contents($output);
         self::assertStringContainsString("\e]52;c;" . base64_encode("line\nthis one wraps") . "\a", $written, 'It goes to the clipboard through the terminal.');
-        self::assertStringContainsString("first \e[0m\e[7mline\e[0m", $written, 'The selection is drawn in inverse.');
+        self::assertStringContainsString("\e[7mline\e[0m", $written, 'The selection is drawn in inverse.');
 
-        self::assertNull($screen->pointer('down', 2, 2));
-        self::assertNull($screen->pointer('up', 2, 2), 'A click without a drag copies nothing.');
-        self::assertNull($screen->pointer('down', 1, 6), 'The live lines below are not selected.');
+        self::assertNull($screen->pointer('down', 2, 1));
+        self::assertNull($screen->pointer('up', 2, 1), 'A click without a drag copies nothing.');
+        self::assertNull($screen->pointer('down', 1, 8), 'The live lines below are not selected.');
     }
 
     public function testStatsCountTheTurnAndTheSession(): void
@@ -365,7 +371,7 @@ final class TuiTest extends TestCase
         self::assertSame(1, $screen->metrics()['fps'], 'One frame drawn in the last second.');
         $screen->overlay([]);
         $screen->flush();
-        self::assertSame('a long line of conversation', self::screenRows($output, 6)[0], 'Hidden again, the row under it is whole.');
+        self::assertSame(' a long line of conversation', self::screenRows($output, 6)[0], 'Hidden again, the row under it is whole.');
     }
 
     public function testMarkdownIsRenderedALineAtATime(): void
@@ -430,12 +436,12 @@ final class TuiTest extends TestCase
         $renderer = new TuiRenderer($screen);
         $renderer->event(ModelEvent::text('# Ti'));
         $screen->flush();
-        self::assertSame('Ti', self::screenRows($output, 6)[0], 'A line still streaming is shown, rendered, as far as it goes.');
+        self::assertSame(' Ti', self::screenRows($output, 6)[0], 'A line still streaming is shown, rendered, as far as it goes.');
         $renderer->event(ModelEvent::text("tle\nnext **b"));
         $renderer->event(ModelEvent::text('old**'));
         $renderer->finish(new ModelResult(''));
         $screen->flush();
-        self::assertSame(['Title', 'next bold'], array_slice(self::screenRows($output, 6), 0, 2));
+        self::assertSame([' Title', ' next bold'], array_slice(self::screenRows($output, 6), 0, 2));
     }
 
     public function testAToolCallShowsTheChangeItMade(): void

@@ -19,6 +19,9 @@ use Crab\Engine\EventLoop;
  */
 final class Screen implements Surface
 {
+    /** Columns kept clear on each side of the output, so text does not touch the window's edges. */
+    private const MARGIN = 1;
+
     /** @var array<int, string> Finished lines, by number. */
     private array $done = [];
     /** @var array<int, list<string>> Finished lines wrapped at $width, by number. */
@@ -209,11 +212,36 @@ final class Screen implements Surface
             $text = $this->partial . $this->draft;
             $rows = [];
             foreach ($text === '' ? [] : explode("\n", $text) as $part) {
-                array_push($rows, ...Style::wrapAnsi($part, $this->width));
+                array_push($rows, ...$this->wrap($part));
             }
             return $rows;
         }
-        return $this->wrapped[$line] ??= Style::wrapAnsi($this->done[$line], $this->width);
+        return $this->wrapped[$line] ??= $this->wrap($this->done[$line]);
+    }
+
+    /**
+     * A line as rows inside the margins: wrapped to the width between them,
+     * each row set in from the left.
+     *
+     * @return list<string>
+     */
+    private function wrap(string $line): array
+    {
+        $margin = str_repeat(' ', self::MARGIN);
+        return array_map(
+            static fn (string $row): string => $row === '' ? '' : $margin . $row,
+            Style::wrapAnsi($line, max(1, $this->width - 2 * self::MARGIN), self::hang($line)),
+        );
+    }
+
+    /**
+     * How far a line's rows after the first are set in: under the text
+     * after a leading marker, as a message's ›, a bullet, a number or a
+     * quote's bar; nothing for plain text.
+     */
+    private static function hang(string $line): int
+    {
+        return preg_match('/^(\s*(?:› |• |\d+\. |│ ))/u', Style::strip($line), $m) === 1 ? mb_strwidth($m[1], 'UTF-8') : 0;
     }
 
     /**
@@ -358,17 +386,49 @@ final class Screen implements Surface
         $lines = [];
         for ($line = $start[0]; $line <= $end[0]; $line++) {
             $text = '';
-            $rows = $this->rows($line);
+            [$rows, $joins] = $this->plain($line);
             $first = $line === $start[0] ? $start[1] : 0;
             $last = $line === $end[0] ? min($end[1], count($rows) - 1) : count($rows) - 1;
             for ($row = $first; $row <= $last; $row++) {
-                $from = [$line, $row] === [$start[0], $start[1]] ? $start[2] : 0;
-                $to = [$line, $row] === [$end[0], $end[1]] ? $end[2] + 1 : PHP_INT_MAX;
-                $text .= Style::columns(Style::strip($rows[$row]), $from, $to);
+                // Mouse columns count the margin; the rows' text does not.
+                $from = [$line, $row] === [$start[0], $start[1]] ? max(0, $start[2] - self::MARGIN) : 0;
+                $to = [$line, $row] === [$end[0], $end[1]] ? $end[2] + 1 - self::MARGIN : PHP_INT_MAX;
+                $piece = Style::columns($rows[$row], $from, $to);
+                // A row after the first starts with the wrap's hanging indent, not the line's own text.
+                $text .= $row > 0 ? ltrim($piece, ' ') : $piece;
+                if ($row < $last) {
+                    $text .= $joins[$row]; // the space a word wrap took away, given back
+                }
             }
             $lines[] = rtrim($text);
         }
         return implode("\n", $lines);
+    }
+
+    /**
+     * A line's rows as plain text, without the margin and the background's
+     * fill; and what was between each row and the next in the line itself:
+     * the space a row was broken at, a line break in a draft, or nothing
+     * where a word was cut.
+     *
+     * @return array{list<string>, list<string>}
+     */
+    private function plain(int $line): array
+    {
+        $rows = array_map(static fn (string $row): string => rtrim((string) substr(Style::strip($row), self::MARGIN)), $this->rows($line));
+        $original = Style::strip($line >= $this->next ? $this->partial . $this->draft : $this->done[$line]);
+        $joins = [];
+        $at = 0;
+        foreach ($rows as $index => $row) {
+            $row = $index > 0 ? ltrim($row, ' ') : $row; // matched without the hanging indent
+            $found = $row === '' ? $at : strpos($original, $row, $at);
+            $end = $found === false ? $at : $found + strlen($row);
+            $next = isset($rows[$index + 1]) ? ltrim($rows[$index + 1], ' ') : null;
+            $following = $next === null || $next === '' ? false : strpos($original, $next, $end);
+            $joins[] = $following === false ? '' : substr($original, $end, $following - $end);
+            $at = $following === false ? $end : $following;
+        }
+        return [$rows, $joins];
     }
 
     /**
