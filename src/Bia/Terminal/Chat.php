@@ -38,12 +38,12 @@ final class Chat
     private const PLACEHOLDER = 'Ask anything · / commands · @ files';
 
     /**
-     * Bia, the fat cat this is named for, as pixels drawn two to a character:
-     * W white (her ears), Y amber (her body, the working beer's colour), . nothing
-     * (around her, and her eyes).
+     * Bia, the fat cat this is named for, all amber: the working beer's
+     * colour. Her ears are the thin raised corners, her eyes the two gaps
+     * above her face.
      */
-    private const MASCOT = ['W.....W', 'YYYYYYY', 'Y.YYY.Y', 'YYYYYYY'];
-    private const MASCOT_COLOURS = ['W' => 255, 'Y' => 214];
+    private const MASCOT = ['▙▄▄▄▄▄▟', '█▄███▄█'];
+    private const MASCOT_COLOUR = 214;
 
     private readonly Editor $editor;
     private readonly Commands $commands;
@@ -759,36 +759,14 @@ final class Chat
     }
 
     /**
-     * The mascot's two lines: each character is a pixel over a pixel, the
-     * top one in the text colour and the bottom one behind it. Without
-     * colour, the shape alone.
+     * The mascot's two lines, in amber; without colour, the shape alone.
      *
      * @return array{string, string}
      */
     private static function mascot(): array
     {
-        $colour = Style::color();
-        $lines = [];
-        for ($y = 0; $y < count(self::MASCOT); $y += 2) {
-            $line = '';
-            for ($x = 0, $n = strlen(self::MASCOT[$y]); $x < $n; $x++) {
-                [$top, $low] = [self::MASCOT[$y][$x], self::MASCOT[$y + 1][$x]];
-                [$char, $fg, $bg] = match (true) {
-                    $top === '.' && $low === '.' => [' ', null, null],
-                    $top === '.' => ['▄', $low, null],
-                    $low === '.' => ['▀', $top, null],
-                    $top === $low => ['█', $top, null],
-                    default => ['▀', $top, $low],
-                };
-                if (!$colour || $fg === null) {
-                    $line .= $char;
-                    continue;
-                }
-                $line .= "\e[38;5;" . self::MASCOT_COLOURS[$fg] . ($bg !== null ? ';48;5;' . self::MASCOT_COLOURS[$bg] : '') . "m{$char}\e[0m";
-            }
-            $lines[] = $line;
-        }
-        return [$lines[0], $lines[1]];
+        $paint = static fn (string $line): string => Style::color() ? "\e[38;5;" . self::MASCOT_COLOUR . "m{$line}\e[0m" : $line;
+        return [$paint(self::MASCOT[0]), $paint(self::MASCOT[1])];
     }
 
     private function status(int $width): string
