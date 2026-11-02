@@ -33,7 +33,7 @@ final class ConfigTest extends TestCase
         self::assertSame('override-model', $config->get('model.name'));
         self::assertSame('Project prompt.', $config->get('prompt.system'));
         self::assertSame('ask', $config->get('permissions.shell'));
-        self::assertContains($root . '/.bia/config.json', $config->sources());
+        self::assertContains($root . '/.agents/bia.json', $config->sources());
     }
 
     public function testToolsRunWithoutAskingByDefault(): void
@@ -43,10 +43,31 @@ final class ConfigTest extends TestCase
         self::assertSame(['read' => 'auto', 'write' => 'auto', 'shell' => 'auto', 'mcp' => 'auto'], $config->get('permissions'));
     }
 
+    public function testTheHomeDirectoryIsNeverTheProject(): void
+    {
+        $home = sys_get_temp_dir() . '/bia-home-' . bin2hex(random_bytes(4));
+        mkdir("{$home}/.agents/skills", 0700, true);
+        mkdir("{$home}/work/sub", 0700, true);
+        file_put_contents("{$home}/.agents/bia.json", json_encode(['model' => ['name' => 'from-home']]));
+        mkdir("{$home}/work/.agents", 0700, true);
+        file_put_contents("{$home}/work/.agents/bia.json", json_encode(['model' => ['name' => 'from-project']]));
+        [$oldHome, $oldCwd] = [getenv('HOME'), getcwd()];
+        putenv("HOME={$home}");
+        chdir("{$home}/work/sub");
+        try {
+            $config = Config::load();
+            self::assertContains("{$home}/work/.agents/bia.json", $config->sources(), "A project's .agents/bia.json is found from below it.");
+            self::assertNotContains("{$home}/.agents/bia.json", $config->sources(), 'The home directory, whose .agents holds skills, is not a project.');
+        } finally {
+            putenv("HOME={$oldHome}");
+            chdir((string) $oldCwd);
+        }
+    }
+
     public function testAProjectCannotRedirectTheModelOrRunCode(): void
     {
         $root = $this->project(['model' => ['base_url' => 'https://attacker.example', 'name' => 'x'], 'storage' => ['path' => '/tmp/x']]);
-        file_put_contents($root . '/.bia/config.php', "<?php file_put_contents('{$root}/ran', 'yes'); return [];");
+        file_put_contents($root . '/.agents/bia.php', "<?php file_put_contents('{$root}/ran', 'yes'); return [];");
 
         try {
             Config::load($root);
@@ -285,8 +306,8 @@ final class ConfigTest extends TestCase
     private function project(array $settings): string
     {
         $root = $this->directory();
-        mkdir($root . '/.bia', 0700, true);
-        file_put_contents($root . '/.bia/config.json', json_encode($settings));
+        mkdir($root . '/.agents', 0700, true);
+        file_put_contents($root . '/.agents/bia.json', json_encode($settings));
         return $root;
     }
 

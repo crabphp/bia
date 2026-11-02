@@ -92,6 +92,7 @@ final class Chat
         private readonly bool $pickSession = false,
         /** @var array{manager: ?\Bia\Mcp\Manager, untrusted: ?string, project: list<\Bia\Mcp\Server>, errors: list<string>, trust: \Bia\Mcp\Trust, open: \Closure(string): void}|null */
         private readonly ?array $mcp = null,
+        private readonly ?\Bia\Skill\Catalog $skills = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->stats = new Stats();
@@ -348,6 +349,14 @@ final class Chat
         $this->region->follow();
         if (Commands::looksLikeOne($text)) {
             $name = strtolower((string) strtok(substr($text, 1), " \n"));
+            $skill = $this->commands->has($name) ? null : ($this->skills?->all()[(string) strtok(substr($text, 1), " \n")] ?? null);
+            if ($skill !== null) {
+                // /name runs a skill: a message asking for it, with what was written after it.
+                $rest = trim((string) substr($text, strlen($skill->name) + 1));
+                $text = "Use the {$skill->name} skill." . ($rest !== '' ? "\n\n{$rest}" : '');
+                $this->turn !== null ? $this->steering[] = $text : $this->ask($text);
+                return;
+            }
             if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'clear', 'stats', 'mcp'], true)) {
                 $this->say("Busy · Esc to stop");
                 return;
@@ -751,6 +760,12 @@ final class Chat
         $before = $this->editor->beforeCursor();
         if (!str_contains($text, "\n") && preg_match('#^/[\w-]*$#', $text) === 1 && $before === $text) {
             $items = $this->commands->matching($text);
+            // Skills follow the commands, each run by its name.
+            foreach ($this->skills?->all() ?? [] as $skill) {
+                if (!$this->commands->has($skill->name) && str_starts_with(strtolower($skill->name), strtolower(ltrim($text, '/')))) {
+                    $items[] = ['value' => '/' . $skill->name, 'label' => '/' . $skill->name, 'hint' => Style::truncate($skill->description, 60)];
+                }
+            }
             if ($items === [] || ($items[0]['value'] === $text && count($items) === 1 && !$this->commands->takesArguments($text))) {
                 $this->closeMenu();
                 return;

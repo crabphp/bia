@@ -90,6 +90,17 @@ The registry takes tools from the manager each time it is asked, and the agent
 asks each step, so a server that connects during a turn serves its next step.
 Servers start after the first screen is drawn: none delays Bia's start.
 
+## Skills
+
+`Skill\Catalog` finds skills: folders with a `SKILL.md` in `~/.agents/skills`
+and the project's `.agents/skills`, their name and description read from the
+frontmatter, a project's skill taking the place of the user's of its name.
+`Skill\SkillTool` offers them as one `skill` tool whose description lists each
+skill in a line; it gives a skill's instructions, or a file from its folder
+alone. The registry asks for it each step, so skills come and go with their
+folders, and with none there is no tool. A project's settings are in
+`.agents/bia.json`, beside its skills.
+
 ## Sessions
 
 A session is an append-only log in SQLite. Each entry is a message (in no

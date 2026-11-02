@@ -8,7 +8,7 @@ namespace Bia\Config;
  * Loads Bia's small, layered configuration without booting a Crab app.
  *
  * The user's own `~/.config/bia/config.php` is trusted PHP. A project's
- * `.bia/config.json` comes with whatever repository Bia is run in, so it is
+ * `.agents/bia.json` comes with whatever repository Bia is run in, so it is
  * read as data and may only set what cannot send a key or a prompt
  * somewhere else: the model name, the system prompt, permissions and tool
  * limits. It may pick a model of a provider the user configured, never
@@ -30,7 +30,7 @@ final readonly class Config
     ) {}
 
     /**
-     * Settings a project's `.bia/config.json` may set, as dotted prefixes.
+     * Settings a project's `.agents/bia.json` may set, as dotted prefixes.
      */
     public const PROJECT_KEYS = ['model.name', 'model.context_window', 'prompt.system', 'permissions', 'tools', 'compaction'];
 
@@ -47,7 +47,7 @@ final readonly class Config
             $sources[] = $global;
         }
         if ($projectRoot !== null) {
-            $project = $projectRoot . '/.bia/config.json';
+            $project = $projectRoot . '/.agents/bia.json';
             if (is_file($project)) {
                 $values = self::merge($values, self::project($project));
                 $sources[] = $project;
@@ -252,7 +252,7 @@ final readonly class Config
             |
             | Your settings for Bia in every project. Each one is shown commented out
             | at its default, so this file changes nothing until you uncomment a line.
-            | A project's .bia/config.json, the environment and command-line options
+            | A project's .agents/bia.json, the environment and command-line options
             | override what is set here. Run `bia config` to see the result.
             |
             */
@@ -754,15 +754,22 @@ final readonly class Config
         return $path;
     }
 
+    /**
+     * The nearest directory with a project's `.agents/bia.json` or a
+     * `composer.json`. Never the home directory: its `.agents` holds the
+     * user's own skills, and it is not a project.
+     */
     private static function findProjectRoot(string $directory): ?string
     {
         $directory = realpath($directory) ?: $directory;
-        while ($directory !== dirname($directory)) {
-            if (is_dir($directory . '/.bia') || is_file($directory . '/composer.json')) {
+        $home = realpath((string) getenv('HOME')) ?: null;
+        for (; ; $directory = dirname($directory)) {
+            if ($directory !== $home && (is_file($directory . '/.agents/bia.json') || is_file($directory . '/composer.json'))) {
                 return $directory;
             }
-            $directory = dirname($directory);
+            if ($directory === dirname($directory)) {
+                return null;
+            }
         }
-        return is_dir($directory . '/.bia') ? $directory : null;
     }
 }

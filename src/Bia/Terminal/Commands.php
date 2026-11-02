@@ -81,6 +81,15 @@ final class Commands
         return $items;
     }
 
+    /**
+     * Whether a command, or an alias of one, has this name.
+     */
+    public function has(string $name): bool
+    {
+        $name = strtolower(ltrim($name, '/'));
+        return isset($this->commands[$name]) || isset($this->aliases[$name]);
+    }
+
     public function takesArguments(string $name): bool
     {
         $name = ltrim(strtolower($name), '/');

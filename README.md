@@ -38,7 +38,7 @@ bia "find why the login test fails and fix it"
 - **Resumable sessions** stored in SQLite as an append-only log, with fork,
   listing and JSONL export. A session cut off mid-turn by a crash is repaired
   when resumed.
-- **Safe project settings:** a repository's `.bia/config.json` is read as data,
+- **Safe project settings:** a repository's `.agents/bia.json` is read as data,
   never run, and cannot redirect the model or its API key.
 - **Scriptable:** `--json` emits every event as a JSON line.
 - **Fast startup:** `bia --help` takes about 0.03 s. Bia opens no web
@@ -117,7 +117,7 @@ bia sessions [--json]               List recent sessions
 bia export <session-id>             Write a session as JSONL
 bia config [--json]                 Show the merged configuration, secrets redacted
 bia doctor                          Check PHP, tools and configuration
-bia init                            Create .bia/config.json in this directory
+bia init                            Create .agents/bia.json in this directory
 bia init --global                   Create ~/.config/bia/config.php with every setting
 ```
 
@@ -322,13 +322,36 @@ and paste the address it sends you back to into Bia.
 - An `Authorization` header in the server's config is sent as it is, and no
   login is asked for.
 
+## Skills
+
+A skill is a folder with a `SKILL.md`: instructions for a kind of task, and
+files that go with them, in the format other agents share:
+
+```markdown
+---
+name: release-notes
+description: Writes release notes from the git log since the last tag.
+---
+Run `git log` since the last tag, group the changes, and follow template.md.
+```
+
+- Bia reads your skills from `~/.agents/skills/` and a project's from its
+  `.agents/skills/`; a project's takes the place of yours of the same name.
+- Only each skill's name and description are in front of the model. When a
+  task matches one, it loads that skill's instructions, and reads its other
+  files as they say, from the skill's folder and nowhere else.
+- `/release-notes` runs a skill by its name, with anything you write after
+  it; skills show in the `/` menu with the commands.
+- The folders are read again at each step, so a skill added during a
+  session can be used at the next one. With none, there is nothing to load.
+
 ## Configuration
 
 Later sources override earlier ones:
 
 1. Built-in defaults
 2. `~/.config/bia/config.php`: yours, trusted, any setting
-3. `.bia/config.json` in the project: limited to the keys below
+3. `.agents/bia.json` in the project: limited to the keys below
 4. Environment variables
 5. Command-line options
 
@@ -418,13 +441,13 @@ A provider takes any `model` setting (`base_url`, `api_key`, `endpoint`,
 `timeout`, `idle_timeout`, `context_window`). `--base-url`, `--api-key`,
 `BIA_BASE_URL` and `BIA_API_KEY` still override it. A prefix that
 names no provider stays part of the model name, so `meta/llama-4` on
-OpenRouter works as before. A project's `.bia/config.json` may pick a
+OpenRouter works as before. A project's `.agents/bia.json` may pick a
 provider's model but never define or change a provider.
 
 ### Project config
 
-`.bia/config.json` is found in the current directory or the nearest parent
-with a `.bia/` directory or a `composer.json`. It ships with the repository,
+`.agents/bia.json` is found in the current directory or the nearest parent
+with one or a `composer.json`, never your home directory. It ships with the repository,
 so it is read as data and may set only `model.name`, `model.context_window`,
 `prompt.system`, `permissions`, `tools` and `compaction`:
 

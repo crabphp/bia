@@ -16,6 +16,8 @@ use Bia\Mcp\Trust;
 use Bia\Model\ModelCatalog;
 use Bia\Model\OpenAiCompatibleModel;
 use Bia\Session\SqliteStore;
+use Bia\Skill\Catalog;
+use Bia\Skill\SkillTool;
 use Bia\Terminal\AnsiRenderer;
 use Bia\Terminal\Chat;
 use Bia\Terminal\Files;
@@ -125,11 +127,11 @@ final class Application
               --help             Show this help
 
             Tools run without asking by default. Set permissions to "ask" or
-            "deny" in ~/.config/bia/config.php or .bia/config.json to change it.
+            "deny" in ~/.config/bia/config.php or .agents/bia.json to change it.
 
             Configuration:
               ~/.config/bia/config.php   (yours: any setting)
-              .bia/config.json           (the project's: model.name, prompt.system,
+              .agents/bia.json           (the project's: model.name, prompt.system,
                                           permissions, tools, compaction)
 
             Providers: --model anthropic/NAME, openai/NAME or cliproxyapi/NAME
@@ -189,11 +191,11 @@ final class Application
 
     private static function init(): int
     {
-        $directory = getcwd() . '/.bia';
+        $directory = getcwd() . '/.agents';
         if (!is_dir($directory) && !mkdir($directory, 0777, true) && !is_dir($directory)) {
             throw new \RuntimeException("Cannot create {$directory}.");
         }
-        $path = $directory . '/config.json';
+        $path = $directory . '/bia.json';
         if (is_file($path)) {
             fwrite(STDOUT, "Bia config already exists at {$path}" . PHP_EOL);
             return 0;
@@ -372,6 +374,7 @@ final class Application
                 self::VERSION,
                 pickSession: $resume === '',
                 mcp: $mcp,
+                skills: Catalog::for((string) getenv('HOME'), $workspace->root()),
             );
             $loop->execute($chat->run(...));
             return 0;
@@ -507,7 +510,12 @@ final class Application
             ->add(new WriteFileTool($workspace))
             ->add(new ApplyPatchTool($workspace, $runner))
             ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout')))
-            ->add(new GitDiffTool($workspace, $runner));
+            ->add(new GitDiffTool($workspace, $runner))
+            // Skills, read again each step; no tool at all while there are none.
+            ->from(static function () use ($workspace): array {
+                $skills = Catalog::for((string) getenv('HOME'), $workspace->root())->all();
+                return $skills === [] ? [] : [new SkillTool($skills)];
+            });
     }
 
     /**

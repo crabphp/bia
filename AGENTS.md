@@ -29,7 +29,7 @@ or load a terminal UI framework just to print help or stream a model reply.
 - Draw through the `Surface`, never with a direct write while the chat runs, or
   the live lines are drawn over.
 - Tools run with full permission by default; do not make approval the default.
-- A project's `.bia/config.json` is untrusted data. Never `require` a project
+- A project's `.agents/bia.json` is untrusted data. Never `require` a project
   file, and never let it set where requests or keys go.
 
 ## Fast path
