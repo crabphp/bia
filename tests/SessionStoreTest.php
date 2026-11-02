@@ -46,6 +46,10 @@ final class SessionStoreTest extends TestCase
         $texts = static fn (string $id): array => array_map(static fn (Entry $e): string => (string) $e->message()?->text, $store->path($id));
         self::assertSame(['shared', 'only in fork'], $texts($fork));
         self::assertSame(['shared', 'only in original'], $texts($original));
+
+        $byId = array_column($store->list(), null, 'id');
+        self::assertSame('shared', $byId[$fork]['title']);
+        self::assertSame(2, $byId[$fork]['entry_count']);
     }
 
     public function testTheFirstSchemaIsMigrated(): void

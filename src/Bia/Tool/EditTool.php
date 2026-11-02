@@ -74,8 +74,8 @@ final readonly class EditTool implements Tool
         if ($original === false || strlen($original) > $this->maxBytes) {
             return new ToolResult("Could not read {$relative}, or it is larger than {$this->maxBytes} bytes.", false);
         }
-        $crlf = str_contains($original, "\r\n");
-        $content = $crlf ? str_replace("\r\n", "\n", $original) : $original;
+        $crlf = str_contains($original, "\r\n") && !str_contains(str_replace("\r\n", '', $original), "\n");
+        $content = str_replace("\r\n", "\n", $original);
 
         $ranges = [];
         foreach (array_values($edits) as $number => $edit) {

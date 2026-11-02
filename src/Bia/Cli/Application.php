@@ -348,7 +348,7 @@ final class Application
         $json = (bool) ($options['json'] ?? false);
         $root = realpath(getcwd()) ?: getcwd();
         $workspace = new Workspace($root);
-        $runner = new ProcessRunner([$apiKey]);
+        $runner = new ProcessRunner($config->secrets());
         $outputs = $config->cachePath() . '/outputs';
         $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
         $http = new Client();

@@ -232,7 +232,8 @@ final class Chat
             [$column, $row] = array_map('intval', explode(',', $key->text) + [1 => '0']);
             $copied = $this->region->pointer(substr($key->name, 6), $column, $row);
             if ($copied !== null && $copied !== '') {
-                $this->say('Copied', 1.5);
+                // The terminal is asked to copy; whether it did, nothing says. Shift+drag is its own selection.
+                $this->say('Copied (OSC 52) · Shift+drag if not', 3.0);
             }
             return;
         }
@@ -514,6 +515,8 @@ final class Chat
             $this->agent = ($this->makeAgent)($config);
             $this->config = $config;
             $this->contextTokens = null;
+            // The next conversation starts with it too.
+            Config::remember('model.name', $config->modelLabel());
             $this->region->gap();
             $this->region->print(Style::dim('· model: ' . $config->modelLabel()) . "\n");
         } catch (\Throwable $error) {
@@ -778,7 +781,7 @@ final class Chat
     }
 
     /**
-     * Sets how answers appear, for this conversation: `tui.render` in the config sets it for good.
+     * Sets how answers appear, and remembers it for the next conversations.
      */
     private function render(string $mode): void
     {
@@ -792,7 +795,12 @@ final class Chat
             return;
         }
         $this->renderer->mode($mode);
-        $this->note("render: {$mode}");
+        try {
+            Config::remember('tui.render', $mode);
+            $this->note("render: {$mode}");
+        } catch (\RuntimeException $error) {
+            $this->note("render: {$mode}, for now · " . $error->getMessage());
+        }
     }
 
     private function help(string $_): void

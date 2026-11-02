@@ -113,14 +113,29 @@ final class SqliteStore implements SessionStore
     public function list(int $limit = 50, ?string $workspace = null): array
     {
         $limit = max(1, min(500, $limit));
-        $statement = $this->open()->prepare(
-            'SELECT s.id, s.workspace, s.model, s.created_at, s.updated_at, '
-            . '(SELECT COUNT(*) FROM entries e WHERE e.session_id = s.id) AS entry_count, '
-            . "(SELECT json_extract(e.data, '$.text') FROM entries e WHERE e.session_id = s.id AND e.type = 'message' "
-            . "AND json_extract(e.data, '$.role') = 'user' ORDER BY e.id LIMIT 1) AS title "
-            . 'FROM sessions s' . ($workspace !== null ? ' WHERE s.workspace = ?' : '')
-            . ' ORDER BY s.updated_at DESC LIMIT ' . $limit,
-        );
+        // Walk from each session's head to the root, so a forked session counts
+        // and titles the conversation it branched from.
+        $where = $workspace !== null ? ' WHERE s.workspace = ?' : '';
+        $statement = $this->open()->prepare(<<<SQL
+            WITH RECURSIVE
+            listed AS (
+                SELECT id, workspace, model, head, created_at, updated_at
+                FROM sessions s{$where} ORDER BY updated_at DESC LIMIT {$limit}
+            ),
+            path(session_id, id, parent_id, type, data, depth) AS (
+                SELECT l.id, e.id, e.parent_id, e.type, e.data, 0
+                FROM listed l JOIN entries e ON e.id = l.head
+                UNION ALL
+                SELECT path.session_id, e.id, e.parent_id, e.type, e.data, path.depth + 1
+                FROM entries e JOIN path ON e.id = path.parent_id
+            )
+            SELECT l.id, l.workspace, l.model, l.created_at, l.updated_at,
+                (SELECT COUNT(*) FROM path p WHERE p.session_id = l.id) AS entry_count,
+                (SELECT json_extract(p.data, '$.text') FROM path p
+                    WHERE p.session_id = l.id AND p.type = 'message' AND json_extract(p.data, '$.role') = 'user'
+                    ORDER BY p.depth DESC LIMIT 1) AS title
+            FROM listed l ORDER BY l.updated_at DESC
+            SQL);
         $statement->execute($workspace !== null ? [$workspace] : []);
         return array_map(static function (array $row): array {
             $row['entry_count'] = (int) $row['entry_count'];

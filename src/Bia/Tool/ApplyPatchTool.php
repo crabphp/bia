@@ -36,6 +36,13 @@ final readonly class ApplyPatchTool implements Tool
         if ($patch === '') {
             return new ToolResult('Patch must not be empty.', false);
         }
+        $paths = self::paths($patch);
+        if ($paths === []) {
+            return new ToolResult('Patch does not name any file.', false);
+        }
+        foreach ($paths as $relative) {
+            $this->workspace->path($relative, allowMissingParents: true);
+        }
         $check = $this->process->run(['git', 'apply', '--check', '--whitespace=nowarn', '-'], $this->workspace->root(), 20.0, 512_000, $patch, $cancellation);
         if (!$check->ok()) {
             return new ToolResult(trim($check->output) ?: 'The patch does not apply.', false);
@@ -45,5 +52,34 @@ final readonly class ApplyPatchTool implements Tool
             return new ToolResult(trim($applied->output) ?: 'The patch could not be applied.', false);
         }
         return new ToolResult('Patch applied.', true, ['diff' => Diff::ofPatch($patch)]);
+    }
+
+    /**
+     * Every file path named by a patch's headers.
+     *
+     * @return list<string>
+     */
+    private static function paths(string $patch): array
+    {
+        $paths = [];
+        foreach (preg_split('/\r?\n/', $patch) ?: [] as $line) {
+            if (preg_match('/^(?:---|\+\+\+) ([^\t]+)/', $line, $match) === 1) {
+                $path = self::unquote(trim($match[1]));
+                if ($path !== '/dev/null') {
+                    $paths[] = (string) preg_replace('#^[ab]/#', '', $path);
+                }
+            } elseif (preg_match('/^(?:rename|copy) (?:from|to) (.+)$/', $line, $match) === 1) {
+                $paths[] = self::unquote(trim($match[1]));
+            }
+        }
+        return array_values(array_unique($paths));
+    }
+
+    private static function unquote(string $path): string
+    {
+        if (strlen($path) >= 2 && $path[0] === '"' && $path[-1] === '"') {
+            return stripcslashes(substr($path, 1, -1));
+        }
+        return $path;
     }
 }

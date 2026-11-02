@@ -69,6 +69,10 @@ final class EditToolTest extends TestCase
 
         self::assertSame("#!/bin/sh\r\necho two\r\necho three\r\n", $this->read('d.sh'));
         self::assertSame(0755, fileperms($this->root . '/d.sh') & 0777);
+
+        $this->file('mixed.txt', "one\r\ntwo\nthree\n");
+        self::assertTrue($this->apply('mixed.txt', [['old_text' => "two\n", 'new_text' => "2\n"]])->ok);
+        self::assertSame("one\n2\nthree\n", $this->read('mixed.txt'), 'A single CRLF line does not convert an LF file to CRLF.');
     }
 
     public function testMistakesAreExplainedAndChangeNothing(): void

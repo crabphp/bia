@@ -41,6 +41,52 @@ final class ConfigTest extends TestCase
         $config = Config::load($this->directory());
 
         self::assertSame(['read' => 'auto', 'write' => 'auto', 'shell' => 'auto', 'mcp' => 'auto'], $config->get('permissions'));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('permissions.mcp');
+        Config::load($this->directory(), ['permissions' => ['mcp' => 'maybe']]);
+    }
+
+    public function testSecretsIncludeTheModelAndEveryProviderKey(): void
+    {
+        $this->global("<?php return ['providers' => ['tda' => ['base_url' => 'http://tda/v1', 'api_key' => 'tda-key']]];");
+        putenv('OPENAI_API_KEY=openai-key');
+        putenv('ANTHROPIC_API_KEY=anthropic-key');
+        try {
+            $secrets = Config::load($this->directory())->secrets();
+            self::assertContains('openai-key', $secrets);
+            self::assertContains('anthropic-key', $secrets);
+            self::assertContains('tda-key', $secrets);
+        } finally {
+            putenv('OPENAI_API_KEY');
+            putenv('ANTHROPIC_API_KEY');
+        }
+    }
+
+    public function testAChoiceMadeInAConversationIsKeptInTheConfigFileAsWritten(): void
+    {
+        $config = $this->directory();
+        putenv("XDG_CONFIG_HOME={$config}");
+        try {
+            mkdir($config . '/bia', 0777, true);
+            $file = $config . '/bia/config.php';
+            file_put_contents($file, "<?php\n\nreturn [\n    // my model\n    'model' => [\n        'name' => 'openai/gpt-5', // the usual\n    ],\n];\n");
+
+            Config::remember('model.name', 'anthropic/claude-sonnet-4-5');
+            Config::remember('tui.render', 'power');
+            $loaded = Config::load($this->directory());
+            self::assertSame('anthropic/claude-sonnet-4-5', $loaded->modelLabel());
+            self::assertSame('power', $loaded->get('tui.render'));
+            self::assertSame(
+                "<?php\n\nreturn [\n    'tui' => ['render' => 'power'],\n    // my model\n    'model' => [\n        'name' => 'anthropic/claude-sonnet-4-5', // the usual\n    ],\n];\n",
+                file_get_contents($file),
+                'One value changed, one added; the comments and layout as they were.',
+            );
+            $this->expectException(\InvalidArgumentException::class);
+            Config::remember('model.base_url', 'https://elsewhere.example');
+        } finally {
+            putenv('XDG_CONFIG_HOME');
+        }
     }
 
     public function testTheHomeDirectoryIsNeverTheProject(): void

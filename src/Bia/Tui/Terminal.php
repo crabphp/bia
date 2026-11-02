@@ -112,7 +112,8 @@ final class Terminal
      */
     public function copy(string $text): void
     {
-        $this->write("\e]52;c;" . base64_encode($text) . "\a");
+        // Ended by ST, the standard end, which a multiplexer in between passes on more surely than BEL.
+        $this->write("\e]52;c;" . base64_encode($text) . "\e\\");
     }
 
     public function leave(): void

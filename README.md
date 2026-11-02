@@ -408,6 +408,11 @@ return [
 ];
 ```
 
+
+What you pick in a conversation is kept for the next ones: `/model` and
+`/render` set `model.name` and `tui.render` in this file. Only that value
+changes; your comments, `env()` calls and layout stay as you wrote them.
+
 ### Providers
 
 A provider is a model server set up once: its URL, where its key is, and its

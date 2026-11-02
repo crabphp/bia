@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Bia\Tests;
 
 use Bia\Contracts\ToolContext;
+use Bia\Tool\ApplyPatchTool;
 use Bia\Tool\ListFilesTool;
 use Bia\Tool\ProcessRunner;
 use Bia\Tool\ReadFileTool;
@@ -25,6 +26,25 @@ final class ToolTest extends TestCase
 
         $this->expectException(\InvalidArgumentException::class);
         $workspace->path('../outside');
+    }
+
+    public function testApplyPatchAppliesInsideWorkspaceAndRejectsTraversal(): void
+    {
+        $root = $this->directory();
+        file_put_contents($root . '/a.txt', "one\n");
+        $patch = new ApplyPatchTool(new Workspace($root), new ProcessRunner());
+        $context = new ToolContext($root, 'test');
+
+        $ok = $patch->execute([
+            'patch' => "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-one\n+two\n",
+        ], $context);
+        self::assertTrue($ok->ok, $ok->text);
+        self::assertSame("two\n", file_get_contents($root . '/a.txt'));
+
+        $this->expectException(\InvalidArgumentException::class);
+        $patch->execute([
+            'patch' => "--- /dev/null\n+++ b/../outside.txt\n@@ -0,0 +1 @@\n+no\n",
+        ], $context);
     }
 
     public function testReadWriteSearchAndShell(): void

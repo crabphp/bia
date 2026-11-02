@@ -331,7 +331,7 @@ final class TuiTest extends TestCase
         self::assertSame("line\nthis one wraps", $screen->pointer('up', 6, 4), 'A wrapped line is copied whole: the space at its break given back, the margin left out.');
         rewind($output);
         $written = (string) stream_get_contents($output);
-        self::assertStringContainsString("\e]52;c;" . base64_encode("line\nthis one wraps") . "\a", $written, 'It goes to the clipboard through the terminal.');
+        self::assertStringContainsString("\e]52;c;" . base64_encode("line\nthis one wraps") . "\e\\", $written, 'It goes to the clipboard through the terminal.');
         self::assertStringContainsString("\e[7mline\e[0m", $written, 'The selection is drawn in inverse.');
 
         self::assertNull($screen->pointer('down', 2, 1));
@@ -431,7 +431,8 @@ final class TuiTest extends TestCase
         Style::enable(true);
         $markdown = new Markdown();
         self::assertSame(["\e[1mTitle\e[0m"], $markdown->line('## Title'));
-        self::assertSame(["a \e[1mbold\e[0m and \e[36mco**de**\e[0m"], $markdown->line('a **bold** and `co**de**`'), 'Code is left as it is inside.');
+        self::assertSame(["a \e[1mbold\e[22m and \e[36mco**de**\e[39m"], $markdown->line('a **bold** and `co**de**`'), 'Code is left as it is inside.');
+        self::assertSame(["\e[1m\e[36mpermissions.mcp\e[39m is not checked\e[22m"], $markdown->line('**`permissions.mcp` is not checked**'), 'Bold pairs across code inside it, and keeps the code its colour.');
         self::assertSame(['  • item'], $markdown->line('  - item'));
         self::assertSame(["\e[2m│ said\e[0m"], $markdown->line('> said'));
         self::assertSame(['a __init__ b'], $markdown->line('a __init__ b'));

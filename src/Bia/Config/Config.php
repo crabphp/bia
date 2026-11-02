@@ -32,6 +32,9 @@ final readonly class Config
     /**
      * Settings a project's `.agents/bia.json` may set, as dotted prefixes.
      */
+    /** Settings chosen inside a conversation, kept in the user's config.php for the next ones. */
+    public const REMEMBERED_KEYS = ['model.name', 'tui.render'];
+
     public const PROJECT_KEYS = ['model.name', 'model.context_window', 'prompt.system', 'permissions', 'tools', 'compaction'];
 
     public static function load(?string $projectRoot = null, array $overrides = []): self
@@ -123,6 +126,26 @@ final readonly class Config
         $provider = (string) $this->get('model.provider');
         $name = (string) $this->get('model.name');
         return isset($this->values['providers'][$provider]) ? "{$provider}/{$name}" : $name;
+    }
+
+    /**
+     * Every API key configured for the model or a provider, so subprocesses
+     * never inherit any of them.
+     *
+     * @return list<string>
+     */
+    public function secrets(): array
+    {
+        $secrets = [(string) ($this->get('model.api_key') ?? '')];
+        foreach ($this->providers() as $provider) {
+            $secrets[] = (string) ($provider['api_key'] ?? '');
+        }
+        foreach ((array) ($this->merged['providers'] ?? []) as $settings) {
+            if (is_array($settings) && is_string($settings['api_key'] ?? null)) {
+                $secrets[] = $settings['api_key'];
+            }
+        }
+        return array_values(array_unique(array_filter($secrets, static fn (string $secret): bool => $secret !== '')));
     }
 
     /**
@@ -511,6 +534,19 @@ final readonly class Config
     }
 
     /**
+     * Keeps a setting chosen in a conversation, as /model and /render, in
+     * the user's config.php for the next ones: that one value is set, the
+     * rest of the file left as written. Only REMEMBERED_KEYS.
+     */
+    public static function remember(string $key, string|int|float|bool $value): void
+    {
+        if (!in_array($key, self::REMEMBERED_KEYS, true)) {
+            throw new \InvalidArgumentException("{$key} is not a setting Bia keeps.");
+        }
+        (new ConfigFile(self::globalPath()))->set(explode('.', $key), $value);
+    }
+
+    /**
      * Where Bia looked for the model's key, for an error that says what to set.
      */
     public function keyHelp(): string
@@ -668,7 +704,7 @@ final readonly class Config
         if (!is_array($permissions)) {
             throw new \InvalidArgumentException('permissions must be an object in Bia configuration.');
         }
-        foreach (['read', 'write', 'shell'] as $permission) {
+        foreach (['read', 'write', 'shell', 'mcp'] as $permission) {
             $value = $permissions[$permission] ?? 'auto';
             if (!is_string($value) || !in_array($value, ['auto', 'ask', 'deny'], true)) {
                 throw new \InvalidArgumentException("permissions.{$permission} must be auto, ask, or deny.");

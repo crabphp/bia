@@ -287,26 +287,24 @@ final class Markdown
      */
     private static function inline(string $text, bool $bold = true): string
     {
-        $parts = preg_split('/(`+)(.+?)\1/', $text, -1, PREG_SPLIT_DELIM_CAPTURE);
-        if ($parts === false) {
-            return $text;
-        }
-        $out = '';
-        for ($i = 0, $n = count($parts); $i < $n; $i += 3) {
-            $plain = $parts[$i];
-            if ($bold) {
-                $plain = (string) preg_replace_callback(
-                    // Only **: __ is too often a name's own, as in __init__.
-                    '/\*\*(?=\S)(.+?)(?<=\S)\*\*/',
-                    static fn (array $m): string => Style::bold($m[1]),
-                    $plain,
-                );
-            }
-            $out .= $plain;
-            if (isset($parts[$i + 2])) {
-                $out .= Style::accent($parts[$i + 2]);
-            }
-        }
-        return $out;
+        // Code first, set aside, so a ** pairs across it: **`a` is b** is bold with code inside.
+        $code = [];
+        $text = (string) preg_replace_callback('/(`+)(.+?)\1/', static function (array $m) use (&$code): string {
+            $code[] = $m[2];
+            return "\0" . (count($code) - 1) . "\0";
+        }, $text);
+        $text = (string) preg_replace_callback(
+            // Only **: __ is too often a name's own, as in __init__.
+            '/\*\*(?=\S)(.+?)(?<=\S)\*\*/',
+            // Bold ends with bold off alone, so the code inside keeps it, and it keeps the code's colour.
+            // Where all is bold already, as a heading, the marks just go.
+            static fn (array $m): string => $bold && Style::color() ? "\e[1m{$m[1]}\e[22m" : $m[1],
+            $text,
+        );
+        return (string) preg_replace_callback(
+            '/\0(\d+)\0/',
+            static fn (array $m): string => Style::color() ? "\e[36m{$code[(int) $m[1]]}\e[39m" : $code[(int) $m[1]],
+            $text,
+        );
     }
 }
