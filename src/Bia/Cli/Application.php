@@ -9,6 +9,10 @@ use Bia\Agent\Compactor;
 use Bia\Agent\SystemPrompt;
 use Bia\Config\Config;
 use Bia\Contracts\Renderer;
+use Bia\Mcp\AuthStore;
+use Bia\Mcp\Manager;
+use Bia\Mcp\Server;
+use Bia\Mcp\Trust;
 use Bia\Model\ModelCatalog;
 use Bia\Model\OpenAiCompatibleModel;
 use Bia\Session\SqliteStore;
@@ -337,6 +341,7 @@ final class Application
         $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
         $http = new Client();
         $loop = new Loop();
+        $mcp = self::mcp($config, $runner, $http, $workspace->root());
 
         if ($repl && !$json && Terminal::interactive()) {
             $terminal = new Terminal();
@@ -347,6 +352,9 @@ final class Application
                 return $chat instanceof Chat && $chat->confirm($question);
             };
             $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs);
+            if ($mcp['manager'] !== null) {
+                $tools->from($mcp['manager']->tools(...));
+            }
             $makeAgent = static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs);
             $chat = new Chat(
                 $terminal,
@@ -363,6 +371,7 @@ final class Application
                 new History(dirname($config->databasePath()) . '/history'),
                 self::VERSION,
                 pickSession: $resume === '',
+                mcp: $mcp,
             );
             $loop->execute($chat->run(...));
             return 0;
@@ -383,6 +392,23 @@ final class Application
         };
         $tools = self::tools($config, $options, $ask, $canPrompt, $workspace, $runner, $outputs);
         $agent = self::agent($config, $http, $tools, $store, new AnsiRenderer($json), $workspace, $outputs);
+        $manager = $mcp['manager'];
+        if ($manager !== null) {
+            $tools->from($manager->tools(...));
+            if ($mcp['untrusted'] !== null && !$json) {
+                fwrite(STDERR, Style::dim("bia: this project's .mcp.json is not trusted yet; open bia here once to allow it") . PHP_EOL);
+            }
+            // A prompt given once has no next step to pick tools up at: the servers are waited for, briefly.
+            $loop->execute(static function () use ($manager, $config, $json): void {
+                $manager->start(static function (string $name, string $status) use ($manager, $json): void {
+                    if ($status === 'failed' && !$json) {
+                        $error = array_column($manager->status(), 'error', 'name')[$name] ?? '';
+                        fwrite(STDERR, Style::dim("bia: MCP {$name} failed: {$error}") . PHP_EOL);
+                    }
+                });
+                $manager->ready((float) $config->get('mcp.startup_timeout'));
+            });
+        }
         $status = 0;
         do {
             $question = $words === [] ? $prompt->ask('> ') : implode(' ', $words);
@@ -419,8 +445,52 @@ final class Application
         if (!$json && $store->path($sessionId) !== []) {
             fwrite(STDERR, "Resume this session with: bia resume {$sessionId}" . PHP_EOL);
         }
+        if ($manager !== null) {
+            $loop->execute(static fn () => $manager->close()); // the servers Bia started end with it
+        }
         // A conversation left on purpose ended well; a one-shot run reports its turn.
         return $repl ? 0 : $status;
+    }
+
+    /**
+     * The MCP servers configured: the user's own, and the project's when it
+     * has been trusted as it is now. A project file not trusted yet is
+     * given back to be asked about.
+     *
+     * @return array{manager: ?Manager, untrusted: ?string, project: list<Server>, errors: list<string>, trust: Trust, open: \Closure(string): void}
+     */
+    private static function mcp(Config $config, ProcessRunner $runner, Client $http, string $root): array
+    {
+        $environment = getenv();
+        $user = Server::load($config->configDirectory() . '/mcp.json', false, $environment);
+        $projectFile = $root . '/.mcp.json';
+        $project = Server::load($projectFile, true, $environment);
+        $trust = new Trust(dirname($config->databasePath()) . '/mcp-trust.json');
+        $trusted = $project['servers'] !== [] && $trust->trusted($projectFile);
+        $servers = [...$user['servers'], ...($trusted ? $project['servers'] : [])];
+        $manager = null;
+        if ($servers !== [] || $project['servers'] !== []) {
+            $manager = new Manager($runner, $http, $root, self::VERSION, (float) $config->get('mcp.timeout'), (float) $config->get('mcp.startup_timeout'), new AuthStore(dirname($config->databasePath()) . '/mcp-auth.json'));
+            foreach ($servers as $server) {
+                $manager->add($server);
+            }
+        }
+        return [
+            'manager' => $manager,
+            'untrusted' => $project['servers'] !== [] && !$trusted ? $projectFile : null,
+            'project' => $project['servers'],
+            'errors' => [...$user['errors'], ...$project['errors']],
+            'trust' => $trust,
+            // Opens a login page in the browser; the address is shown too, for a browser elsewhere.
+            'open' => static function (string $url) use ($runner, $root): void {
+                $opener = PHP_OS_FAMILY === 'Darwin' ? 'open' : 'xdg-open';
+                try {
+                    $runner->run([$opener, $url], $root, 10.0);
+                } catch (\Throwable) {
+                    // No browser here, as over SSH: the address shown is opened by hand.
+                }
+            },
+        ];
     }
 
     /**

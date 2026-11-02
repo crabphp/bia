@@ -196,6 +196,7 @@ final readonly class Config
                 'read' => 'auto',
                 'write' => 'auto',
                 'shell' => 'auto',
+                'mcp' => 'auto',
             ],
             'tools' => [
                 'shell_timeout' => 120.0,
@@ -207,6 +208,12 @@ final readonly class Config
                 'enabled' => true,
                 'reserve_tokens' => 16_384,
                 'keep_tokens' => 20_000,
+            ],
+            'mcp' => [
+                // Seconds an MCP tool call may take, and a server to start and list its tools.
+                // The servers themselves are in mcp.json beside this file, and a project's .mcp.json.
+                'timeout' => 120.0,
+                'startup_timeout' => 30.0,
             ],
             'tui' => [
                 // The whole terminal, scrolled by Bia with the input kept at the bottom; false draws inline.
@@ -343,6 +350,7 @@ final readonly class Config
                 //     'read' => 'auto',
                 //     'write' => 'auto',
                 //     'shell' => 'auto',
+                //     'mcp' => 'auto',
                 // ],
 
                 /*
@@ -377,6 +385,23 @@ final readonly class Config
                 //     'enabled' => true,
                 //     'reserve_tokens' => 16384,
                 //     'keep_tokens' => 20000,
+                // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | MCP
+                |--------------------------------------------------------------------------
+                |
+                | MCP servers give Bia more tools. List them in mcp.json beside this file,
+                | in the "mcpServers" format other agents use; a project's own .mcp.json
+                | is used too, once you allow it. These are how long a tool call, and a
+                | server's start, may take. /mcp shows how each server is doing.
+                |
+                */
+
+                // 'mcp' => [
+                //     'timeout' => 120.0,
+                //     'startup_timeout' => 30.0,
                 // ],
 
                 /*

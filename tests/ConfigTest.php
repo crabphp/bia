@@ -40,7 +40,7 @@ final class ConfigTest extends TestCase
     {
         $config = Config::load($this->directory());
 
-        self::assertSame(['read' => 'auto', 'write' => 'auto', 'shell' => 'auto'], $config->get('permissions'));
+        self::assertSame(['read' => 'auto', 'write' => 'auto', 'shell' => 'auto', 'mcp' => 'auto'], $config->get('permissions'));
     }
 
     public function testAProjectCannotRedirectTheModelOrRunCode(): void

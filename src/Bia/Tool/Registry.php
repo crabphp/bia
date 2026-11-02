@@ -19,6 +19,8 @@ final class Registry
      * @var array<string, Tool>
      */
     private array $tools = [];
+    /** @var list<\Closure(): list<Tool>> Tools that come and go, as MCP servers' do; asked each time. */
+    private array $sources = [];
 
     /**
      * @param \Closure(ToolDefinition, array<string, mixed>): bool|null $approve Asked before every call, reads included; null allows everything.
@@ -36,16 +38,27 @@ final class Registry
     }
 
     /**
+     * Adds tools that may change between one step and the next.
+     *
+     * @param \Closure(): list<Tool> $tools
+     */
+    public function from(\Closure $tools): self
+    {
+        $this->sources[] = $tools;
+        return $this;
+    }
+
+    /**
      * @return list<ToolDefinition>
      */
     public function definitions(): array
     {
-        return array_map(static fn (Tool $tool): ToolDefinition => $tool->definition(), array_values($this->tools));
+        return array_map(static fn (Tool $tool): ToolDefinition => $tool->definition(), array_values($this->all()));
     }
 
     public function has(string $name): bool
     {
-        return isset($this->tools[$name]);
+        return isset($this->all()[$name]);
     }
 
     /**
@@ -53,7 +66,7 @@ final class Registry
      */
     public function permission(string $name): ?string
     {
-        return isset($this->tools[$name]) ? $this->tools[$name]->definition()->permission : null;
+        return ($this->all()[$name] ?? null)?->definition()->permission;
     }
 
     /**
@@ -61,7 +74,7 @@ final class Registry
      */
     public function execute(string $name, array $arguments, ToolContext $context, ?Cancellation $cancellation = null): ToolResult
     {
-        $tool = $this->tools[$name] ?? null;
+        $tool = $this->all()[$name] ?? null;
         if ($tool === null) {
             return new ToolResult("There is no tool named {$name}.", false);
         }
@@ -69,5 +82,21 @@ final class Registry
             return new ToolResult('The user declined this tool call.', false);
         }
         return $tool->execute($arguments, $context, $cancellation);
+    }
+
+    /**
+     * Every tool now: the built-in ones first, which a changing one cannot replace.
+     *
+     * @return array<string, Tool>
+     */
+    private function all(): array
+    {
+        $all = $this->tools;
+        foreach ($this->sources as $source) {
+            foreach ($source() as $tool) {
+                $all[$tool->definition()->name] ??= $tool;
+            }
+        }
+        return $all;
     }
 }

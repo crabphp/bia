@@ -259,6 +259,69 @@ output past 2000 lines or 50 KB is cut to its first and last lines for the
 model; the full output is saved under `~/.cache/bia/outputs/` and the note
 tells the model where, so `read_file` can page through it.
 
+## MCP servers
+
+MCP servers give Bia more tools: GitHub, databases, browsers, your own. List
+them in `~/.config/bia/mcp.json`, in the `mcpServers` format other agents use,
+so a config written for one works in the other:
+
+```json
+{
+  "mcpServers": {
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}" }
+    },
+    "docs": { "type": "http", "url": "https://example.com/mcp", "headers": { "Authorization": "Bearer ${DOCS_KEY}" } }
+  }
+}
+```
+
+- A server is started here and talked to over its input and output
+  (`command`, `args`, `env`), or reached over streamable HTTP (`url`,
+  `headers`). `${VAR}` and `${VAR:-default}` are taken from your environment.
+- Servers connect in the background once the screen is up: none slows Bia's
+  start, and their tools join as each is ready, at the next step of a turn.
+  `bia "…"` waits for them, briefly, before its one request.
+- Their tools are named `mcp__<server>__<tool>`, shown as `github · search`,
+  and need the `mcp` permission (`auto` by default). A call may take
+  `mcp.timeout` seconds (120); Esc cancels it on the server too.
+- A project's own `.mcp.json` starts programs from the repository: Bia asks
+  once before starting its servers, and again if the file changes.
+- `/mcp` shows each server: connected and its tools, connecting, needing a
+  login, or failed and why.
+- Every server Bia started stops with it.
+
+### Logging in to remote servers
+
+Many hosted servers (GitHub, Linear, Notion, Sentry…) need you to log in.
+Bia does it with OAuth, as MCP specifies: `/mcp` marks such a server
+`needs login`, and `/mcp login <server>` opens your browser. You log in
+there, the browser comes back to Bia on `127.0.0.1`, and the server
+connects. Over SSH, open the address Bia shows wherever you have a browser,
+and paste the address it sends you back to into Bia.
+
+- Bia finds the server's authorization server, registers itself with it
+  when it may, and logs in with PKCE; the token is bound to that server
+  alone, and kept in `~/.local/state/bia/mcp-auth.json`, readable by you
+  only. It is renewed before it runs out; when it cannot be, the server
+  needs a login again.
+- `/mcp logout <server>` forgets the login.
+- A server whose authorization server does not let Bia register itself
+  takes a client of your own, and may want scopes or a fixed callback port:
+
+  ```json
+  "tracker": {
+    "type": "http",
+    "url": "https://tracker.example.com/mcp",
+    "oauth": { "clientId": "abc123", "clientSecret": "${TRACKER_SECRET}", "scopes": ["read"], "callbackPort": 33418 }
+  }
+  ```
+
+- An `Authorization` header in the server's config is sent as it is, and no
+  login is asked for.
+
 ## Configuration
 
 Later sources override earlier ones:

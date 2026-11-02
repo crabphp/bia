@@ -71,12 +71,13 @@ final readonly class Agent
     {
         $entries = $this->sessions->path($sessionId);
         $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt)));
-        $definitions = $this->tools->definitions();
         $retried = false;
         $stepped = false;
 
         for ($turn = 0; $turn < $this->maxTurns; $turn++) {
             $cancellation?->throwIfCancelled();
+            // Asked each step: an MCP server that connected meanwhile brings its tools to the next one.
+            $definitions = $this->tools->definitions();
             if ($stepped && $steer !== null) {
                 // After the tool results, where a user message may follow them: the user steers.
                 foreach ($steer() as $message) {

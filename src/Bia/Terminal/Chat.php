@@ -90,6 +90,8 @@ final class Chat
         private readonly string $version,
         private ?Agent $agent = null,
         private readonly bool $pickSession = false,
+        /** @var array{manager: ?\Bia\Mcp\Manager, untrusted: ?string, project: list<\Bia\Mcp\Server>, errors: list<string>, trust: \Bia\Mcp\Trust, open: \Closure(string): void}|null */
+        private readonly ?array $mcp = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->stats = new Stats();
@@ -135,6 +137,7 @@ final class Chat
                     $this->region->overlay([]);
                 }
             })
+            ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout <server>]')
             ->add('help', 'Commands and keys', $this->help(...))
             ->add('exit', 'Leave Bia', function (string $_): void {
                 $this->running = false;
@@ -182,6 +185,8 @@ final class Chat
             $this->resume('');
         }
         $this->draw();
+        // After the first screen: no server keeps Bia from being ready.
+        Task::spawn(EventLoop::current(), $this->startMcp(...));
         try {
             while ($this->running) {
                 $key = $this->terminal->key($cancellation);
@@ -203,6 +208,7 @@ final class Chat
             if ($this->statsTicker !== null) {
                 $loop->cancel($this->statsTicker);
             }
+            $this->mcp['manager']?->close(); // the servers Bia started end with it
             $this->region->close();
             $this->terminal->leave();
             if ($this->used && $this->sessionId !== null) {
@@ -328,13 +334,21 @@ final class Chat
         if ($text === '') {
             return;
         }
+        // The address a login was sent back to, pasted: it carries a code, so it goes
+        // to the login alone, never to the model or the history.
+        $login = $this->mcp['manager'] ?? null;
+        if ($login !== null && $login->waitingLogin() !== null && str_starts_with($text, $login->waitingLogin())) {
+            $this->editor->clear();
+            $login->deliver($text);
+            return;
+        }
         $this->editor->remember($text);
         $this->history->add($text);
         $this->editor->clear();
         $this->region->follow();
         if (Commands::looksLikeOne($text)) {
             $name = strtolower((string) strtok(substr($text, 1), " \n"));
-            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'clear', 'stats'], true)) {
+            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'clear', 'stats', 'mcp'], true)) {
                 $this->say("Busy · Esc to stop");
                 return;
             }
@@ -606,6 +620,105 @@ final class Chat
             }
         }
         $this->lineStart();
+    }
+
+    /**
+     * Connects the MCP servers, in the background: a project's, from a
+     * .mcp.json not trusted as it is, only once the user says so.
+     */
+    private function startMcp(): void
+    {
+        $manager = $this->mcp['manager'] ?? null;
+        if ($manager === null) {
+            return;
+        }
+        foreach ($this->mcp['errors'] as $error) {
+            $this->note("mcp.json: {$error}");
+        }
+        $file = $this->mcp['untrusted'];
+        if ($file !== null) {
+            $names = implode(', ', array_map(static fn (\Bia\Mcp\Server $server): string => $server->name, $this->mcp['project']));
+            if ($this->confirm("Start this project's MCP servers ({$names})? They run programs from .mcp.json.")) {
+                $this->mcp['trust']->trust($file);
+                foreach ($this->mcp['project'] as $server) {
+                    $manager->add($server);
+                }
+            }
+        }
+        $manager->start(function (string $name, string $status) use ($manager): void {
+            if ($status === 'failed') {
+                $error = array_column($manager->status(), 'error', 'name')[$name] ?? '';
+                $this->note("mcp {$name} failed: {$error}");
+            } elseif ($status === 'login') {
+                $this->note("mcp {$name} needs login · /mcp login {$name}");
+            }
+            $this->draw();
+        });
+    }
+
+    /**
+     * `/mcp` shows each server; `/mcp login <server>` and `/mcp logout <server>`
+     * log in to a remote one, or forget its login.
+     */
+    private function showMcp(string $arguments): void
+    {
+        $manager = $this->mcp['manager'] ?? null;
+        [$action, $name] = array_pad(preg_split('/\s+/', trim($arguments), 2) ?: [], 2, '');
+        if ($action === 'login' || $action === 'logout') {
+            if ($manager === null || $name === '') {
+                $this->say("Usage: /mcp {$action} <server>");
+                return;
+            }
+            if ($action === 'logout') {
+                try {
+                    $manager->logout($name);
+                    $this->note("logged out of {$name}");
+                } catch (\Throwable $error) {
+                    $this->note($error->getMessage());
+                }
+                return;
+            }
+            Task::spawn(EventLoop::current(), function () use ($manager, $name): void {
+                try {
+                    $manager->login($name, function (string $url) use ($name): void {
+                        $this->note("log in to {$name} in your browser: {$url}");
+                        $this->note('opened it here; elsewhere, open it there and paste back the address it sends you to');
+                        ($this->mcp['open'])($url);
+                    });
+                    $this->note("logged in to {$name}");
+                } catch (\Throwable $error) {
+                    $this->note("login to {$name} failed: {$error->getMessage()}");
+                }
+                $this->draw();
+            });
+            return;
+        }
+        $status = $manager?->status() ?? [];
+        $this->lineStart();
+        if ($status === []) {
+            $this->region->print(Style::dim('No MCP servers · add them to ' . $this->config->configDirectory() . '/mcp.json') . "\n");
+            return;
+        }
+        $width = max(array_map(static fn (array $s): int => mb_strwidth($s['name']), $status));
+        foreach ($status as $server) {
+            $name = str_pad($server['name'], $width + strlen($server['name']) - mb_strwidth($server['name']));
+            $this->region->print(match ($server['status']) {
+                'connected' => Style::ok('●') . " {$name}  " . Style::dim($server['tools'] . ($server['tools'] === 1 ? ' tool' : ' tools')),
+                'failed' => Style::error('✗') . " {$name}  " . Style::dim(Style::truncate($server['error'], 100)),
+                'connecting' => Style::dim("… {$name}  connecting"),
+                'login' => Style::warn('○') . " {$name}  " . Style::dim("needs login · /mcp login {$server['name']}"),
+                default => Style::dim("· {$name}  off"),
+            } . ($server['project'] ? Style::dim('  · project') : '') . "\n");
+        }
+    }
+
+    /**
+     * A dim line in the output, on a line of its own.
+     */
+    private function note(string $text): void
+    {
+        $this->lineStart();
+        $this->region->print(Style::dim("· {$text}") . "\n");
     }
 
     private function help(string $_): void

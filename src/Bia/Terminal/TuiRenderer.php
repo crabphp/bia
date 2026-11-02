@@ -108,7 +108,9 @@ final class TuiRenderer implements Renderer
      */
     public static function toolLines(ToolCall $call, bool $ok, string $text, array $data): array
     {
-        $line = ($ok ? Style::ok('✓') : Style::error('✗')) . ' ' . $call->name;
+        // An MCP tool is shown by its server and its own name: mcp__github__search reads "github · search".
+        $name = preg_match('/^mcp__(.+?)__(.+)$/', $call->name, $m) === 1 ? $m[1] . Style::dim(' · ') . $m[2] : $call->name;
+        $line = ($ok ? Style::ok('✓') : Style::error('✗')) . ' ' . $name;
         $subject = AnsiRenderer::subject($call->arguments);
         if ($subject !== '') {
             $line .= ' ' . Style::dim($subject);

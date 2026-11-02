@@ -12,9 +12,10 @@ or load a terminal UI framework just to print help or stream a model reply.
 - `Bia\Terminal` renders events; the agent loop never writes directly to a TTY.
 - Use Crab's event loop and HTTP client for network streaming and cancellation.
 - Keep model, tool, and session operations cancellable and bounded.
-- Run subprocesses through `Bia\Tool\ProcessRunner` (Crab's `Subprocess`), never
-  `proc_open` or `shell_exec` directly: that is what makes them cancellable,
-  concurrent and free of Bia's credentials. The one exception is
+- Run subprocesses through `Bia\Tool\ProcessRunner` (Crab's `Subprocess`, or its
+  `Process` for one that keeps running, as an MCP server), never `proc_open` or
+  `shell_exec` directly: that is what makes them cancellable, concurrent and
+  free of Bia's credentials, and what stops them when Bia ends. The one exception is
   `Tui\Terminal`'s `stty` calls on /dev/tty, which need the terminal itself.
 - `Bia\Tui` names nothing of Bia outside it: only the Crab engine. Its
   components take keys and return lines and never write to the terminal;

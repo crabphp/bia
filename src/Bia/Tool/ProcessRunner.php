@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Bia\Tool;
 
 use Crab\Engine\Async\Cancellation;
+use Crab\Engine\Process\Process;
 use Crab\Engine\Process\Subprocess;
 use Crab\Engine\Process\SubprocessResult;
 
@@ -49,6 +50,19 @@ final readonly class ProcessRunner
             maxBytes: $maxBytes,
             cancellation: $cancellation,
         );
+    }
+
+    /**
+     * Starts a command that keeps running, to be talked to while it runs, as
+     * an MCP server is; with the same filtered environment, and what it is
+     * given added on top.
+     *
+     * @param list<string> $command
+     * @param array<string, string> $environment Variables of its own, over the filtered environment.
+     */
+    public function start(array $command, string $cwd, array $environment = []): Process
+    {
+        return Process::start($command, directory: $cwd, environment: [...$this->environment, ...$environment]);
     }
 
     /**

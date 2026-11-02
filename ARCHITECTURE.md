@@ -38,7 +38,7 @@ the engine, kept able to move into the framework when a second user needs it:
 | `Terminal` | Raw mode with `stty` on /dev/tty (Ctrl-C and Ctrl-Z arrive as keys), bracketed paste, the alternate screen with mouse-wheel reports, size, keys read on the event loop; gives the terminal back as found, on exit too |
 | `Keys`, `Key` | Turns terminal bytes into keys, pastes and mouse-wheel turns |
 | `Surface` | Where the chat draws: output above, live lines below. Two kinds: |
-| `Screen` | Fullscreen, the default: the alternate screen, output wrapped and scrolled by Bia (wheel, PageUp/PageDown) with the live lines kept at the bottom; only changed rows are written, at most once a frame (1/60 s), in one synchronized write; dragging selects output, drawn in inverse, and copies it on release through the terminal (OSC 52), wrapped lines joined again; the output is printed on the main screen on leaving |
+| `Screen` | Fullscreen, the default: the alternate screen, output set in by a one-column margin on each side, wrapped between words (a row after a leading marker such as `›` or `•` hangs under its text) and scrolled by Bia (wheel, PageUp/PageDown) with the live lines kept at the bottom; only changed rows are written, at most once a frame (1/60 s), in one synchronized write; dragging selects output, drawn in inverse, and copies it on release through the terminal (OSC 52), wrapped lines joined again; the output is printed on the main screen on leaving |
 | `Region` | Inline, with `tui.fullscreen` false: finished output goes into the terminal's own scrollback, only the live lines at the bottom are redrawn, at most once a frame, and the screen is drawn afresh when a resize changes the width |
 | `Editor` | Multi-line input with history, word moves and paste |
 | `SelectList` | A filtered list for pickers and completion menus; keys in, lines out |
@@ -69,6 +69,26 @@ default; an approval callback exists only when a permission is set to `ask` or
 on the event loop, in their own process group, with a timeout, an output cap
 and the turn's cancellation, and without Bia's own credentials in their
 environment. Patch application is checked before it is committed.
+
+## MCP
+
+`Bia\Mcp` connects to MCP servers and offers their tools as Bia's own:
+
+| Part | Does |
+|---|---|
+| `Server` | A server as configured, from the shared `mcpServers` format in the user's `mcp.json` and a project's `.mcp.json`, with `${VAR}` taken from the environment |
+| `StdioTransport` | A server started through `ProcessRunner::start()` (Crab's `Process`): a JSON message a line each way; the end of its standard error says why it failed; closing stops it, killing it and what it started if it does not stop itself |
+| `HttpTransport` | Streamable HTTP: each message posted, answered as JSON or as events, the server's session sent with each |
+| `Connection` | JSON-RPC: the handshake, tools listed page by page, calls with a timeout and cancelled on the server when the turn is; the server's pings answered, its tool changes heard |
+| `McpTool` | One server tool as a `Tool`, named `mcp__<server>__<tool>`, its result's content as text |
+| `Manager` | Connects every server in a task of its own, keeps each one's status and tools, and stops them all at once |
+| `Trust` | Which projects' `.mcp.json`, as each was, the user allowed to start servers |
+| `OAuth` | Logging in to a remote server: its resource metadata (RFC 9728) from the `401`'s `WWW-Authenticate` or the well-known paths, its authorization server's metadata (RFC 8414, or OpenID's), registration (RFC 7591) unless a client is configured, PKCE with S256 and a `state`, the `resource` bound (RFC 8707); the code comes to a listener on 127.0.0.1 read on the event loop, or is pasted; tokens are refreshed before they run out, and once on a `401` |
+| `AuthStore` | Each server's registered client and tokens, by its name and URL, in one file readable by the user alone |
+
+The registry takes tools from the manager each time it is asked, and the agent
+asks each step, so a server that connects during a turn serves its next step.
+Servers start after the first screen is drawn: none delays Bia's start.
 
 ## Sessions
 
