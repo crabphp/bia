@@ -118,7 +118,7 @@ final readonly class Agent
                 $result->text,
                 $result->toolCalls,
                 $result->reasoning,
-                meta: array_filter(['usage' => $result->usage, 'finish_reason' => $result->finishReason, 'model' => $this->modelName]),
+                meta: array_filter(['usage' => $result->usage, 'finish_reason' => $result->finishReason, 'model' => $result->model !== '' ? $result->model : $this->modelName]),
             ));
             if ($result->toolCalls === []) {
                 $this->renderer->finish($result);

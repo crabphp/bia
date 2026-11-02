@@ -17,6 +17,13 @@ deltas, tool calls, usage, completion, and failure events. OpenAI Responses,
 Anthropic Messages, Gemini, OpenAI-compatible servers, and tdaproxy are
 adapters, not concepts in the agent loop.
 
+`Model\Fallback` is a model too: the chosen one, then the configured
+fallbacks. A provider failing before any answer has arrived (a limit, an
+outage, a key refused) rests for a cooldown while the request goes to the
+next; the first model not resting is always asked first, so the chosen one
+comes back by itself. The agent's own retries wrap it, for when every model
+fails at once.
+
 The local path is deliberately small. It starts no web `App`, opens SQLite only
 when a session is used, and uses Crab's event loop only when a model call needs
 network I/O. Sessions are rows in SQLite; JSONL is an export format. A live

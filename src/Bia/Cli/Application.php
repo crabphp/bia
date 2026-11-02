@@ -13,6 +13,7 @@ use Bia\Mcp\AuthStore;
 use Bia\Mcp\Manager;
 use Bia\Mcp\Server;
 use Bia\Mcp\Trust;
+use Bia\Model\Fallback;
 use Bia\Model\ModelCatalog;
 use Bia\Model\OpenAiCompatibleModel;
 use Bia\Session\SqliteStore;
@@ -164,6 +165,15 @@ final class Application
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model provider', (string) $config->get('model.provider')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model base URL', (string) $config->get('model.base_url')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'API key', self::hasKey($config) ? 'configured' : 'missing'));
+        $fallbacks = [];
+        foreach ((array) $config->get('fallback.models', []) as $name) {
+            try {
+                $fallbacks[] = $name . (self::hasKey($config->withModel((string) $name)) ? '' : ' (no key)');
+            } catch (\InvalidArgumentException) {
+                $fallbacks[] = $name . ' (unknown)';
+            }
+        }
+        fwrite(STDOUT, sprintf("%-18s %s\n", 'fallback', $fallbacks === [] ? 'none' : implode(', ', $fallbacks)));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'database', $config->databasePath()));
         $instructions = SystemPrompt::files(realpath(getcwd()) ?: getcwd(), $config->configDirectory());
         fwrite(STDOUT, sprintf("%-18s %s\n", 'instructions', $instructions === [] ? 'none' : implode(', ', $instructions)));
@@ -524,15 +534,15 @@ final class Application
     private static function agent(Config $config, Client $http, Registry $tools, SqliteStore $store, Renderer $renderer, Workspace $workspace, string $outputs): Agent
     {
         $modelName = (string) $config->get('model.name');
-        $model = new OpenAiCompatibleModel(
-            $http,
-            (string) $config->get('model.base_url'),
-            (string) $config->get('model.api_key'),
-            $modelName,
-            (string) $config->get('model.endpoint', 'chat/completions'),
-            (float) $config->get('model.timeout'),
-            (float) $config->get('model.idle_timeout'),
-        );
+        $model = self::model($config, $http);
+        $fallbacks = self::fallbacks($config, $http);
+        if ($fallbacks !== []) {
+            $model = new Fallback(
+                [['name' => $modelName, 'label' => $config->modelLabel(), 'model' => $model], ...$fallbacks],
+                static fn (string $message) => $renderer->notice($message),
+                (float) $config->get('fallback.cooldown'),
+            );
+        }
         $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
             $model,
             $modelName,
@@ -552,6 +562,45 @@ final class Application
             maxOutputLines: (int) $config->get('tools.output_lines'),
             outputs: $outputs,
         );
+    }
+
+    private static function model(Config $config, Client $http): OpenAiCompatibleModel
+    {
+        return new OpenAiCompatibleModel(
+            $http,
+            (string) $config->get('model.base_url'),
+            (string) $config->get('model.api_key'),
+            (string) $config->get('model.name'),
+            (string) $config->get('model.endpoint', 'chat/completions'),
+            (float) $config->get('model.timeout'),
+            (float) $config->get('model.idle_timeout'),
+        );
+    }
+
+    /**
+     * The models to fall back on, each with its provider's server and key,
+     * leaving out the chosen one and any without a key.
+     *
+     * @return list<array{name: string, label: string, model: OpenAiCompatibleModel}>
+     */
+    private static function fallbacks(Config $config, Client $http): array
+    {
+        $models = [];
+        $seen = [$config->modelLabel() => true];
+        foreach ((array) $config->get('fallback.models', []) as $name) {
+            try {
+                $other = $config->withModel((string) $name);
+                $label = $other->modelLabel();
+                if (isset($seen[$label])) {
+                    continue;
+                }
+                $models[] = ['name' => (string) $other->get('model.name'), 'label' => $label, 'model' => self::model($other, $http)];
+                $seen[$label] = true;
+            } catch (\InvalidArgumentException) {
+                // No key for it, or no such provider: left out, as `bia doctor` shows.
+            }
+        }
+        return $models;
     }
 
     /**

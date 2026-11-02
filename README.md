@@ -19,6 +19,8 @@ bia "find why the login test fails and fix it"
 - **Streaming replies** over Crab's HTTP client, from any OpenAI-compatible
   Chat Completions API: OpenAI, OpenRouter, vLLM, Ollama, LM Studio, tdaproxy
   and others.
+- **Fallback:** a provider limited or down hands the request straight to
+  your next model, and gets it back after a cooldown.
 - **Coding tools:** read, list, search, edit, write, patch, shell and git
   diff, run with full permission by default, like Codex or Claude Code. Edits
   are exact text replacements, the format models get right most often.
@@ -443,6 +445,26 @@ A provider takes any `model` setting (`base_url`, `api_key`, `endpoint`,
 names no provider stays part of the model name, so `meta/llama-4` on
 OpenRouter works as before. A project's `.agents/bia.json` may pick a
 provider's model but never define or change a provider.
+
+### Fallback
+
+When the chosen model's provider is rate limited, down, or refuses its key,
+the same request goes at once to the next model in `fallback.models`, and one
+line says so (`anthropic/claude-opus-4-5: 429 · → openai/gpt-5`). A failed
+model rests for `fallback.cooldown` seconds, then is asked first again; if it
+fails again, the working fallback is kept. A model is switched only before
+any of its answer has arrived, so nothing is shown twice, and never for a
+request that would be wrong anywhere (a `400`, a context too long).
+
+```php
+'fallback' => [
+    'models' => ['anthropic/claude-sonnet-4-5', 'openai/gpt-5'],
+    'cooldown' => 300.0,
+],
+```
+
+A model without a key is left out; `bia doctor` lists each one. Only your own
+config sets fallbacks, never a project's.
 
 ### Project config
 

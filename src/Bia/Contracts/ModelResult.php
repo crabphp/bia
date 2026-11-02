@@ -13,6 +13,7 @@ final readonly class ModelResult
      * @param array{input?: int, output?: int, cache_read?: int, total?: int} $usage Tokens, normalized.
      * @param list<ToolCall> $toolCalls
      * @param array<string, mixed> $raw
+     * @param string $model The model that answered, when another than the one asked for did.
      */
     public function __construct(
         public string $text,
@@ -21,5 +22,6 @@ final readonly class ModelResult
         public array $toolCalls = [],
         public array $raw = [],
         public string $reasoning = '',
+        public string $model = '',
     ) {}
 }

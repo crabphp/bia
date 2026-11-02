@@ -189,6 +189,12 @@ final readonly class Config
                 // Tokens the model can take in one request; compaction keeps below it.
                 'context_window' => 128_000,
             ],
+            'fallback' => [
+                // Models, provider/model, asked in order when the chosen one's provider fails.
+                'models' => [],
+                // Seconds a failed model rests before it is asked first again.
+                'cooldown' => 300.0,
+            ],
             'prompt' => [
                 'system' => 'You are Bia, a fast coding assistant. Be precise and concise.',
             ],
@@ -320,6 +326,24 @@ final readonly class Config
                 //     'timeout' => 3600.0,
                 //     'idle_timeout' => 120.0,
                 //     'context_window' => 128000,
+                // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Fallback
+                |--------------------------------------------------------------------------
+                |
+                | Models to fall back on, in order, when the chosen model's provider
+                | is rate limited, down or refuses its key. The request goes to the
+                | next at once; a failed model rests for the cooldown, then is asked
+                | first again. A model without a key is left out. For example:
+                | 'models' => ['anthropic/claude-sonnet-4-5', 'openai/gpt-5'].
+                |
+                */
+
+                // 'fallback' => [
+                //     'models' => [],
+                //     'cooldown' => 300.0,
                 // ],
 
                 /*
@@ -594,6 +618,13 @@ final readonly class Config
             if (isset($model[$key]) && (!is_int($model[$key]) && !is_float($model[$key]) || $model[$key] <= 0)) {
                 throw new \InvalidArgumentException("model.{$key} must be a positive number.");
             }
+        }
+        $fallback = $values['fallback'] ?? [];
+        if (!is_array($fallback) || !array_is_list($fallback['models'] ?? []) || array_filter((array) ($fallback['models'] ?? []), static fn (mixed $name): bool => !is_string($name) || $name === '') !== []) {
+            throw new \InvalidArgumentException('fallback.models must be a list of model names.');
+        }
+        if (isset($fallback['cooldown']) && (!is_int($fallback['cooldown']) && !is_float($fallback['cooldown']) || $fallback['cooldown'] < 0)) {
+            throw new \InvalidArgumentException('fallback.cooldown must be a number of seconds, zero or more.');
         }
         $tools = $values['tools'] ?? [];
         if (!is_array($tools)) {
