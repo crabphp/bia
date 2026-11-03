@@ -43,6 +43,7 @@ final readonly class Agent
 
     /**
      * @param list<float> $retryDelays Waits before each new try of a request that failed for a passing reason.
+     * @param array<string, mixed> $options Sent with every request, as the reasoning effort.
      */
     public function __construct(
         private Model $model,
@@ -57,6 +58,7 @@ final readonly class Agent
         private int $maxOutputLines = 2000,
         private ?string $outputs = null,
         private array $retryDelays = self::RETRY_DELAYS,
+        private array $options = [],
     ) {
         if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
@@ -101,7 +103,7 @@ final readonly class Agent
                 array_unshift($messages, Message::system($system));
             }
             try {
-                $result = $this->request(new ModelRequest($this->modelName, $messages, $definitions), $cancellation);
+                $result = $this->request(new ModelRequest($this->modelName, $messages, $definitions, $this->options), $cancellation);
             } catch (ModelException $error) {
                 // Our estimate was short: compact once and try the same turn again.
                 if (!$error->contextOverflow || $retried || $this->compactor === null) {

@@ -63,6 +63,20 @@ final class ModelTest extends TestCase
         $sent = $http->sent('POST https://proxy.example/v1/chat/completions')[0];
         $body = json_decode((string) $sent->getBody(), true);
         self::assertSame(['include_usage' => true], $body['stream_options']);
+        self::assertArrayNotHasKey('reasoning_effort', $body, 'No effort is sent unless one was chosen.');
+    }
+
+    public function testTheReasoningEffortIsSentWithTheRequest(): void
+    {
+        $http = new FakeClient([
+            'POST https://proxy.example/v1/chat/completions' => FakeClient::response(200, "data: [DONE]\n\n", ['Content-Type' => 'text/event-stream']),
+        ]);
+        $model = new OpenAiCompatibleModel($http, 'https://proxy.example/v1', 'key', 'test');
+
+        Loop::run(static fn ($cancellation) => $model->stream(new ModelRequest('test', [new Message('user', 'hi')], [], ['reasoning_effort' => 'high']), static function (): void {}, $cancellation));
+
+        $body = json_decode((string) $http->sent('POST https://proxy.example/v1/chat/completions')[0]->getBody(), true);
+        self::assertSame('high', $body['reasoning_effort']);
     }
 
     public function testAProviderErrorCarriesItsMessageAndSaysWhenTheContextIsFull(): void

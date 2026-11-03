@@ -33,9 +33,12 @@ final readonly class Config
      * Settings a project's `.agents/bia.json` may set, as dotted prefixes.
      */
     /** Settings chosen inside a conversation, kept in the user's config.php for the next ones. */
-    public const REMEMBERED_KEYS = ['model.name', 'tui.render'];
+    public const REMEMBERED_KEYS = ['model.name', 'model.reasoning_effort', 'tui.render'];
 
-    public const PROJECT_KEYS = ['model.name', 'model.context_window', 'prompt.system', 'permissions', 'tools', 'compaction'];
+    /** How hard a reasoning model thinks; default sends none and leaves it to the provider. */
+    public const EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+
+    public const PROJECT_KEYS = ['model.name', 'model.context_window', 'model.reasoning_effort', 'prompt.system', 'permissions', 'tools', 'compaction'];
 
     public static function load(?string $projectRoot = null, array $overrides = []): self
     {
@@ -87,6 +90,28 @@ final readonly class Config
         $merged = $this->merged;
         $merged['model']['name'] = $name;
         return self::make($merged, $this->explicit, $this->sources);
+    }
+
+    /**
+     * The same configuration with another reasoning effort, as `/effort`
+     * sets it: it beats a provider's, and stays when the model changes.
+     */
+    public function withEffort(string $effort): self
+    {
+        $merged = $this->merged;
+        $merged['model']['reasoning_effort'] = $effort;
+        $explicit = $this->explicit;
+        $explicit['reasoning_effort'] = $effort;
+        return self::make($merged, $explicit, $this->sources);
+    }
+
+    /**
+     * The reasoning effort to ask for, or null to send none.
+     */
+    public function effort(): ?string
+    {
+        $effort = $this->get('model.reasoning_effort');
+        return is_string($effort) && $effort !== 'default' ? $effort : null;
     }
 
     /**
@@ -211,6 +236,8 @@ final readonly class Config
                 'idle_timeout' => 120.0,
                 // Tokens the model can take in one request; compaction keeps below it.
                 'context_window' => 128_000,
+                // How hard a reasoning model thinks: none, minimal, low, medium, high, xhigh; default sends none.
+                'reasoning_effort' => 'default',
             ],
             'fallback' => [
                 // Models, provider/model, asked in order when the chosen one's provider fails.
@@ -340,6 +367,10 @@ final readonly class Config
                 | The context window is your model's, in tokens; compaction keeps the
                 | conversation below it.
                 |
+                | reasoning_effort is how hard a reasoning model thinks: none, minimal,
+                | low, medium, high or xhigh; default leaves it to the provider.
+                | /effort switches it.
+                |
                 */
 
                 // 'model' => [
@@ -351,6 +382,7 @@ final readonly class Config
                 //     'timeout' => 3600.0,
                 //     'idle_timeout' => 120.0,
                 //     'context_window' => 128000,
+                //     'reasoning_effort' => 'default',
                 // ],
 
                 /*
@@ -661,6 +693,10 @@ final readonly class Config
             if (isset($model[$key]) && (!is_int($model[$key]) && !is_float($model[$key]) || $model[$key] <= 0)) {
                 throw new \InvalidArgumentException("model.{$key} must be a positive number.");
             }
+        }
+        $effort = $model['reasoning_effort'] ?? 'default';
+        if ($effort !== null && !in_array($effort, self::EFFORTS, true)) {
+            throw new \InvalidArgumentException('model.reasoning_effort must be one of ' . implode(', ', self::EFFORTS) . '.');
         }
         $render = $values['tui']['render'] ?? 'normal';
         if (!in_array($render, ['normal', 'smooth', 'power'], true)) {

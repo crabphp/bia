@@ -89,6 +89,21 @@ final class ConfigTest extends TestCase
         }
     }
 
+    public function testTheReasoningEffortIsCheckedAndKeptAcrossAModelSwitch(): void
+    {
+        $config = Config::load($this->directory());
+        self::assertNull($config->effort(), 'By default no effort is sent.');
+
+        $high = $config->withEffort('high');
+        self::assertSame('high', $high->effort());
+        self::assertSame('high', $high->withModel('anthropic/claude-sonnet-4-5')->effort());
+        self::assertSame('low', Config::load($this->directory(), ['model' => ['reasoning_effort' => 'low']])->effort());
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('model.reasoning_effort');
+        $config->withEffort('extreme');
+    }
+
     public function testTheHomeDirectoryIsNeverTheProject(): void
     {
         $home = sys_get_temp_dir() . '/bia-home-' . bin2hex(random_bytes(4));

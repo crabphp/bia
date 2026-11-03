@@ -123,6 +123,7 @@ final class Application
               --model NAME       Select the model
               --base-url URL     Select an OpenAI-compatible API base URL
               --api-key KEY      Supply the API key for this invocation
+              --effort LEVEL     Reasoning effort: none, minimal, low, medium, high, xhigh
               --resume ID        Continue an existing session
               --yes              Approve tools whose permission is "ask"
               --json             Emit JSONL events
@@ -164,6 +165,7 @@ final class Application
         fwrite(STDOUT, sprintf("%-18s %s\n", 'permissions', json_encode($config->get('permissions'))));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'providers', implode(', ', array_keys((array) $config->get('providers', [])))));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model', (string) $config->get('model.name')));
+        fwrite(STDOUT, sprintf("%-18s %s\n", 'reasoning effort', (string) $config->get('model.reasoning_effort')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model provider', (string) $config->get('model.provider')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'model base URL', (string) $config->get('model.base_url')));
         fwrite(STDOUT, sprintf("%-18s %s\n", 'API key', self::hasKey($config) ? 'configured' : 'missing'));
@@ -324,7 +326,7 @@ final class Application
     private static function ask(array $words, array $options): int
     {
         $overrides = [];
-        foreach (['model' => 'name', 'base-url' => 'base_url', 'api-key' => 'api_key'] as $option => $key) {
+        foreach (['model' => 'name', 'base-url' => 'base_url', 'api-key' => 'api_key', 'effort' => 'reasoning_effort'] as $option => $key) {
             if (isset($options[$option])) {
                 $overrides['model'][$key] = $options[$option];
             }
@@ -566,6 +568,7 @@ final class Application
             maxOutputBytes: (int) $config->get('tools.output_bytes'),
             maxOutputLines: (int) $config->get('tools.output_lines'),
             outputs: $outputs,
+            options: ($effort = $config->effort()) !== null ? ['reasoning_effort' => $effort] : [],
         );
     }
 
@@ -648,7 +651,7 @@ final class Application
     {
         $options = [];
         $words = [];
-        $optionNames = ['model', 'base-url', 'api-key', 'resume'];
+        $optionNames = ['model', 'base-url', 'api-key', 'effort', 'resume'];
         $after = false;
         while ($arguments !== []) {
             $argument = array_shift($arguments);

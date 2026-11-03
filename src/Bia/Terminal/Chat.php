@@ -123,6 +123,7 @@ final class Chat
         );
         $this->commands = (new Commands())
             ->add('model', 'Switch model', $this->model(...), '[provider/model]')
+            ->add('effort', 'Reasoning effort', $this->effort(...), '[' . implode('|', Config::EFFORTS) . ']')
             ->add('resume', 'Resume a session', $this->resume(...), '[session-id]')
             ->add('new', 'Start a new session', $this->newSession(...))
             ->add('compact', 'Summarize the conversation', function (string $_): void {
@@ -291,12 +292,16 @@ final class Chat
             $this->region->folds($this->opened);
             return;
         }
-        if ($this->menuKind === 'model' || $this->menuKind === 'session') {
+        if (in_array($this->menuKind, ['model', 'session', 'effort'], true)) {
             $kind = $this->menuKind;
             $action = $this->menu?->key($key);
             if ($action === 'choose' && ($chosen = $this->menu?->selected()) !== null) {
                 $this->closeMenu();
-                $kind === 'model' ? $this->switchModel($chosen['value']) : $this->switchSession($chosen['value']);
+                match ($kind) {
+                    'model' => $this->switchModel($chosen['value']),
+                    'effort' => $this->switchEffort($chosen['value']),
+                    default => $this->switchSession($chosen['value']),
+                };
             } elseif ($action === 'cancel') {
                 $this->closeMenu();
             }
@@ -587,6 +592,48 @@ final class Chat
             $this->region->gap();
             $this->region->print(Style::error('bia: ' . $error->getMessage()) . "\n");
         }
+    }
+
+    private function effort(string $effort): void
+    {
+        $effort = strtolower(trim($effort));
+        if ($effort !== '') {
+            $this->switchEffort($effort);
+            return;
+        }
+        $current = (string) $this->config->get('model.reasoning_effort', 'default');
+        $items = array_map(static fn (string $effort): array => [
+            'value' => $effort,
+            'label' => $effort,
+            'hint' => $effort === $current ? 'current' : ($effort === 'default' ? "the provider's" : ''),
+        ], Config::EFFORTS);
+        $this->openMenu('effort', 'Reasoning effort', new SelectList($items, 10, $current));
+    }
+
+    private function switchEffort(string $effort): void
+    {
+        if (!in_array($effort, Config::EFFORTS, true)) {
+            $this->note('effort: one of ' . implode(', ', Config::EFFORTS));
+            return;
+        }
+        $config = $this->config->withEffort($effort);
+        $this->agent = ($this->makeAgent)($config);
+        $this->config = $config;
+        try {
+            Config::remember('model.reasoning_effort', $effort);
+            $this->note("effort: {$effort}");
+        } catch (\RuntimeException $error) {
+            $this->note("effort: {$effort}, for now · " . $error->getMessage());
+        }
+    }
+
+    /**
+     * The model as shown: its label, and the reasoning effort when one is set.
+     */
+    private function modelShown(): string
+    {
+        $effort = $this->config->effort();
+        return $this->config->modelLabel() . ($effort !== null ? " · {$effort}" : '');
     }
 
     private function newSession(string $_): void
@@ -984,7 +1031,7 @@ final class Chat
         }
         $rule = Style::dim(str_repeat('─', $columns));
         $cursor = null;
-        if (in_array($this->menuKind, ['confirm', 'model', 'session'], true)) {
+        if (in_array($this->menuKind, ['confirm', 'model', 'session', 'effort'], true)) {
             $lines[] = $rule;
             if ($this->menuKind === 'confirm') {
                 $lines[] = Style::warn(Style::truncate($this->menuTitle, $width));
@@ -1028,7 +1075,7 @@ final class Chat
     private function banner(int $width): string
     {
         $room = max(0, $width - 10);
-        $top = Style::bold('bia') . ' ' . Style::dim(Style::truncate("{$this->version} · {$this->config->modelLabel()}", max(0, $room - 4)));
+        $top = Style::bold('bia') . ' ' . Style::dim(Style::truncate("{$this->version} · {$this->modelShown()}", max(0, $room - 4)));
         $bottom = Style::dim(Style::truncate($this->place, $room));
         [$first, $second] = self::mascot();
         return $first . '   ' . $top . "\n" . $second . '   ' . $bottom . "\n\n";
@@ -1047,7 +1094,7 @@ final class Chat
 
     private function status(int $width): string
     {
-        $right = $this->config->modelLabel();
+        $right = $this->modelShown();
         $window = (int) $this->config->get('model.context_window');
         if ($this->contextTokens !== null && $window > 0) {
             $right .= ' · ' . self::thousands($this->contextTokens) . '/' . self::thousands($window)
