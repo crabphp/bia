@@ -69,14 +69,17 @@ final class Region implements Surface
     }
 
     /**
-     * The terminal keeps what was printed: a line is shown closed, and stays so.
+     * The terminal keeps what was printed: a line is shown closed, and stays
+     * so, each of its lines on one row, cut with … at the width there is now.
      */
     public function fold(string $closed, string $open): void
     {
         if (!$this->atLineStart()) {
             $this->print("\n");
         }
-        $this->print($closed . "\n");
+        $width = max(1, $this->terminal->columns() - 2 * Screen::MARGIN);
+        $lines = array_map(static fn (string $line): string => Style::cut($line, $width), explode("\n", $closed));
+        $this->print(implode("\n", $lines) . "\n");
     }
 
     public function folds(bool $open): void {}

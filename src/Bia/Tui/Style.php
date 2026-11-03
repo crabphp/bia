@@ -90,6 +90,43 @@ final class Style
     }
 
     /**
+     * A line of styled text cut to the given columns, ending in … when cut,
+     * its colour reset after; one that fits is left as it is.
+     */
+    public static function cut(string $line, int $width): string
+    {
+        if ($width <= 0) {
+            return '';
+        }
+        if (strlen($line) <= $width && !preg_match('/[^\x20-\x7e]/', $line)) {
+            return $line; // short plain text: the common case, measured for free
+        }
+        if (self::width($line) <= $width) {
+            return $line;
+        }
+        preg_match_all('/\e\[[0-9;?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\\\)?|\e.?|./us', $line, $tokens);
+        $out = '';
+        $used = 0;
+        $styled = false;
+        foreach ($tokens[0] as $token) {
+            if ($token[0] === "\e") {
+                if (preg_match('/^\e\[[0-9;]*m$/', $token) === 1) {
+                    $out .= $token;
+                    $styled = $token !== "\e[0m" && $token !== "\e[m";
+                }
+                continue;
+            }
+            $w = mb_strwidth($token, 'UTF-8');
+            if ($used + $w > $width - 1) {
+                break;
+            }
+            $out .= $token;
+            $used += $w;
+        }
+        return $out . '…' . ($styled ? "\e[0m" : '');
+    }
+
+    /**
      * Plain text split into rows of at most the given columns, by character,
      * as the terminal itself wraps it. An empty text is one empty row.
      *

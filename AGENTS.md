@@ -51,7 +51,8 @@ the rule here first, with the user's agreement.
   and highlighted.
 - A marker is one character and one space: `›` the user, `•` a tool call
   (its colour says how it went), `·` a note, `•` a bullet in an answer. Rows a line wraps into hang
-  under the text after its marker.
+  under the text after its marker; a closed tool call's lines do not wrap:
+  each takes one row, cut with `…`, and wraps in full once opened.
 
 **Space down**
 - Blocks are: the banner, the user's message, the answer's text, a run of

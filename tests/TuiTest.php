@@ -370,6 +370,23 @@ final class TuiTest extends TestCase
         self::assertSame('   b.php', self::screenRows($output, 8)[3], 'A click elsewhere changes nothing.');
     }
 
+    public function testAClosedToolCallTakesOneRowALineAndWrapsOnceOpened(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        $output = fopen('php://memory', 'w+');
+        $screen = new Screen(new Terminal(STDIN, $output, [20, 8]));
+        $screen->set(['input']);
+        $screen->fold("• Ran a very long command line\n  └ some long output here", "• Ran a very long command line\n  all");
+        $screen->flush();
+        self::assertSame([' • Ran a very long…', '   └ some long out…'], array_slice(self::screenRows($output, 8), 0, 2), 'Closed, cut at the width.');
+
+        $screen->folds(true);
+        $screen->flush();
+        self::assertSame([' • Ran a very long', '   command line', '   all'], array_slice(self::screenRows($output, 8), 0, 3), 'Opened, wrapped in full.');
+
+        self::assertSame("\e[2mab…\e[0m", Style::cut("\e[2mabcd\e[0m", 3), 'Cut text keeps its colour, then resets it.');
+    }
+
     public function testShadedRowsSpanTheScreenWithTheirPaddingInside(): void
     {
         EventLoop::install(new StreamSelectEventLoop());

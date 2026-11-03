@@ -293,9 +293,16 @@ final class Screen implements Surface
             return $rows;
         }
         if (!isset($this->wrapped[$line])) {
-            // A line that opens may hold several, as a tool's output does.
+            // A line that opens may hold several, as a tool's output does. Closed, each
+            // of them takes one row, cut with …; opened, each wraps in full.
+            $closed = isset($this->folds[$line]) && $this->done[$line] === $this->folds[$line][0];
+            $space = str_repeat(' ', self::MARGIN);
             $rows = [];
             foreach (explode("\n", $this->done[$line]) as $part) {
+                if ($closed) {
+                    $rows[] = $part === '' ? '' : $space . Style::cut($part, max(1, $this->width - 2 * self::MARGIN));
+                    continue;
+                }
                 array_push($rows, ...$this->wrap($part));
             }
             $this->wrapped[$line] = $rows;
