@@ -574,6 +574,7 @@ final class Chat
             } finally {
                 $this->turn = null;
                 $this->spinner = null;
+                $this->files->changed();
                 $this->stopTicker();
                 $this->lineStart();
                 $left = implode("\n\n", $this->steering);

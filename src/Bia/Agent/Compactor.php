@@ -70,14 +70,16 @@ final readonly class Compactor
         foreach ($context->items as [, $message]) {
             $estimate += self::size($message);
         }
+        // The latest reply the provider counted, then an estimate of what followed it: one pass back.
         $measured = null;
-        foreach ($context->items as $index => [, $message]) {
-            if ($index >= $context->sinceCompaction && $message->role === 'assistant' && isset($message->meta['usage']['input'])) {
-                $measured = (int) $message->meta['usage']['input'] + (int) ($message->meta['usage']['output'] ?? 0);
-                foreach (array_slice($context->items, $index + 1) as [, $later]) {
-                    $measured += self::size($later);
-                }
+        $after = 0;
+        for ($index = count($context->items) - 1; $index >= $context->sinceCompaction; $index--) {
+            $message = $context->items[$index][1];
+            if ($message->role === 'assistant' && isset($message->meta['usage']['input'])) {
+                $measured = (int) $message->meta['usage']['input'] + (int) ($message->meta['usage']['output'] ?? 0) + $after;
+                break;
             }
+            $after += self::size($message);
         }
         return max($estimate, $measured ?? 0);
     }

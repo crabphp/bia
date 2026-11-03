@@ -18,6 +18,8 @@ final class Files
     /** @var list<string>|null */
     private ?array $files = null;
     private bool $loading = false;
+    /** Whether files may have come or gone since they were listed, as after a turn. */
+    private bool $stale = false;
 
     public function __construct(
         private readonly ProcessRunner $runner,
@@ -34,21 +36,32 @@ final class Files
      */
     public function get(\Closure $loaded): ?array
     {
-        if ($this->files !== null) {
-            return $this->files;
-        }
-        if (!$this->loading) {
+        if (($this->files === null || $this->stale) && !$this->loading) {
+            // Listed afresh in the background; a stale list is shown meanwhile, never an empty one.
             $this->loading = true;
+            $this->stale = false;
             Task::spawn(EventLoop::current(), function () use ($loaded): void {
                 try {
-                    $this->files = $this->list();
+                    $files = $this->list();
                 } finally {
                     $this->loading = false;
                 }
-                $loaded();
+                if ($files !== $this->files) {
+                    $this->files = $files;
+                    $loaded();
+                }
             });
         }
-        return null;
+        return $this->files;
+    }
+
+    /**
+     * Files may have changed, as a turn's tools can make and remove them:
+     * they are listed again the next time they are asked for.
+     */
+    public function changed(): void
+    {
+        $this->stale = true;
     }
 
     /**

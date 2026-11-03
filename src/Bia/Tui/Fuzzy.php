@@ -16,11 +16,51 @@ final class Fuzzy
     public static function score(string $query, string $candidate): ?int
     {
         $query = strtolower(str_replace(' ', '', $query));
+        return $query === '' ? 0 : self::scoreLower($query, strtolower($candidate));
+    }
+
+    /**
+     * The matching items, best first; equal ones in their order.
+     *
+     * @template T
+     * @param list<T> $items
+     * @param \Closure(T): string $text
+     * @param list<string>|null $lower Each item's text lowercased already, for a long list asked often.
+     * @return list<T>
+     */
+    public static function sort(string $query, array $items, \Closure $text, ?int $limit = null, ?array $lower = null): array
+    {
+        $query = strtolower(str_replace(' ', '', $query));
         if ($query === '') {
-            return 0;
+            return $limit === null ? $items : array_slice($items, 0, $limit);
         }
-        $text = strtolower($candidate);
-        $length = strlen($text);
+        // Score and position in one integer, so that C sorts them: higher score first, then earlier.
+        $count = count($items);
+        $keys = [];
+        $first = $query[0];
+        foreach ($items as $index => $item) {
+            $candidate = $lower[$index] ?? strtolower($text($item));
+            if (!str_contains($candidate, $first)) {
+                continue;
+            }
+            $score = self::scoreLower($query, $candidate);
+            if ($score !== null) {
+                $keys[] = $score * $count + ($count - 1 - $index);
+            }
+        }
+        rsort($keys, SORT_NUMERIC);
+        if ($limit !== null) {
+            $keys = array_slice($keys, 0, $limit);
+        }
+        $sorted = [];
+        foreach ($keys as $key) {
+            $sorted[] = $items[$count - 1 - (($key % $count + $count) % $count)];
+        }
+        return $sorted;
+    }
+
+    private static function scoreLower(string $query, string $text): ?int
+    {
         $score = 0;
         $position = 0;
         $previous = -2;
@@ -47,28 +87,6 @@ final class Fuzzy
         if (str_contains($text, $query)) {
             $score += 10;
         }
-        return $score * 100 - min(99, $length);
-    }
-
-    /**
-     * The matching items, best first.
-     *
-     * @template T
-     * @param list<T> $items
-     * @param \Closure(T): string $text
-     * @return list<T>
-     */
-    public static function sort(string $query, array $items, \Closure $text, ?int $limit = null): array
-    {
-        $scored = [];
-        foreach ($items as $index => $item) {
-            $score = self::score($query, $text($item));
-            if ($score !== null) {
-                $scored[] = [$score, $index, $item];
-            }
-        }
-        usort($scored, static fn (array $a, array $b): int => [$b[0], $a[1]] <=> [$a[0], $b[1]]);
-        $sorted = array_column($scored, 2);
-        return $limit === null ? $sorted : array_slice($sorted, 0, $limit);
+        return $score * 100 - min(99, strlen($text));
     }
 }

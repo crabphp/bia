@@ -151,6 +151,9 @@ final class TuiTest extends TestCase
         self::assertSame('src/app.php', $sorted[0]);
         self::assertNotContains('README.md', $sorted);
         self::assertNull(Fuzzy::score('zz', 'src/app.php'));
+        $equal = ['b/x.php', 'a/x.php', 'c/x.php'];
+        self::assertSame($equal, Fuzzy::sort('x', $equal, static fn (string $file): string => $file), 'Equal scores keep their order.');
+        self::assertSame(['src/app.php'], Fuzzy::sort('APP', ['src/application/x.php', 'src/app.php'], static fn (string $file): string => $file, 1), 'Case is ignored; the limit keeps the best.');
     }
 
     public function testThinkingIsShownAsAPlayfulWordThatChanges(): void
