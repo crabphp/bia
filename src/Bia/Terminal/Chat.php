@@ -1125,7 +1125,7 @@ final class Chat
         } else {
             [$rows, [$row, $column]] = $this->editor->render(
                 $width,
-                $this->turn === null ? 'Ask anything · / commands · @ files' : 'Steer the turn',
+                $this->turn === null ? 'Cook anything · / commands · @ files' : 'Steer the turn',
             );
             // Suggestions open above the input, so the input does not move as they come and go.
             if ($this->menu !== null) {
