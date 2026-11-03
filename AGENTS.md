@@ -21,7 +21,8 @@ or load a terminal UI framework just to print help or stream a model reply.
   components take keys and return lines and never write to the terminal;
   only the two `Surface`s, `Screen` and `Region`, and `Terminal` do. Keep the
   theme minimal: dim, one accent, green and red, a grey shade behind the
-  user's messages and nothing else, for code only
+  user's messages, a dark green and a dark red behind a diff's lines added
+  and removed, and nothing else, for code only
   the accent, yellow and dim, and the spinner's beer in foam white, amber and grey,
   and power mode's landing flash in amber; nothing when `NO_COLOR` is set.
 - Rendering runs on every streamed line: keep `Markdown` and `Highlight` to
@@ -42,9 +43,10 @@ the rule here first, with the user's agreement.
 - Every row of output and of the live lines is set in by `Screen::MARGIN`
   (one column). The `Surface` applies it; a component never pads a line's
   start itself.
-- The user's message is the only shaded row: it and a rule (`─`) span the
-  full width, the message's margin inside its colour. Nothing else has a
-  background: not code, not a diff (its `+` and `-` are green and red).
+- The user's message is shaded: it and a rule (`─`) span the full width,
+  the message's margin inside its colour. A diff's lines added and removed
+  are on dark green and dark red from their `+` and `−` to the row's end
+  (the marks green and red). Nothing else has a background: not code.
 - What belongs under a line is indented two columns: a tool's output, a
   diff's lines, a running command's output, a group opened, a code block.
 - Code has no background: inline code is the accent, a code block is set in
@@ -60,8 +62,9 @@ the rule here first, with the user's agreement.
   line separates two blocks: start each with `Surface::gap()`, which never
   makes a second one and none at the top.
 - Nothing inside a block is blank, except the answer's own paragraph breaks;
-  an answer's leading blank lines are dropped. Shaded rows have no blank rows
-  of padding.
+  an answer's leading blank lines are dropped. The user's message has one
+  shaded row of padding above and below it, in colour only (with `NO_COLOR`
+  none: it would only be blank).
 
 **Words**
 - A line starts with a capital, unless it starts with a name: a tool, a

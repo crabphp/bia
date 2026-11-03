@@ -438,8 +438,8 @@ final class TuiRenderer implements Renderer
 
     /**
      * A diff under its call's title: each line numbered, added lines after
-     * a green +, removed after a red −, highlighted by the file's language,
-     * with no background; context plain.
+     * a green + on dark green, removed after a red − on dark red, to the
+     * row's end, highlighted by the file's language; context plain.
      *
      * @param array<mixed> $diff
      * @return list<string>
@@ -495,8 +495,9 @@ final class TuiRenderer implements Renderer
             $gutter = Style::dim(str_pad((string) $shown, 4, ' ', STR_PAD_LEFT));
             $lines[] = $gutter . match (true) {
                 !$tint => " {$mark} {$text}",
-                $mark === '+' => " \e[32m+\e[39m {$code}\e[0m",
-                $mark === '-' => " \e[31m−\e[39m {$code}\e[0m",
+                // From the mark to the row's end on a dark green or red: highlighting resets only the foreground.
+                $mark === '+' => "\e[48;5;22m \e[32m+\e[39m {$code}\e[K\e[0m",
+                $mark === '-' => "\e[48;5;52m \e[31m−\e[39m {$code}\e[K\e[0m",
                 default => "   {$code}\e[0m",
             };
         }

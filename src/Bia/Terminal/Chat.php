@@ -560,6 +560,10 @@ final class Chat
         foreach ($lines as $line) {
             $shown .= "\n" . Style::bar('  ' . $line);
         }
+        if (Style::color()) {
+            // A shaded row above and below, to give the words room; without colour they would only be blank.
+            $shown = Style::bar('') . "\n" . $shown . "\n" . Style::bar('');
+        }
         $this->region->print($shown . "\n");
         $this->region->gap();
     }
