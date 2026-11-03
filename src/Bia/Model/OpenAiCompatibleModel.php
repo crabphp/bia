@@ -176,6 +176,17 @@ final readonly class OpenAiCompatibleModel implements Model
                 continue;
             }
             $item = ['role' => $message->role, 'content' => $message->text];
+            if ($message->images !== []) {
+                // Text and images as parts; an image whose file is gone is said so, in words.
+                $parts = $message->text !== '' ? [['type' => 'text', 'text' => $message->text]] : [];
+                foreach ($message->images as $image) {
+                    $url = $image->dataUrl();
+                    $parts[] = $url !== null
+                        ? ['type' => 'image_url', 'image_url' => ['url' => $url]]
+                        : ['type' => 'text', 'text' => '[an image no longer kept]'];
+                }
+                $item['content'] = $parts;
+            }
             if ($message->role === 'assistant' && $message->toolCalls !== []) {
                 $item['content'] = $message->text === '' ? null : $message->text;
                 $item['tool_calls'] = array_map(static fn (ToolCall $call): array => [

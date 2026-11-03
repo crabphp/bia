@@ -34,7 +34,9 @@ use Bia\Tool\ProcessRunner;
 use Bia\Tool\ReadFileTool;
 use Bia\Tool\Registry;
 use Bia\Tool\SearchTool;
+use Bia\Tool\ShellOutputTool;
 use Bia\Tool\ShellTool;
+use Bia\Tool\Shells;
 use Bia\Tool\Workspace;
 use Bia\Tool\WriteFileTool;
 use Bia\Tui\Region;
@@ -386,6 +388,7 @@ final class Application
                 pickSession: $resume === '',
                 mcp: $mcp,
                 skills: Catalog::for((string) getenv('HOME'), $workspace->root()),
+                images: new \Bia\Terminal\Images($runner, dirname($config->databasePath()) . '/images', $workspace->root()),
             );
             $loop->execute($chat->run(...));
             return 0;
@@ -520,7 +523,8 @@ final class Application
             ->add(new EditTool($workspace))
             ->add(new WriteFileTool($workspace))
             ->add(new ApplyPatchTool($workspace, $runner))
-            ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout')))
+            ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout'), $shells = new Shells($runner)))
+            ->add(new ShellOutputTool($shells))
             ->add(new GitDiffTool($workspace, $runner))
             // Skills, read again each step; no tool at all while there are none.
             ->from(static function () use ($workspace): array {

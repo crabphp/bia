@@ -11,25 +11,68 @@ use Bia\Contracts\ToolResult;
 use Crab\Engine\Async\Cancellation;
 
 /**
- * Runs a shell command in the workspace. Not a login shell: loading the
- * user's profile costs tens of milliseconds a call and varies by machine.
+ * Runs a command in bash (sh where there is none) in the workspace.
+ *
+ * Each call is a fresh, non-interactive shell: at the workspace root, or a
+ * workdir inside it; stdin empty; pagers, editors and git's prompts turned
+ * off, so nothing waits for a terminal that is not there. Not a login
+ * shell: the user's profile costs tens of milliseconds a call and varies by
+ * machine. Nothing carries over between calls, so calls stay independent.
+ *
+ * Output is standard output and error together, as a terminal shows them,
+ * without colour codes or progress redrawn over itself. The agent cuts what
+ * is long and saves it whole; the cap here only guards memory. A command
+ * still running at its timeout is stopped; one meant to keep running goes
+ * in the background, and shell_output reads it.
  */
 final readonly class ShellTool implements Tool
 {
+    /** The most output kept: past it the command is stopped. Only a guard; the agent cuts long output. */
+    public const MOST_BYTES = 16 * 1024 * 1024;
+
+    /** The longest a command may be given, in seconds. */
+    public const MOST_SECONDS = 600.0;
+
+    /** Set for every command, so none waits on a terminal: pagers print, editors and prompts give up. */
+    public const ENVIRONMENT = [
+        'PAGER' => 'cat',
+        'GIT_PAGER' => 'cat',
+        'GIT_EDITOR' => 'true',
+        'GIT_TERMINAL_PROMPT' => '0',
+    ];
+
+    private string $shell;
+
     public function __construct(
         private Workspace $workspace,
         private ProcessRunner $process,
         private float $defaultTimeout = 120.0,
-        private int $maxBytes = 1_048_576,
-    ) {}
+        private ?Shells $shells = null,
+        ?string $shell = null,
+    ) {
+        $this->shell = $shell ?? self::findShell();
+    }
 
     public function definition(): ToolDefinition
     {
-        return new ToolDefinition('shell', 'Run a shell command in the workspace.', [
+        $shell = basename($this->shell);
+        $timeout = (int) $this->defaultTimeout;
+        $background = $this->shells !== null
+            ? ' Anything meant to keep running (a server, a watcher) goes in the background: background: true starts it and returns at once with its number, and shell_output reads what it prints or stops it.'
+            : '';
+        return new ToolDefinition('shell', <<<TEXT
+            Run a command in {$shell} in the workspace, for builds, tests, git and other programs. Returns its output (standard output and error together) and, when it fails, its exit code.
+
+            Each call is a fresh, non-interactive shell: it starts at the workspace root, or at workdir, with stdin empty; a cd, variables and aliases do not carry over to the next call, so give workdir instead of cd. Use read_file, search and list_files rather than cat, grep and ls. Pass non-interactive flags: nothing can answer a prompt. Long output is cut, and the note says where it was saved whole.
+
+            A command is stopped after timeout seconds (default {$timeout}, at most 600).{$background}
+            TEXT, [
             'type' => 'object',
             'properties' => [
-                'command' => ['type' => 'string'],
-                'timeout' => ['type' => 'number', 'minimum' => 0.1, 'maximum' => 600, 'description' => 'Seconds before the command is killed.'],
+                'command' => ['type' => 'string', 'description' => 'The command line, as typed at a prompt.'],
+                'workdir' => ['type' => 'string', 'description' => 'Where to run it, relative to the workspace root. Default: the root.'],
+                'timeout' => ['type' => 'number', 'minimum' => 1, 'maximum' => self::MOST_SECONDS, 'description' => "Seconds before it is stopped. Default {$timeout}."],
+                ...($this->shells !== null ? ['background' => ['type' => 'boolean', 'description' => 'Start it and return at once, for a server or a watcher; read it with shell_output.']] : []),
             ],
             'required' => ['command'],
             'additionalProperties' => false,
@@ -41,20 +84,75 @@ final readonly class ShellTool implements Tool
         $cancellation?->throwIfCancelled();
         $command = trim((string) ($arguments['command'] ?? ''));
         if ($command === '') {
-            return new ToolResult('Shell command must not be empty.', false);
+            return new ToolResult('The command is empty.', false);
         }
-        $timeout = max(0.1, min(600.0, (float) ($arguments['timeout'] ?? $this->defaultTimeout)));
-        $result = $this->process->run(['/bin/sh', '-c', $command], $this->workspace->root(), $timeout, $this->maxBytes, cancellation: $cancellation, output: $context->output);
-        if ($result->timedOut) {
-            return new ToolResult($result->output . "\n[command timed out after {$timeout}s]", false, ['exit_code' => null]);
+        $directory = $this->workspace->root();
+        $workdir = trim((string) ($arguments['workdir'] ?? ''));
+        if ($workdir !== '' && $workdir !== '.') {
+            $directory = $this->workspace->path($workdir);
+            if (!is_dir($directory)) {
+                return new ToolResult("workdir {$workdir} is not a directory in the workspace.", false);
+            }
         }
-        if ($result->truncated) {
-            return new ToolResult($result->output . "\n[output passed {$this->maxBytes} bytes; command stopped]", false, ['exit_code' => null]);
+        if (($arguments['background'] ?? false) === true && $this->shells !== null) {
+            // Its stdin empty from the start, as a command in the foreground has it.
+            $id = $this->shells->start([$this->shell, '-c', "exec </dev/null\n" . $command], $command, $directory, self::ENVIRONMENT);
+            return new ToolResult("Started in the background as shell {$id}. Read its output with shell_output (id {$id}); stop it with kill: true.", true, ['background' => $id]);
         }
-        $text = $result->output;
-        if (!$result->ok()) {
-            $text .= ($text === '' || str_ends_with($text, "\n") ? '' : "\n") . "[exit code {$result->exitCode}]";
+        $timeout = max(1.0, min(self::MOST_SECONDS, (float) ($arguments['timeout'] ?? $this->defaultTimeout)));
+        $result = $this->process->run(
+            [$this->shell, '-c', $command],
+            $directory,
+            $timeout,
+            self::MOST_BYTES,
+            cancellation: $cancellation,
+            output: $context->output,
+            environment: self::ENVIRONMENT,
+        );
+        $text = self::clean($result->output);
+        $end = match (true) {
+            $result->timedOut => "[stopped after {$timeout}s, its timeout"
+                . ($this->shells !== null ? '; a server or watcher belongs in the background: true' : '') . ']',
+            $result->truncated => '[stopped: its output passed ' . intdiv(self::MOST_BYTES, 1024 * 1024) . ' MB]',
+            $result->exitCode === null => '[killed by a signal]',
+            $result->exitCode !== 0 => "[exit code {$result->exitCode}]",
+            default => null,
+        };
+        if ($end !== null) {
+            $text .= ($text === '' || str_ends_with($text, "\n") ? '' : "\n") . $end;
         }
-        return new ToolResult($text, $result->ok(), ['exit_code' => $result->exitCode]);
+        return new ToolResult($text, $end === null, ['exit_code' => $result->exitCode]);
+    }
+
+    /**
+     * Output as the model should read it: colour and other terminal codes
+     * gone, and a line redrawn over itself, as a progress bar is, only as it
+     * was last drawn.
+     */
+    public static function clean(string $output): string
+    {
+        $output = (string) preg_replace('/\e\[[0-9;?]*[ -\/]*[@-~]|\e\][^\a\e]*(?:\a|\e\\\\)|\e[()][0-9A-Za-z]|\e[=>78]/', '', $output);
+        $output = str_replace("\r\n", "\n", $output);
+        if (str_contains($output, "\r")) {
+            // Each line as last drawn: the last of its redraws with something in it.
+            $output = implode("\n", array_map(static function (string $line): string {
+                $drawn = array_values(array_filter(explode("\r", $line), static fn (string $part): bool => $part !== ''));
+                return $drawn === [] ? '' : $drawn[count($drawn) - 1];
+            }, explode("\n", $output)));
+        }
+        return $output;
+    }
+
+    /**
+     * bash, where it is; sh otherwise.
+     */
+    private static function findShell(): string
+    {
+        foreach (explode(PATH_SEPARATOR, (string) getenv('PATH')) as $directory) {
+            if ($directory !== '' && is_file($directory . '/bash') && is_executable($directory . '/bash')) {
+                return $directory . '/bash';
+            }
+        }
+        return is_executable('/bin/bash') ? '/bin/bash' : '/bin/sh';
     }
 }

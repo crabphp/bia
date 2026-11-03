@@ -20,7 +20,7 @@ final class SystemPrompt
 
         - Find code with search and list_files; read a file before you change it.
         - Change existing files with edit, copying old_text exactly from what you read; use write_file only for new files or full rewrites.
-        - Run builds, tests and other commands with shell. Prefer non-interactive flags; there is no terminal to answer prompts.
+        - Run builds, tests and other commands with shell. Each call starts fresh at the workspace root: give workdir rather than cd. Prefer non-interactive flags; there is no terminal to answer prompts. Start servers and watchers with background: true and read them with shell_output.
         - Read-only tools can be called several at once in one turn.
         - Long output is cut; the note says where the full output was saved and read_file can page through it.
         - Keep answers short. Say what you changed and what you verified; do not paste files back.

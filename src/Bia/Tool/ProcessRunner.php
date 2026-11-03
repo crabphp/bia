@@ -33,6 +33,7 @@ final readonly class ProcessRunner
     /**
      * @param list<string> $command
      * @param (\Closure(string): void)|null $output Told its output as it comes.
+     * @param array<string, string> $environment Variables of its own, over the filtered environment.
      */
     public function run(
         array $command,
@@ -42,11 +43,12 @@ final readonly class ProcessRunner
         ?string $stdin = null,
         ?Cancellation $cancellation = null,
         ?\Closure $output = null,
+        array $environment = [],
     ): SubprocessResult {
         return Subprocess::run(
             $command,
             directory: $cwd,
-            environment: $this->environment,
+            environment: [...$this->environment, ...$environment],
             input: $stdin,
             timeout: $timeout,
             maxBytes: $maxBytes,

@@ -64,13 +64,14 @@ final readonly class Agent
     }
 
     /**
-     * @param \Closure(): list<string>|null $steer Asked after each tool step for what the user wrote
+     * @param \Closure(): list<string|Message>|null $steer Asked after each tool step for what the user wrote
      *        meanwhile: each message joins the conversation there, before the model's next step.
+     * @param list<\Bia\Contracts\Image> $images The prompt's images.
      */
-    public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null): ModelResult
+    public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null, array $images = []): ModelResult
     {
         $entries = $this->sessions->path($sessionId);
-        $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt)));
+        $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt), $images));
         $retried = false;
         $stepped = false;
 
@@ -81,7 +82,9 @@ final readonly class Agent
             if ($stepped && $steer !== null) {
                 // After the tool results, where a user message may follow them: the user steers.
                 foreach ($steer() as $message) {
-                    $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($message)));
+                    $entries[] = $this->sessions->append($sessionId, $message instanceof Message
+                        ? Message::user(self::clean($message->text), $message->images)
+                        : Message::user(self::clean($message)));
                 }
             }
             $stepped = false;

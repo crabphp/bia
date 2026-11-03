@@ -332,7 +332,8 @@ final class Screen implements Surface
      */
     private static function hang(string $line): int
     {
-        return preg_match('/^(\s*(?:› |• |\d+\. |│ ))/u', Style::strip($line), $m) === 1 ? mb_strwidth($m[1], 'UTF-8') : 0;
+        // After a marker, under its text; a line set in, as a tool's output, under where it starts.
+        return preg_match('/^(\s*(?:› |• |└ |\d+\. |│ )|\s+(?=\S))/u', Style::strip($line), $m) === 1 ? mb_strwidth($m[1], 'UTF-8') : 0;
     }
 
     /**

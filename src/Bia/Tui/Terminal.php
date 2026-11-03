@@ -86,7 +86,7 @@ final class Terminal
             throw new \RuntimeException('Bia could not take over the terminal.');
         }
         $this->saved = $saved;
-        shell_exec('stty -icanon -echo -isig -icrnl -ixon min 1 time 0 < /dev/tty 2>/dev/null');
+        shell_exec('stty -icanon -echo -isig -iexten -icrnl -ixon min 1 time 0 < /dev/tty 2>/dev/null');
         stream_set_blocking($this->input, false);
         $this->write("\e[?2004h");
         register_shutdown_function($this->leave(...));

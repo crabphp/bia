@@ -45,7 +45,7 @@ the engine, kept able to move into the framework when a second user needs it:
 | `Terminal` | Raw mode with `stty` on /dev/tty (Ctrl-C and Ctrl-Z arrive as keys), bracketed paste, the alternate screen with mouse-wheel reports, size, keys read on the event loop; gives the terminal back as found, on exit too |
 | `Keys`, `Key` | Turns terminal bytes into keys, pastes and mouse-wheel turns |
 | `Surface` | Where the chat draws: output above, live lines below. Two kinds: |
-| `Screen` | Fullscreen, the default: the alternate screen, text set in by a one-column margin on each side while a shaded row (the user's message, the one there is) spans the screen with that space inside its colour, wrapped between words (a row after a leading marker such as `›` or `•` hangs under its text) and scrolled by Bia (wheel, PageUp/PageDown) with the live lines kept at the bottom; only changed rows are written, at most once a frame (1/60 s), in one synchronized write; dragging selects output, drawn in inverse, and copies it on release through the terminal (OSC 52), wrapped lines joined again; the output is printed on the main screen on leaving |
+| `Screen` | Fullscreen, the default: the alternate screen, text set in by a one-column margin on each side while a shaded row (the user's message, the one there is) spans the screen with that space inside its colour, wrapped between words (a row after a leading marker such as `›`, `•` or `└`, or set in, hangs under its text) and scrolled by Bia (wheel, PageUp/PageDown) with the live lines kept at the bottom; only changed rows are written, at most once a frame (1/60 s), in one synchronized write; dragging selects output, drawn in inverse, and copies it on release through the terminal (OSC 52), wrapped lines joined again; the output is printed on the main screen on leaving |
 | `Region` | Inline, with `tui.fullscreen` false: finished output goes into the terminal's own scrollback, only the live lines at the bottom are redrawn, at most once a frame, and the screen is drawn afresh when a resize changes the width |
 | `Editor` | Multi-line input with history, word moves and paste |
 | `SelectList` | A filtered list for pickers and completion menus; keys in, lines out |
@@ -109,6 +109,15 @@ skill in a line; it gives a skill's instructions, or a file from its folder
 alone. The registry asks for it each step, so skills come and go with their
 folders, and with none there is no tool. A project's settings are in
 `.agents/bia.json`, beside its skills.
+
+## Images
+
+A user message may carry images (`Contracts\Image`: a file and its type).
+`Terminal\Images` gets them: from the clipboard with the desktop's tool,
+through `ProcessRunner`, as Ctrl-V; or from a pasted path to an image file.
+Each is kept under the state directory, named by its content; the session
+stores the path, never the bytes, and the adapter sends each as an
+`image_url` data part, or says in words that one is no longer kept.
 
 ## Sessions
 

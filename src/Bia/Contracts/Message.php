@@ -8,7 +8,8 @@ namespace Bia\Contracts;
  * One message of a conversation, in no provider's format. Adapters turn it
  * into their wire format; the session stores it as it is.
  *
- * - user and system: text.
+ * - user: text, and the images it carries.
+ * - system: text.
  * - assistant: text, the reasoning it showed, and the tool calls it made.
  * - tool: the result of one tool call (toolCallId, toolName, ok, text).
  */
@@ -20,6 +21,7 @@ final readonly class Message
      * @param 'system'|'user'|'assistant'|'tool' $role
      * @param list<ToolCall> $toolCalls
      * @param array<string, mixed> $meta Usage, finish reason, a tool's data: kept, never sent.
+     * @param list<Image> $images A user message's images.
      */
     public function __construct(
         public string $role,
@@ -30,15 +32,19 @@ final readonly class Message
         public ?string $toolName = null,
         public bool $ok = true,
         public array $meta = [],
+        public array $images = [],
     ) {
         if (!in_array($role, self::ROLES, true)) {
             throw new \InvalidArgumentException("Unknown message role \"{$role}\".");
         }
     }
 
-    public static function user(string $text): self
+    /**
+     * @param list<Image> $images
+     */
+    public static function user(string $text, array $images = []): self
     {
-        return new self('user', $text);
+        return new self('user', $text, images: $images);
     }
 
     public static function system(string $text): self
@@ -74,6 +80,9 @@ final readonly class Message
         if ($this->meta !== []) {
             $data['meta'] = $this->meta;
         }
+        if ($this->images !== []) {
+            $data['images'] = array_map(static fn (Image $image): array => $image->toArray(), $this->images);
+        }
         return $data;
     }
 
@@ -91,6 +100,7 @@ final readonly class Message
             isset($data['tool_name']) ? (string) $data['tool_name'] : null,
             (bool) ($data['ok'] ?? true),
             is_array($data['meta'] ?? null) ? $data['meta'] : [],
+            array_map(Image::fromArray(...), array_values(array_filter(is_array($data['images'] ?? null) ? $data['images'] : [], 'is_array'))),
         );
     }
 }

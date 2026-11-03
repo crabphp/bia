@@ -141,10 +141,14 @@ the bottom of the screen is live:
 ```text
 › fix the failing test
 
-✓ read_file tests/CalcTest.php
-✓ edit src/Calc.php
-✓ shell composer test
-  OK (12 tests, 30 assertions)
+• Explored
+  └ Read CalcTest.php, Calc.php
+• Edited src/Calc.php (+1 −1)
+  └   12 - return $a - $b;
+      12 + return $a + $b;
+• Ran composer test
+  └ OK (12 tests, 30 assertions)
+
 Fixed: add() subtracted.
 ▀▀▀) Thinking… 4s · esc to stop
   ↳ now update the changelog
@@ -204,6 +208,18 @@ Resuming shows the end of the conversation as it was, then goes on.
 Without a terminal, or with `TERM=dumb`, Bia falls back to a plain `>`
 prompt.
 
+### Images
+
+Show the model a screenshot: **Ctrl-V** takes the image on the clipboard,
+and pasting or dropping an image file (PNG, JPEG, GIF or WebP) on the
+terminal attaches the image rather than its path. Each is an `[Image #1]` in
+the input; delete it and the image goes too. The model needs to read images.
+
+A terminal passes only text, so Ctrl-V reads the clipboard of the machine
+Bia runs on, with `wl-paste`, `xclip` or macOS's own. Over SSH there is none:
+paste the path of an image on that machine instead. Images are kept under
+`~/.local/state/bia/images`, and the session refers to them there.
+
 ### What you see
 
 Answer text streams to standard output. Each tool call is one line on standard
@@ -218,12 +234,14 @@ it failed:
   Tests: 41, Assertions: 97, Failures: 1.
 ```
 
-In a conversation, a command's output streams below it while it runs. Once
-done, the calls that worked in a row fold into one line (`✓ Ran 3 commands,
-read 7 files`), so the answer stays in view; a call that failed shows why, and
-an edit the first lines of its diff. Click a line to open it to every call's
-whole output, or the whole diff, and click again to close it; Ctrl-O opens or
-closes them all.
+In a conversation, tool calls are shown as Codex and Claude Code show them:
+a row each, in plain words (`• Ran composer test`, `• Edited src/App.php
+(+6 −2)`), with what came of it under it: a command's last lines, a
+failure's reason, an edit's diff with line numbers, and `… +N lines` for the
+rest. Reads, listings and searches in a row are one `• Explored` block. A
+command's output streams under it while it runs. The dot is green when a
+call worked and red when it failed. Click a row to open it in full, and click
+again to close it; Ctrl-O opens or closes them all.
 
 ### Scripting
 

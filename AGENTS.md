@@ -49,8 +49,8 @@ the rule here first, with the user's agreement.
   diff's lines, a running command's output, a group opened, a code block.
 - Code has no background: inline code is the accent, a code block is set in
   and highlighted.
-- A marker is one character and one space: `›` the user, `✓` done, `✗`
-  failed, `·` running or a note, `•` a bullet. Rows a line wraps into hang
+- A marker is one character and one space: `›` the user, `•` a tool call
+  (its colour says how it went), `·` a note, `•` a bullet in an answer. Rows a line wraps into hang
   under the text after its marker.
 
 **Space down**
@@ -64,19 +64,22 @@ the rule here first, with the user's agreement.
 
 **Words**
 - A line starts with a capital, unless it starts with a name: a tool, a
-  command, a path, a model (`✓ Ran 3 commands, read 7 files`, but
-  `✓ shell composer test`).
+  command, a path, a model (`Ran composer test`, `Explored`).
 - Terse: counts and names, not sentences; dim for what is secondary.
 
-**Tool calls**
-- A call's line is its mark in colour (`✓` green, `✗` red, `·` dim), then
-  its words dim: the answer is what is read first.
-- Running: its name and subject, then the last three lines of its output,
-  live, under a `…` when there is more.
-- Done: calls that worked, in a row, fold into one line of counts, even a
-  single one (`✓ Ran 1 command`). A failure
-  shows its last three lines; an edit, the first ten lines of its diff.
-- Everything folded opens in place with a click, and all of it with Ctrl-O.
+**Tool calls**, as Codex and Claude Code show them
+- A call is a row: a dot (`•` dim running, green done, red failed), then
+  what was done in plain words, dim: `Ran composer test`, `Edited
+  src/App.php (+6 −2)`, `Called github · search`; never a tool's own name.
+- What came of it hangs under it on a `└`, set in two columns: a
+  command's last two lines, a tool's first two, a failure's last three,
+  an edit's first ten diff lines numbered in the new file; then
+  `… +N lines (ctrl+o to expand)` for the rest, and `(no output)` for none.
+- Reads, listings and searches in a row are one block, `• Explored`
+  (`Exploring` while one runs), a line under it for each kind: the files
+  read, the places listed, each search.
+- Running: `• Running …` with its last three lines, live.
+- Every row opens in place with a click, and all of them with Ctrl-O.
 
 **Render modes**
 - `normal` shows text as it arrives; `smooth` paces it through `Tui\Pacer`;

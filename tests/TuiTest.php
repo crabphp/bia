@@ -497,66 +497,79 @@ final class TuiTest extends TestCase
         self::assertSame([' Title', ' next bold'], array_slice(self::screenRows($output, 6), 0, 2));
     }
 
-    public function testACallShowsItsOutputWhileItRunsThenJoinsTheOthers(): void
+    public function testExploringIsOneBlockAndACommandIsARowOfItsOwn(): void
     {
         EventLoop::install(new StreamSelectEventLoop());
         $output = fopen('php://memory', 'w+');
-        $screen = new Screen(new Terminal(STDIN, $output, [60, 10]));
+        $screen = new Screen(new Terminal(STDIN, $output, [70, 12]));
         $renderer = new TuiRenderer($screen);
-        $read = new ToolCall('1', 'read_file', ['path' => 'a.php']);
-        $renderer->running($read, '');
-        $renderer->tool($read, new ToolResult('a'));
-        $screen->flush();
-        self::assertSame(' ✓ Read 1 file', self::screenRows($output, 10)[0], 'Even one call done is a count; what it read, it opens to.');
-
-        $shell = new ToolCall('2', 'shell', ['command' => 'composer test']);
+        foreach ([['1', 'read_file', ['path' => 'src/a.php']], ['2', 'search', ['pattern' => 'gap', 'path' => 'src']], ['3', 'read_file', ['path' => 'src/b.php']]] as [$id, $name, $arguments]) {
+            $call = new ToolCall($id, $name, $arguments);
+            $renderer->running($call, '');
+            $renderer->tool($call, new ToolResult('x'));
+        }
+        $shell = new ToolCall('4', 'shell', ['command' => 'composer test']);
         $renderer->running($shell, '');
-        $renderer->running($shell, "one\ntwo\nthree\nfour\nfive\nsix\n");
+        $renderer->running($shell, "one\ntwo\nthree\nfour\nfive\n");
         $screen->flush();
         self::assertSame([
-            ' ✓ Read 1 file',
-            ' · shell composer test',
-            '   …',
-            '   four',
-            '   five',
-            '   six',
-        ], array_slice(self::screenRows($output, 10), 0, 6), 'While it runs, the end of its output is shown, under a mark for what is above.');
+            ' • Explored',
+            '   └ Read a.php, b.php',
+            '     Searched "gap" in src',
+            ' • Running composer test',
+            '   └ … +2 lines',
+            '     three',
+            '     four',
+            '     five',
+        ], array_slice(self::screenRows($output, 12), 0, 8), 'While a command runs, its end is shown live, under what was explored.');
 
-        $renderer->tool($shell, new ToolResult("one\ntwo\nthree\nfour\nfive\nsix"));
-        $search = new ToolCall('3', 'search', ['pattern' => 'foo']);
-        $renderer->running($search, '');
-        $renderer->tool($search, new ToolResult('c'));
-        $screen->flush();
-        self::assertSame([' ✓ Read 1 file, ran 1 command, searched 1', ''], array_slice(self::screenRows($output, 10), 0, 2), 'Done, it joins the calls before it, its output folded away.');
-
-        $gone = new ToolCall('4', 'read_file', ['path' => 'gone.php']);
+        $renderer->tool($shell, new ToolResult("one\ntwo\nthree\nfour\nOK (5 tests)"));
+        $gone = new ToolCall('5', 'shell', ['command' => 'ls nope']);
         $renderer->running($gone, '');
-        $renderer->tool($gone, new ToolResult('No such file.', false));
+        $renderer->tool($gone, new ToolResult("ls: cannot access 'nope'\n[exit code 2]", false));
         $renderer->finish(new ModelResult(''));
         $screen->flush();
         self::assertSame([
-            ' ✓ Read 1 file, ran 1 command, searched 1',
-            ' ✗ read_file gone.php',
-            '   No such file.',
-        ], array_slice(self::screenRows($output, 10), 0, 3), 'A failure is shown on its own, with why.');
+            ' • Explored',
+            '   └ Read a.php, b.php',
+            '     Searched "gap" in src',
+            ' • Ran composer test',
+            '   └ … +3 lines (ctrl+o to expand)',
+            '     four',
+            '     OK (5 tests)',
+            ' • Ran ls nope',
+            "   └ ls: cannot access 'nope'",
+            '     [exit code 2]',
+        ], array_slice(self::screenRows($output, 12), 0, 10), 'Done: the block, then each command with the end of its output, a failure with why.');
 
-        $screen->pointer('down', 3, 1);
-        $screen->pointer('up', 3, 1);
+        $screen->pointer('down', 4, 1);
+        $screen->pointer('up', 4, 1);
         $screen->flush();
-        self::assertSame(['   one', '   two', '   three', '   four', '   five', '   six', ' ✓ search foo', '   c', ' ✗ read_file gone.php', '   No such file.'], self::screenRows($output, 10), 'Opened, the group shows each call with its whole output.');
+        self::assertContains(' • Searched "gap" in src', self::screenRows($output, 12), 'Opened, the block shows each call with what it gave.');
     }
 
     public function testAToolCallShowsTheChangeItMade(): void
     {
-        $diff = Diff::between("a\nb\nc\nd\ne\nf\n", "a\nB\nc\nd\ne\nF\n");
-        self::assertSame(['@1', ' a', '-b', '+B', ' c', '@5', ' e', '-f', '+F'], $diff, 'Changes far apart are hunks of their own, with a line around each.');
-        $lines = TuiRenderer::toolLines(new ToolCall('1', 'edit', ['path' => 'x.php']), true, 'Edited x.php', ['diff' => $diff]);
-        self::assertSame(['✓ edit x.php', '    a', '  - b', '  + B', '    c', '  ⋯', '    e', '  - f', '  + F'], $lines);
+        $diff = Diff::between("a\nb\nc\nd\ne\nf\n", "a\nB\nB2\nc\nd\ne\nF\n");
+        self::assertSame(['@1', ' a', '-b', '+B', '+B2', ' c', '@5', ' e', '-f', '+F'], $diff, 'Changes far apart are hunks of their own, with a line around each.');
+        $lines = array_map([Style::class, 'strip'], TuiRenderer::toolLines(new ToolCall('1', 'edit', ['path' => 'x.txt']), true, 'Edited x.txt', ['diff' => $diff]));
+        self::assertSame([
+            '• Edited x.txt (+3 −2)',
+            '  └    1   a',
+            '       2 - b',
+            '       2 + B',
+            '       3 + B2',
+            '       4   c',
+            '       ⋮',
+            '       6   e',
+            '       7 - f',
+            '       7 + F',
+        ], $lines, 'Each line numbered in the new file, the lines added before a hunk moving it on.');
         self::assertSame(['@1', ' a', '-b', '+B', ' c', ' d', '+e'], Diff::between("a\nb\nc\nd\n", "a\nB\nc\nd\ne\n"), 'Changes close together share a hunk.');
 
         $long = Diff::between('', implode("\n", range(1, 100)));
         self::assertSame('…' . (100 - Diff::LIMIT), end($long), 'A big change is cut, and what is left is counted.');
-        self::assertStringEndsWith('… 90 more', end(...[TuiRenderer::toolLines(new ToolCall('2', 'write_file', []), true, '', ['diff' => $long])]));
+        self::assertStringEndsWith('… +90 lines (ctrl+o to expand)', Style::strip(end(...[TuiRenderer::toolLines(new ToolCall('2', 'write_file', ['path' => 'n.txt']), true, '', ['diff' => $long])])));
 
         self::assertSame(['=src/a.php', '@3', ' keep', '-old', '+new'], Diff::ofPatch("diff --git a/src/a.php b/src/a.php\n--- a/src/a.php\n+++ b/src/a.php\n@@ -3,2 +3,2 @@\n keep\n-old\n+new\n"));
     }

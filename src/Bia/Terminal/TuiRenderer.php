@@ -26,6 +26,10 @@ final class TuiRenderer implements Renderer
     /** Diff lines shown under a tool call. */
     private const DIFF_LINES = 10;
 
+    /** Output lines shown under a call that worked, and under one that failed. */
+    private const RESULT_LINES = 2;
+    private const FAILURE_LINES = 3;
+
     /** Output lines shown under a call while it runs. */
     private const LIVE_LINES = 3;
 
@@ -187,22 +191,18 @@ final class TuiRenderer implements Renderer
     }
 
     /**
-     * The calls done so far as their line, then each one running with the
-     * end of its output.
+     * The block explored so far, then each call running, with the end of its
+     * output, as its row will be once done.
      */
     private function draw(): void
     {
-        $lines = $this->gathered->empty() ? [] : [$this->gathered->line()];
+        // Still exploring while a read, a listing or a search runs; a command running after says it is done.
+        $exploring = array_filter($this->running, static fn (array $run): bool => in_array($run['call']->name, ['read_file', 'list_files', 'search'], true)) !== [];
+        $lines = $this->gathered->empty() ? [] : [$this->gathered->closed(live: $exploring)];
         foreach ($this->running as ['call' => $call, 'output' => $output]) {
-            $subject = AnsiRenderer::subject($call->arguments);
-            $lines[] = Style::dim('· ' . $call->name . ($subject !== '' ? ' ' . $subject : ''));
-            $rows = $output === '' ? [] : (preg_split('/\R/', rtrim($output)) ?: []);
-            if (count($rows) > self::LIVE_LINES) {
-                $lines[] = '  ' . Style::dim('…'); // more above, kept for when it is opened
-            }
-            foreach (array_slice($rows, -self::LIVE_LINES) as $row) {
-                $lines[] = '  ' . Style::dim(Style::truncate(self::printable($row), 160));
-            }
+            $lines[] = self::mark(null) . ' ' . Style::dim(self::title($call, [], running: true));
+            $rows = self::rows($output);
+            array_push($lines, ...self::under(array_slice($rows, -self::LIVE_LINES), count($rows) - self::LIVE_LINES, false, hint: false));
         }
         $this->region->draft(implode("\n", $lines));
     }
@@ -236,48 +236,169 @@ final class TuiRenderer implements Renderer
     }
 
     /**
-     * A tool call as shown: its mark, name and subject, then the change it
-     * made, or the end of a failure's output. Opened, all of the change and
-     * of the output.
+     * A tool call's row, as Codex and Claude Code show one: a dot (green
+     * done, red failed, dim running) and what was done in plain words, then
+     * under it, on a └, what came of it: the end of a command's output, the
+     * start of a tool's, a failure's last lines, an edit's diff with its
+     * line numbers. Closed, a few lines and how many more; opened, all.
      *
      * @param array<string, mixed> $data
      * @return list<string>
      */
     public static function toolLines(ToolCall $call, bool $ok, string $text, array $data, bool $open = false): array
     {
-        // An MCP tool is shown by its server and its own name: mcp__github__search reads "github · search".
-        $name = preg_match('/^mcp__(.+?)__(.+)$/', $call->name, $m) === 1 ? $m[1] . ' · ' . $m[2] : $call->name;
-        $subject = AnsiRenderer::subject($call->arguments);
-        // The mark says how it went; the words are secondary to the answer, so dim.
-        $line = ($ok ? Style::ok('✓') : Style::error('✗')) . ' ' . Style::dim($name . ($subject !== '' ? ' ' . $subject : ''));
+        $line = self::mark($ok) . ' ' . Style::dim(self::title($call, $data));
         $diff = $data['diff'] ?? null;
-        $output = $text === '' ? [] : (preg_split('/\R/', rtrim($text)) ?: []);
         if ($ok && is_array($diff) && $diff !== []) {
             $path = is_string($data['path'] ?? null) ? $data['path'] : (is_string($call->arguments['path'] ?? null) ? $call->arguments['path'] : '');
             return [$line, ...self::diffLines($diff, $path, $open ? PHP_INT_MAX : self::DIFF_LINES)];
         }
-        if (!$open) {
-            if ($ok) {
-                // A call that worked says so by its mark; its output is there to open.
-                return [$line . ($output !== [] ? Style::dim(' · ' . count($output) . (count($output) === 1 ? ' line' : ' lines')) : '')];
-            }
-            $output = array_slice($output, -3); // a failure's end says why
-        } elseif (count($output) > self::OPEN_LINES) {
-            $left = count($output) - self::OPEN_LINES;
-            $output = [...array_slice($output, 0, self::OPEN_LINES), "… {$left} more"];
+        $rows = self::rows($text);
+        if ($open) {
+            $shown = array_slice($rows, 0, self::OPEN_LINES);
+            return [$line, ...self::under($shown, count($rows) - count($shown), true, hint: false)];
         }
-        $lines = [$line];
-        foreach ($output as $row) {
-            if ($row !== '') {
-                $lines[] = '  ' . Style::dim($open ? self::printable($row) : Style::truncate(self::printable($row), 160));
+        if ($rows === []) {
+            return [$line, '  └ ' . Style::dim('(no output)')];
+        }
+        // A command's end says how it went, as does a failure's; another tool's start says what it gave.
+        $fromEnd = !$ok || $call->name === 'shell';
+        $count = $ok ? self::RESULT_LINES : self::FAILURE_LINES;
+        $shown = $fromEnd ? array_slice($rows, -$count) : array_slice($rows, 0, $count);
+        return [$line, ...self::under($shown, count($rows) - count($shown), $fromEnd ? false : true)];
+    }
+
+    /**
+     * A tool call's dot: green done, red failed, dim while it runs.
+     */
+    public static function mark(?bool $ok): string
+    {
+        return match ($ok) {
+            true => Style::ok('•'),
+            false => Style::error('•'),
+            null => Style::dim('•'),
+        };
+    }
+
+    /**
+     * What a call did, in plain words: "Ran composer test", "Edited
+     * src/App.php (+6 −2)".
+     *
+     * @param array<string, mixed> $data
+     */
+    private static function title(ToolCall $call, array $data, bool $running = false): string
+    {
+        $arguments = $call->arguments;
+        $path = (string) ($arguments['path'] ?? '');
+        $command = (string) ($arguments['command'] ?? '');
+        $firstLine = strtok($command, "\n") ?: '';
+        $command = $firstLine . ($firstLine !== rtrim($command) ? ' …' : '');
+        $title = match (true) {
+            $call->name === 'shell' && ($arguments['background'] ?? false) === true => 'Started ' . $command . ' in the background',
+            $call->name === 'shell' => ($running ? 'Running ' : 'Ran ') . $command
+                . (is_string($arguments['workdir'] ?? null) && !in_array($arguments['workdir'], ['', '.'], true) ? ' in ' . $arguments['workdir'] : ''),
+            $call->name === 'shell_output' => (($arguments['kill'] ?? false) === true ? 'Stopped' : 'Read') . ' background shell ' . ($arguments['id'] ?? ''),
+            $call->name === 'read_file' => ($running ? 'Reading ' : 'Read ') . $path,
+            $call->name === 'list_files' => ($running ? 'Listing ' : 'Listed ') . ($path !== '' ? $path : '.'),
+            $call->name === 'search' => ($running ? 'Searching ' : 'Searched ') . '"' . ($arguments['pattern'] ?? '') . '"' . ($path !== '' && $path !== '.' ? " in {$path}" : ''),
+            $call->name === 'edit' => ($running ? 'Editing ' : 'Edited ') . $path,
+            $call->name === 'write_file' => ($running ? 'Writing ' : 'Wrote ') . $path,
+            $call->name === 'apply_patch' => ($running ? 'Patching' : 'Patched') . self::patched($data),
+            $call->name === 'git_diff' => $running ? 'Reading the diff' : 'Read the diff',
+            $call->name === 'skill' => 'Used the skill ' . ($arguments['name'] ?? ''),
+            preg_match('/^mcp__(.+?)__(.+)$/', $call->name, $m) === 1 => "Called {$m[1]} · {$m[2]}" . self::subjectOf($arguments),
+            default => $call->name . self::subjectOf($arguments),
+        };
+        $diff = $data['diff'] ?? null;
+        if (is_array($diff) && $diff !== []) {
+            $title .= ' ' . self::counts($diff);
+        }
+        return Style::truncate(self::printable($title), 160);
+    }
+
+    /**
+     * @param array<string, mixed> $arguments
+     */
+    private static function subjectOf(array $arguments): string
+    {
+        $subject = AnsiRenderer::subject($arguments);
+        return $subject !== '' ? ' ' . $subject : '';
+    }
+
+    /**
+     * The files a patch named, from its diff.
+     *
+     * @param array<string, mixed> $data
+     */
+    private static function patched(array $data): string
+    {
+        $files = array_values(array_map(
+            static fn (string $entry): string => substr($entry, 1),
+            array_filter((array) ($data['diff'] ?? []), static fn (mixed $entry): bool => is_string($entry) && str_starts_with($entry, '=')),
+        ));
+        return $files === [] ? '' : ' ' . implode(', ', array_slice($files, 0, 3)) . (count($files) > 3 ? ' +' . (count($files) - 3) . ' more' : '');
+    }
+
+    /**
+     * A diff's lines added and removed, as "(+6 −2)".
+     *
+     * @param array<mixed> $diff
+     */
+    private static function counts(array $diff): string
+    {
+        $added = $removed = 0;
+        foreach ($diff as $entry) {
+            if (!is_string($entry) || $entry === '') {
+                continue;
             }
+            if ($entry[0] === '+') {
+                $added++;
+            } elseif ($entry[0] === '-') {
+                $removed++;
+            } elseif (str_starts_with($entry, '…')) {
+                $added += (int) substr($entry, strlen('…')); // left out of the diff: counted as changed
+            }
+        }
+        return '(+' . $added . ' −' . $removed . ')';
+    }
+
+    /**
+     * Output's lines, without the blank ones at its ends.
+     *
+     * @return list<string>
+     */
+    private static function rows(string $text): array
+    {
+        $text = trim($text, "\r\n");
+        return $text === '' ? [] : (preg_split('/\R/', $text) ?: []);
+    }
+
+    /**
+     * Lines under a call's title: the first after a └, the rest set in
+     * under it, dim; with how many more there are, after them or before.
+     *
+     * @param list<string> $rows
+     * @return list<string>
+     */
+    private static function under(array $rows, int $more, bool $moreAfter, bool $hint = true): array
+    {
+        $more = max(0, $more);
+        $note = $more > 0 ? '… +' . $more . ($more === 1 ? ' line' : ' lines') . ($hint ? ' (ctrl+o to expand)' : '') : null;
+        $items = array_map(static fn (string $row): string => Style::truncate(self::printable($row), 160), $rows);
+        if ($note !== null) {
+            $moreAfter ? $items[] = $note : array_unshift($items, $note);
+        }
+        $lines = [];
+        foreach ($items as $index => $item) {
+            $lines[] = ($index === 0 ? '  └ ' : '    ') . Style::dim($item);
         }
         return $lines;
     }
 
     /**
-     * A diff as shown: added and removed lines marked by a green + or a red -,
-     * with no background, code highlighted by the file's language, context plain.
+     * A diff under its call's title: each line numbered, added lines after
+     * a green +, removed after a red −, highlighted by the file's language,
+     * with no background; context plain.
      *
      * @param array<mixed> $diff
      * @return list<string>
@@ -286,7 +407,11 @@ final class TuiRenderer implements Renderer
     {
         $lines = [];
         $left = 0;
-        $hunks = 0;
+        $number = 0;
+        // A patch's hunks start at their line in the new file; a file tool's at its line in the old one,
+        // which lines added and removed before move on.
+        $old = array_filter($diff, static fn (mixed $entry): bool => is_string($entry) && str_starts_with($entry, '=')) === [];
+        $moved = 0;
         $highlight = $path !== '' ? Highlight::for($path) : null;
         $tint = Style::color();
         foreach ($diff as $entry) {
@@ -298,36 +423,48 @@ final class TuiRenderer implements Renderer
                 continue;
             }
             $mark = $entry[0];
-            $full = count($lines) >= $limit;
-            if ($full) {
-                $left += $mark === '+' || $mark === '-' ? 1 : 0;
-                continue;
-            }
-            $text = Style::truncate(self::printable(substr($entry, 1)), 200);
             if ($mark === '@') {
-                if ($hunks++ > 0) {
-                    $lines[] = Style::dim('  ⋯');
+                $number = (int) substr($entry, 1) + ($old ? $moved : 0);
+                if ($lines !== [] && count($lines) < $limit) {
+                    $lines[] = Style::dim('   ⋮');
                 }
                 // A hunk starts afresh: a comment open before it is not known.
                 $highlight = $path !== '' ? Highlight::for($path) : null;
                 continue;
             }
+            $text = Style::truncate(self::printable(substr($entry, 1)), 200);
             if ($mark === '=') {
-                $lines[] = Style::dim('  ' . $text);
+                if (count($lines) < $limit) {
+                    $lines[] = Style::dim($text);
+                }
                 $highlight = Highlight::for($text);
                 $path = $text;
                 continue;
             }
+            $shown = $number;
+            if ($mark !== '-') {
+                $number++;
+            }
+            $moved += $mark === '+' ? 1 : ($mark === '-' ? -1 : 0);
+            if (count($lines) >= $limit) {
+                $left += $mark === '+' || $mark === '-' ? 1 : 0;
+                continue;
+            }
             $code = $highlight?->line($text) ?? $text;
-            $lines[] = match (true) {
-                !$tint => "  {$mark} {$text}",
-                $mark === '+' => "  \e[32m+\e[39m {$code}\e[0m",
-                $mark === '-' => "  \e[31m-\e[39m {$code}\e[0m",
-                default => "    {$code}\e[0m",
+            $gutter = Style::dim(str_pad((string) $shown, 4, ' ', STR_PAD_LEFT));
+            $lines[] = $gutter . match (true) {
+                !$tint => " {$mark} {$text}",
+                $mark === '+' => " \e[32m+\e[39m {$code}\e[0m",
+                $mark === '-' => " \e[31m−\e[39m {$code}\e[0m",
+                default => "   {$code}\e[0m",
             };
         }
         if ($left > 0) {
-            $lines[] = Style::dim("  … {$left} more");
+            $lines[] = Style::dim("… +{$left} lines (ctrl+o to expand)");
+        }
+        // The first line hangs from the title on a └, as every result does; the rest are set in under it.
+        foreach ($lines as $index => $line) {
+            $lines[$index] = ($index === 0 ? '  └ ' : '    ') . $line;
         }
         return $lines;
     }
@@ -434,7 +571,7 @@ final class TuiRenderer implements Renderer
         if (!$this->region->atLineStart()) {
             $this->region->draft('');
             if (!$this->gathered->empty()) {
-                $this->region->fold($this->gathered->line(), $this->gathered->lines());
+                $this->region->fold($this->gathered->closed(), $this->gathered->lines());
             }
         }
         $this->gathered = new Gathered();

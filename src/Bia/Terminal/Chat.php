@@ -6,6 +6,7 @@ namespace Bia\Terminal;
 
 use Bia\Agent\Agent;
 use Bia\Config\Config;
+use Bia\Contracts\Image;
 use Bia\Contracts\Message;
 use Bia\Contracts\ToolResult;
 use Bia\Contracts\SessionStore;
@@ -37,6 +38,11 @@ use Crab\Engine\Suspension;
  */
 final class Chat
 {
+    /** @var array<int, Image> The images pasted, by the number of their [Image #N] in the input. */
+    private array $attached = [];
+    /** The last image's number: never used again in a conversation, so a chip always means one image. */
+    private int $attachments = 0;
+
     /** Whether Ctrl-O opened every tool call's output. */
     private bool $opened = false;
 
@@ -96,6 +102,7 @@ final class Chat
         /** @var array{manager: ?\Bia\Mcp\Manager, untrusted: ?string, project: list<\Bia\Mcp\Server>, errors: list<string>, trust: \Bia\Mcp\Trust, open: \Closure(string): void}|null */
         private readonly ?array $mcp = null,
         private readonly ?\Bia\Skill\Catalog $skills = null,
+        private readonly ?Images $images = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->stats = new Stats();
@@ -305,11 +312,67 @@ final class Chat
                 return;
             }
         }
+        if ($this->images !== null && $key->is('ctrl-v')) {
+            $this->pasteImage();
+            return;
+        }
+        if ($this->images !== null && $key->is('paste') && ($found = $this->images->fromPaste($key->text)) !== null) {
+            // An image file dropped on the terminal, or its path pasted: the image, not the path.
+            foreach ($found as $image) {
+                $this->attach($image);
+            }
+            return;
+        }
         if ($this->editor->key($key) === true) {
             $this->submit($this->editor->text());
             return;
         }
         $this->suggest();
+    }
+
+    /**
+     * Ctrl-V: the clipboard's image, as Claude Code and Codex take it.
+     */
+    private function pasteImage(): void
+    {
+        $images = $this->images;
+        Task::spawn(EventLoop::current(), function () use ($images): void {
+            $found = $images?->fromClipboard();
+            if ($found instanceof Image) {
+                $this->attach($found);
+            } elseif (is_string($found)) {
+                $this->say($found, 4.0);
+                $this->draw(); // read in the background, after the key's own drawing
+            }
+        });
+    }
+
+    /**
+     * An image in the input, as a chip that names it.
+     */
+    private function attach(Image $image): void
+    {
+        $number = ++$this->attachments;
+        $this->attached[$number] = $image;
+        $this->editor->key(new Key('paste', "[Image #{$number}] "));
+        $this->draw();
+    }
+
+    /**
+     * The images a message's chips name, in their order; a chip deleted from it, its image gone with it.
+     *
+     * @return list<Image>
+     */
+    private function imagesIn(string $text): array
+    {
+        preg_match_all('/\[Image #(\d+)\]/', $text, $chips);
+        $images = [];
+        foreach (array_unique($chips[1]) as $number) {
+            if (isset($this->attached[(int) $number])) {
+                $images[] = $this->attached[(int) $number];
+            }
+        }
+        return $images;
     }
 
     /**
@@ -391,14 +454,15 @@ final class Chat
         $sessionId = $this->sessionId ??= $this->sessions->create($this->workspace, $this->config->modelLabel());
         $this->used = true;
         $this->echo($text);
-        $this->work('Thinking', fn (Cancellation $cancellation) => $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...)));
+        $images = $this->imagesIn($text);
+        $this->work('Thinking', fn (Cancellation $cancellation) => $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images));
     }
 
     /**
      * What the user wrote while Bia worked, handed to the agent at a step:
      * shown where it joins the conversation.
      *
-     * @return list<string>
+     * @return list<string|Message>
      */
     private function steer(): array
     {
@@ -410,7 +474,7 @@ final class Chat
         if ($messages !== []) {
             $this->draw();
         }
-        return $messages;
+        return array_map(fn (string $text): string|Message => ($images = $this->imagesIn($text)) !== [] ? Message::user($text, $images) : $text, $messages);
     }
 
     /**
@@ -608,7 +672,7 @@ final class Chat
         $gathered = new Gathered();
         $settle = function () use (&$gathered): void {
             if (!$gathered->empty()) {
-                $this->region->fold($gathered->line(), $gathered->lines());
+                $this->region->fold($gathered->closed(), $gathered->lines());
                 $gathered = new Gathered();
             }
         };
@@ -809,6 +873,7 @@ final class Chat
             Enter send · Ctrl-J or Alt-Enter or \ then Enter: new line · Up/Down history
             Tab complete · Esc stop the turn or close a menu · Ctrl-C clear the input, else stop, or twice to leave
             Ctrl-W delete word · Ctrl-U delete to line start · Ctrl-L clear screen · Ctrl-D leave
+            Ctrl-V paste an image from the clipboard · paste or drop an image file to attach it
             Type while Bia works: Enter steers it, at its next step.
             TEXT;
         if ($this->region->page() > 0) {
