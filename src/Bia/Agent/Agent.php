@@ -59,6 +59,7 @@ final readonly class Agent
         private ?string $outputs = null,
         private array $retryDelays = self::RETRY_DELAYS,
         private array $options = [],
+        private ?Inspection $inspection = null,
     ) {
         if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
@@ -78,6 +79,7 @@ final readonly class Agent
         $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt), $images));
         $retried = false;
         $stepped = false;
+        $this->inspection?->turn();
 
         for ($turn = 0; $turn < $this->maxTurns; $turn++) {
             $cancellation?->throwIfCancelled();
@@ -104,6 +106,7 @@ final readonly class Agent
             if ($system !== '') {
                 array_unshift($messages, Message::system($system));
             }
+            $this->inspection?->request($this->modelName, $this->options, $system, $definitions, $context->messages());
             try {
                 $result = $this->request(new ModelRequest($this->modelName, $messages, $definitions, $this->options), $cancellation);
             } catch (ModelException $error) {
@@ -159,12 +162,27 @@ final readonly class Agent
      */
     private function request(ModelRequest $request, ?Cancellation $cancellation): ModelResult
     {
+        try {
+            $result = $this->attempts($request, $cancellation);
+        } catch (\Throwable $error) {
+            $this->inspection?->failed($error);
+            throw $error;
+        }
+        $this->inspection?->answered($result);
+        return $result;
+    }
+
+    private function attempts(ModelRequest $request, ?Cancellation $cancellation): ModelResult
+    {
         for ($attempt = 0; ; $attempt++) {
             $started = false;
             try {
                 return $this->model->stream(
                     $request,
                     function ($event) use (&$started): void {
+                        if (!$started) {
+                            $this->inspection?->firstToken();
+                        }
                         $started = true;
                         $this->renderer->event($event);
                     },
@@ -181,7 +199,9 @@ final readonly class Agent
                 }
                 $why = $error instanceof ModelException ? (string) $error->status : 'connection failed';
                 $tries = count($this->retryDelays);
-                $this->renderer->notice("{$why} · retry " . ($attempt + 1) . "/{$tries} in " . self::seconds($wait));
+                $notice = "{$why} · retry " . ($attempt + 1) . "/{$tries} in " . self::seconds($wait);
+                $this->inspection?->event($notice);
+                $this->renderer->notice($notice);
                 self::wait($wait, $cancellation);
             }
         }
@@ -236,6 +256,8 @@ final readonly class Agent
             $this->renderer->notice('Nothing old enough to compact.');
             return null;
         }
+        $kept = array_search($compaction->firstKeptId, array_column($context->items, 0), true);
+        $this->inspection?->compacted($compaction, $kept === false ? 0 : max(0, $kept - ($context->compaction !== null ? 1 : 0)));
         $this->renderer->notice('Compacted: about ' . self::thousands($compaction->tokensBefore) . ' → ' . self::thousands($compaction->tokensAfter) . ' tokens.');
         return $this->sessions->append($sessionId, $compaction);
     }

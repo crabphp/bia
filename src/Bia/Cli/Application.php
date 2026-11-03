@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Bia\Cli;
 
 use Bia\Agent\Agent;
+use Bia\Agent\Inspection;
 use Bia\Agent\Compactor;
 use Bia\Agent\SystemPrompt;
 use Bia\Config\Config;
@@ -376,7 +377,8 @@ final class Application
             if ($mcp['manager'] !== null) {
                 $tools->from($mcp['manager']->tools(...));
             }
-            $makeAgent = static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs);
+            $inspection = new Inspection();
+            $makeAgent = static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection);
             $chat = new Chat(
                 $terminal,
                 $region,
@@ -396,6 +398,7 @@ final class Application
                 skills: Catalog::for((string) getenv('HOME'), $workspace->root()),
                 images: new \Bia\Terminal\Images($runner, dirname($config->databasePath()) . '/images', $workspace->root()),
                 reloaded: $reloaded,
+                inspection: $inspection,
             );
             $loop->execute($chat->run(...));
             if (($again = $chat->reloading()) !== null) {
@@ -576,21 +579,26 @@ final class Application
     /**
      * The agent for the configured model; /model builds another.
      */
-    private static function agent(Config $config, Client $http, Registry $tools, SqliteStore $store, Renderer $renderer, Workspace $workspace, string $outputs): Agent
+    private static function agent(Config $config, Client $http, Registry $tools, SqliteStore $store, Renderer $renderer, Workspace $workspace, string $outputs, ?Inspection $inspection = null): Agent
     {
+        // Shown as it happens, and kept for /inspect.
+        $notice = static function (string $message) use ($renderer, $inspection): void {
+            $inspection?->event($message);
+            $renderer->notice($message);
+        };
         $modelName = (string) $config->get('model.name');
         $model = self::model($config, $http);
         $fallbacks = self::fallbacks($config, $http);
         if ($fallbacks !== []) {
             $model = new Fallback(
                 [['name' => $modelName, 'label' => $config->modelLabel(), 'model' => $model], ...$fallbacks],
-                static fn (string $message) => $renderer->notice($message),
+                $notice,
                 (float) $config->get('fallback.cooldown'),
             );
         }
         $effort = $config->effort();
         if ($effort !== null) {
-            $model = new Lenient($model, static fn (string $message) => $renderer->notice($message));
+            $model = new Lenient($model, $notice);
         }
         $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
             $model,
@@ -616,6 +624,7 @@ final class Application
             maxOutputLines: (int) $config->get('tools.output_lines'),
             outputs: $outputs,
             options: $effort !== null ? ['reasoning_effort' => $effort] : [],
+            inspection: $inspection,
         );
     }
 

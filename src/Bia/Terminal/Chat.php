@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Bia\Terminal;
 
 use Bia\Agent\Agent;
+use Bia\Agent\Inspection;
 use Bia\Config\Config;
 use Bia\Contracts\Image;
 use Bia\Contracts\Message;
@@ -120,6 +121,7 @@ final class Chat
         private readonly ?\Bia\Skill\Catalog $skills = null,
         private readonly ?Images $images = null,
         private readonly bool $reloaded = false,
+        private readonly ?Inspection $inspection = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->stats = new Stats();
@@ -166,6 +168,7 @@ final class Chat
                     $this->region->overlay([]);
                 }
             })
+            ->add('inspect', 'What the last request sent and got', $this->inspect(...))
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout <server>]')
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
@@ -931,6 +934,29 @@ final class Chat
      * `/mcp` shows each server; `/mcp login <server>` and `/mcp logout <server>`
      * log in to a remote one, or forget its login.
      */
+    /**
+     * The last request to the model, in full: what it carried, what came
+     * back, how long it took, and what happened on the way.
+     */
+    private function inspect(string $_): void
+    {
+        $report = $this->inspection?->report();
+        if ($report === null) {
+            $this->note('No request yet');
+            return;
+        }
+        $label = max(array_map(static fn (array $row): int => mb_strwidth($row[0]), $report['rows'])) + 2;
+        $room = max(10, $this->region->width() - 2 - $label);
+        $lines = [Style::dim('· ' . $report['title'])];
+        foreach ($report['rows'] as [$name, $text]) {
+            foreach (Style::wrap($text, $room) as $index => $part) {
+                $lines[] = '  ' . ($index === 0 ? Style::dim(str_pad($name, $label)) : str_repeat(' ', $label)) . $part;
+            }
+        }
+        $this->region->gap();
+        $this->region->print(implode("\n", $lines) . "\n");
+    }
+
     private function showMcp(string $arguments): void
     {
         $manager = $this->mcp['manager'] ?? null;
