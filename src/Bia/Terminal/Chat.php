@@ -1123,7 +1123,10 @@ final class Chat
                 array_push($lines, ...($this->menu?->render($width, $this->menuTitle) ?? []));
             }
         } else {
-            [$rows, [$row, $column]] = $this->editor->render($width);
+            [$rows, [$row, $column]] = $this->editor->render(
+                $width,
+                $this->turn === null ? 'Ask anything · / commands · @ files' : 'Steer the turn',
+            );
             // Suggestions open above the input, so the input does not move as they come and go.
             if ($this->menu !== null) {
                 array_push($lines, ...$this->menu->render($width));
@@ -1195,9 +1198,9 @@ final class Chat
     }
 
     /**
-     * The greeting: Bia the cat beside its version and the model, and the
-     * project's folder under them. Each line is cut to the room beside the
-     * cat, so none wraps under it on a narrow screen.
+     * The greeting: Bia the cat beside its version and the project's folder.
+     * Each line is cut to the room beside the cat, so none wraps under it on
+     * a narrow screen.
      */
     private function banner(int $width, bool $blink = false): string
     {
@@ -1205,10 +1208,9 @@ final class Chat
         $indent = Style::width(self::MASCOT[0]) + 3;
         $room = max(0, $width - 2 * Screen::MARGIN - $indent);
         $version = Style::bold('bia') . ' ' . Style::dim(Style::truncate($this->version, max(0, $room - 4)));
-        $model = Style::dim(Style::truncate($this->modelShown(), $room));
         $place = Style::dim(Style::truncate($this->place, $room));
         [$first, $second] = self::mascot($blink);
-        return $first . '   ' . $version . "\n" . $second . '   ' . $model . "\n" . str_repeat(' ', $indent) . $place . "\n\n";
+        return $first . '   ' . $version . "\n" . $second . '   ' . $place . "\n\n";
     }
 
     /**
