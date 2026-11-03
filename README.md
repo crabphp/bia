@@ -421,6 +421,9 @@ return [
         'enabled' => true,
         'reserve_tokens' => 16384,  // room left for the reply
         'keep_tokens' => 20000,     // recent history kept word for word
+        'at_tokens' => 400000,      // compact past this too, in a larger window; null waits for the window
+        'idle_seconds' => 3600,     // rested this long, the prompt cache is gone: compact first...
+        'idle_tokens' => 64000,     // ...when over this; idle_seconds null never does
     ],
     'storage' => [
         'path' => '~/.local/state/bia/bia.sqlite',
@@ -444,9 +447,9 @@ Three are built in:
 
 | Provider | Server | Key from | Context window |
 |---|---|---|---|
-| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | 400,000 |
-| `anthropic` | `https://api.anthropic.com/v1` (OpenAI-compatible endpoint) | `ANTHROPIC_API_KEY` | 200,000 |
-| `cliproxyapi` | `http://127.0.0.1:8317/v1` ([CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)) | `CLIPROXYAPI_API_KEY` | 200,000 |
+| `openai` | `https://api.openai.com/v1` | `OPENAI_API_KEY` | 1,050,000 |
+| `anthropic` | `https://api.anthropic.com/v1` (OpenAI-compatible endpoint) | `ANTHROPIC_API_KEY` | 1,000,000 |
+| `cliproxyapi` | `http://127.0.0.1:8317/v1` ([CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI)) | `CLIPROXYAPI_API_KEY` | 1,000,000 |
 
 ```sh
 export CLIPROXYAPI_API_KEY=...     # one of the api-keys in CLIProxyAPI's config.yaml
@@ -567,14 +570,22 @@ bia fork 2e18                          # a new session from that point; the orig
 bia export 2e18 > session.jsonl
 ```
 
-Before a request would take more than `context_window - reserve_tokens`,
-Bia asks the model to summarize everything except the last `keep_tokens` of
+Before a request would take more than `context_window - reserve_tokens`, or
+`at_tokens` (400,000) in a larger window, as answers get worse in a very long
+context, Bia asks the model to summarize everything except the last `keep_tokens` of
 the conversation, never splitting a tool call from its result. The summary
 replaces that part in what is sent; the summarized entries stay in the log.
 A later compaction folds the previous summary in. If a provider still
 reports the context as too long, Bia compacts and retries the turn once.
-Set `model.context_window` to your model's window: the default, 128000,
-suits most current models.
+Set `model.context_window` to your model's window, or a provider's
+`context_window` to its models'.
+
+A prompt cache lasts minutes to an hour after the last request. Once it is
+gone, the next request pays full price for the whole conversation, so that is
+when compacting costs about nothing extra: a prompt sent more than
+`idle_seconds` (3600) after the last reply compacts a conversation over
+`idle_tokens` (64,000) first. Set `idle_seconds` to your provider's cache
+lifetime: compacting while the cache is still warm costs more than it saves.
 
 ## Development
 

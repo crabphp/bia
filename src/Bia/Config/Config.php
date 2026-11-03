@@ -212,17 +212,17 @@ final readonly class Config
             'providers' => [
                 'openai' => [
                     'base_url' => 'https://api.openai.com/v1',
-                    'context_window' => 400_000,
+                    'context_window' => 1_050_000,
                 ],
                 'anthropic' => [
                     // Anthropic's OpenAI-compatible endpoint.
                     'base_url' => 'https://api.anthropic.com/v1',
-                    'context_window' => 200_000,
+                    'context_window' => 1_000_000,
                 ],
                 'cliproxyapi' => [
                     // CLIProxyAPI on this machine, at its default port.
                     'base_url' => 'http://127.0.0.1:8317/v1',
-                    'context_window' => 200_000,
+                    'context_window' => 1_000_000,
                 ],
             ],
             'model' => [
@@ -264,6 +264,11 @@ final readonly class Config
                 'enabled' => true,
                 'reserve_tokens' => 16_384,
                 'keep_tokens' => 20_000,
+                // Compact past this many tokens too, before the window; null waits for the window.
+                'at_tokens' => 400_000,
+                // Idle this long, the prompt cache is gone: compact first when over idle_tokens.
+                'idle_seconds' => 3600,
+                'idle_tokens' => 64_000,
             ],
             'mcp' => [
                 // Seconds an MCP tool call may take, and a server to start and list its tools.
@@ -339,15 +344,15 @@ final readonly class Config
                 // 'providers' => [
                 //     'openai' => [
                 //         'base_url' => 'https://api.openai.com/v1',
-                //         'context_window' => 400000,
+                //         'context_window' => 1050000,
                 //     ],
                 //     'anthropic' => [
                 //         'base_url' => 'https://api.anthropic.com/v1',
-                //         'context_window' => 200000,
+                //         'context_window' => 1000000,
                 //     ],
                 //     'cliproxyapi' => [
                 //         'base_url' => 'http://127.0.0.1:8317/v1',
-                //         'context_window' => 200000,
+                //         'context_window' => 1000000,
                 //     ],
                 // ],
 
@@ -460,12 +465,23 @@ final readonly class Config
                 | summarized. reserve_tokens is the room left for the reply, and
                 | keep_tokens is how much recent history is kept word for word.
                 |
+                | at_tokens compacts sooner, in a model with a large window: answers get
+                | worse in a very long context. null waits for the window.
+                |
+                | After idle_seconds without a reply, the provider's prompt cache is gone
+                | and the next request pays for all of it anyway: a conversation over
+                | idle_tokens is compacted first, for about the same cost. Set
+                | idle_seconds to your provider's cache lifetime; null never does.
+                |
                 */
 
                 // 'compaction' => [
                 //     'enabled' => true,
                 //     'reserve_tokens' => 16384,
                 //     'keep_tokens' => 20000,
+                //     'at_tokens' => 400000,
+                //     'idle_seconds' => 3600,
+                //     'idle_tokens' => 64000,
                 // ],
 
                 /*
@@ -731,9 +747,14 @@ final readonly class Config
         if (isset($compaction['enabled']) && !is_bool($compaction['enabled'])) {
             throw new \InvalidArgumentException('compaction.enabled must be true or false.');
         }
-        foreach (['reserve_tokens', 'keep_tokens'] as $key) {
+        foreach (['reserve_tokens', 'keep_tokens', 'idle_tokens'] as $key) {
             if (isset($compaction[$key]) && (!is_int($compaction[$key]) || $compaction[$key] < 1)) {
                 throw new \InvalidArgumentException("compaction.{$key} must be a positive whole number.");
+            }
+        }
+        foreach (['at_tokens', 'idle_seconds'] as $key) {
+            if (isset($compaction[$key]) && (!is_int($compaction[$key]) || $compaction[$key] < 1)) {
+                throw new \InvalidArgumentException("compaction.{$key} must be a positive whole number, or null.");
             }
         }
         $permissions = $values['permissions'] ?? [];

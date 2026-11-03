@@ -73,6 +73,8 @@ final readonly class Agent
     public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null, array $images = []): ModelResult
     {
         $entries = $this->sessions->path($sessionId);
+        // How long the conversation rested before this prompt: past the cache's life, compacting is nearly free.
+        $idle = $this->compactor?->idle($entries) ?? 0.0;
         $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt), $images));
         $retried = false;
         $stepped = false;
@@ -93,7 +95,7 @@ final readonly class Agent
             $context = Context::build($entries);
             if ($this->compactor !== null) {
                 $tokens = $this->compactor->tokens($context, $system, $definitions);
-                if ($this->compactor->needed($tokens) && ($entry = $this->compactEntries($sessionId, $context, $tokens, $cancellation)) !== null) {
+                if ($this->compactor->needed($tokens, $turn === 0 ? $idle : 0.0) && ($entry = $this->compactEntries($sessionId, $context, $tokens, $cancellation)) !== null) {
                     $entries[] = $entry;
                     $context = Context::build($entries);
                 }

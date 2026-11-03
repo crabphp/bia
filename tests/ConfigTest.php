@@ -291,7 +291,7 @@ final class ConfigTest extends TestCase
             $switched = $config->withModel('cliproxyapi/claude-sonnet-4-6');
             self::assertSame('cliproxyapi/claude-sonnet-4-6', $switched->modelLabel());
             self::assertSame('proxy-key', $switched->get('model.api_key'));
-            self::assertSame(200000, $switched->get('model.context_window'), 'Nothing of the old provider is kept.');
+            self::assertSame(1000000, $switched->get('model.context_window'), 'Nothing of the old provider is kept.');
             self::assertSame('tda-key', $switched->withModel('tda/sol')->get('model.api_key'));
 
             $providers = $config->providers();
@@ -312,7 +312,7 @@ final class ConfigTest extends TestCase
             self::assertSame('anthropic-key', $claude->get('model.api_key'));
             self::assertSame('claude-sonnet-4-5', $claude->get('model.name'));
             self::assertSame('http://127.0.0.1:8317/v1', Config::load($this->directory(), ['model' => ['name' => 'cliproxyapi/gpt-5']])->get('model.base_url'));
-            self::assertSame(400000, Config::load($this->directory(), ['model' => ['name' => 'openai/gpt-5']])->get('model.context_window'));
+            self::assertSame(1050000, Config::load($this->directory(), ['model' => ['name' => 'openai/gpt-5']])->get('model.context_window'));
             self::assertSame('https://api.openai.com/v1', Config::load($this->directory())->get('model.base_url'), 'A plain model name is unchanged.');
         } finally {
             putenv('ANTHROPIC_API_KEY');

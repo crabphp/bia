@@ -259,6 +259,37 @@ final class AgentTest extends TestCase
         self::assertCount(15, $types, 'Compaction rewrote the log instead of appending to it.');
     }
 
+    public function testCompactionComesAtTheSetTokensAndAfterTheCacheIsGone(): void
+    {
+        $compactor = new Compactor(new SummarizingModel(), 'fake', 1_000_000, 16_384, 20_000, atTokens: 400_000, idleSeconds: 3600, idleTokens: 64_000);
+        self::assertFalse($compactor->needed(399_000));
+        self::assertTrue($compactor->needed(401_000), 'A large window waits for atTokens, not the window.');
+        self::assertTrue((new Compactor(new SummarizingModel(), 'fake', 200_000, 16_384, 20_000, atTokens: 400_000))->needed(190_000), 'A small window still comes first.');
+        self::assertFalse($compactor->needed(100_000, 3599.0), 'The cache is still warm.');
+        self::assertFalse($compactor->needed(60_000, 7200.0), 'Too small to be worth it.');
+        self::assertTrue($compactor->needed(100_000, 3600.0));
+
+        // A conversation of about 6k tokens that rested two hours: compacted before the prompt.
+        [$store, $session] = $this->session();
+        for ($i = 1; $i <= 6; $i++) {
+            $store->append($session, Message::user("question {$i} " . str_repeat('word ', 400)));
+            $store->append($session, new Message('assistant', "answer {$i} " . str_repeat('word ', 400)));
+        }
+        $model = new ScriptedModel([]);
+        $summarizer = new SummarizingModel();
+        $later = static fn (): float => microtime(true) + 7200;
+        $rested = new Compactor($summarizer, 'fake', 100_000, 1024, 1200, idleSeconds: 3600, idleTokens: 2000, clock: $later);
+        (new Agent($model, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', $rested))->run($session, 'back again');
+        self::assertSame(1, $summarizer->calls);
+        self::assertStringContainsString('SUMMARY OF OLD WORK', $model->requests[0]->messages[0]->text);
+
+        // The same, answered a moment ago: left as it is.
+        $summarizer = new SummarizingModel();
+        $fresh = new Compactor($summarizer, 'fake', 100_000, 1024, 1200, idleSeconds: 3600, idleTokens: 2000);
+        (new Agent(new ScriptedModel([]), 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', $fresh))->run($session, 'and now');
+        self::assertSame(0, $summarizer->calls);
+    }
+
     public function testCompactionNeverPartsAToolCallFromItsResult(): void
     {
         [$store, $session] = $this->session();

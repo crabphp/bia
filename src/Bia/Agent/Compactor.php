@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Bia\Agent;
 
 use Bia\Contracts\Compaction;
+use Bia\Contracts\Entry;
 use Bia\Contracts\Message;
 use Bia\Contracts\Model;
 use Bia\Contracts\ModelRequest;
@@ -34,6 +35,9 @@ final readonly class Compactor
 
     /**
      * @param array<string, mixed> $options Sent with the summary's request, as its reasoning effort.
+     * @param int|null $atTokens Compact past this many tokens too, before the window.
+     * @param int|null $idleSeconds After this long without a reply the prompt cache is gone: compact over $idleTokens.
+     * @param (\Closure(): float)|null $clock
      */
     public function __construct(
         private Model $model,
@@ -42,6 +46,10 @@ final readonly class Compactor
         private int $reserveTokens = 16_384,
         private int $keepTokens = 20_000,
         private array $options = [],
+        private ?int $atTokens = null,
+        private ?int $idleSeconds = null,
+        private int $idleTokens = 64_000,
+        private ?\Closure $clock = null,
     ) {
         if ($this->contextWindow <= $this->reserveTokens || $this->keepTokens < 1) {
             throw new \InvalidArgumentException('Compaction needs a context window larger than its reserve, and something to keep.');
@@ -74,9 +82,31 @@ final readonly class Compactor
         return max($estimate, $measured ?? 0);
     }
 
-    public function needed(int $tokens): bool
+    /**
+     * Whether to compact before a request of $tokens: near the window, past
+     * atTokens, or over idleTokens once $idle seconds have passed since the
+     * last reply, as the provider's cache is gone and all of it is paid for
+     * again anyway.
+     */
+    public function needed(int $tokens, float $idle = 0.0): bool
     {
-        return $tokens > $this->contextWindow - $this->reserveTokens;
+        return $tokens > min($this->contextWindow - $this->reserveTokens, $this->atTokens ?? PHP_INT_MAX)
+            || ($this->idleSeconds !== null && $idle >= $this->idleSeconds && $tokens > $this->idleTokens);
+    }
+
+    /**
+     * Seconds since the latest reply in $entries, or 0 when there is none.
+     *
+     * @param list<Entry> $entries
+     */
+    public function idle(array $entries): float
+    {
+        for ($i = count($entries) - 1; $i >= 0; $i--) {
+            if ($entries[$i]->message()?->role === 'assistant' && ($at = strtotime($entries[$i]->createdAt)) !== false) {
+                return max(0.0, ($this->clock !== null ? ($this->clock)() : microtime(true)) - $at);
+            }
+        }
+        return 0.0;
     }
 
     /**

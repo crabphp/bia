@@ -563,6 +563,9 @@ final class Application
             (int) $config->get('compaction.keep_tokens'),
             // A summary needs no deep thought: at most low, and quicker for it.
             $effort === null ? [] : ['reasoning_effort' => in_array($effort, ['none', 'minimal'], true) ? $effort : 'low'],
+            ($at = $config->get('compaction.at_tokens')) === null ? null : (int) $at,
+            ($idle = $config->get('compaction.idle_seconds')) === null ? null : (int) $idle,
+            (int) $config->get('compaction.idle_tokens', 64_000),
         );
         return new Agent(
             $model,
