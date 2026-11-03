@@ -70,6 +70,11 @@ final readonly class ApplyPatchTool implements Tool
                 }
             } elseif (preg_match('/^(?:rename|copy) (?:from|to) (.+)$/', $line, $match) === 1) {
                 $paths[] = self::unquote(trim($match[1]));
+            } elseif (preg_match('/^diff --git ("[^"]+"|\S+) ("[^"]+"|\S+)$/', $line, $match) === 1) {
+                // The header names both sides even when nothing else does, as for a change of mode alone.
+                foreach ([$match[1], $match[2]] as $side) {
+                    $paths[] = (string) preg_replace('#^[ab]/#', '', self::unquote($side));
+                }
             }
         }
         return array_values(array_unique($paths));

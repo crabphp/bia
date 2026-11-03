@@ -74,8 +74,12 @@ final readonly class EditTool implements Tool
         if ($original === false || strlen($original) > $this->maxBytes) {
             return new ToolResult("Could not read {$relative}, or it is larger than {$this->maxBytes} bytes.", false);
         }
-        $crlf = str_contains($original, "\r\n") && !str_contains(str_replace("\r\n", '', $original), "\n");
-        $content = str_replace("\r\n", "\n", $original);
+        // A file in CRLF throughout is matched and changed as LF, and written back in CRLF. A file
+        // mixing both is matched as it is, so no line the edit does not touch changes its ending.
+        $hasCrlf = str_contains($original, "\r\n");
+        $mixed = $hasCrlf && str_contains(str_replace("\r\n", '', $original), "\n");
+        $crlf = $hasCrlf && !$mixed;
+        $content = $crlf ? str_replace("\r\n", "\n", $original) : $original;
 
         $ranges = [];
         foreach (array_values($edits) as $number => $edit) {
@@ -83,8 +87,11 @@ final readonly class EditTool implements Tool
             if (!is_array($edit)) {
                 return new ToolResult("{$label}each edit is an object with old_text and new_text.", false);
             }
-            $old = str_replace("\r\n", "\n", (string) ($edit['old_text'] ?? ''));
-            $new = str_replace("\r\n", "\n", (string) ($edit['new_text'] ?? ''));
+            $old = (string) ($edit['old_text'] ?? '');
+            $new = (string) ($edit['new_text'] ?? '');
+            if (!$mixed) {
+                [$old, $new] = [str_replace("\r\n", "\n", $old), str_replace("\r\n", "\n", $new)];
+            }
             if ($old === '') {
                 return new ToolResult("{$label}old_text is empty; to write a whole file use write_file.", false);
             }

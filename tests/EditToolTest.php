@@ -72,7 +72,7 @@ final class EditToolTest extends TestCase
 
         $this->file('mixed.txt', "one\r\ntwo\nthree\n");
         self::assertTrue($this->apply('mixed.txt', [['old_text' => "two\n", 'new_text' => "2\n"]])->ok);
-        self::assertSame("one\n2\nthree\n", $this->read('mixed.txt'), 'A single CRLF line does not convert an LF file to CRLF.');
+        self::assertSame("one\r\n2\nthree\n", $this->read('mixed.txt'), 'In a file mixing endings, only the edited text changes: no line takes the other ending.');
     }
 
     public function testMistakesAreExplainedAndChangeNothing(): void

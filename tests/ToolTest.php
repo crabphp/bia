@@ -41,6 +41,19 @@ final class ToolTest extends TestCase
         self::assertTrue($ok->ok, $ok->text);
         self::assertSame("two\n", file_get_contents($root . '/a.txt'));
 
+        $mode = $patch->execute([
+            'patch' => "diff --git a/a.txt b/a.txt\nold mode 100644\nnew mode 100755\n",
+        ], $context);
+        self::assertTrue($mode->ok, 'A change of mode alone names its file in the header: ' . $mode->text);
+        clearstatcache();
+        self::assertSame(0755, fileperms($root . '/a.txt') & 0777);
+
+        try {
+            $patch->execute(['patch' => "diff --git a/../x b/../x\nold mode 100644\nnew mode 100755\n"], $context);
+            self::fail('A header outside the workspace is refused too.');
+        } catch (\InvalidArgumentException) {
+        }
+
         $this->expectException(\InvalidArgumentException::class);
         $patch->execute([
             'patch' => "--- /dev/null\n+++ b/../outside.txt\n@@ -0,0 +1 @@\n+no\n",
