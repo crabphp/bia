@@ -49,6 +49,8 @@ final class Screen implements Surface
     private array $shown = [];
     private string $shownCursor = '';
     private bool $entered = false;
+    /** Whether it is the one on the terminal: a hidden screen keeps its lines and draws nothing. */
+    private bool $visible = true;
     private ?string $frame = null;
     /** @var list<array{0: int, 1: int}|null> The line and row on each output row of the screen, as last drawn. */
     private array $onScreen = [];
@@ -299,6 +301,22 @@ final class Screen implements Surface
         return max(1, $this->terminal->columns() - 2 * self::MARGIN);
     }
 
+    /**
+     * Puts this screen on the terminal, or takes it off, as another screen
+     * of the same terminal (a subagent's) is shown in its place.
+     */
+    public function show(bool $visible): void
+    {
+        $this->visible = $visible;
+        if ($visible) {
+            $this->entered = true; // the terminal is in its alternate screen already, for the first
+            $this->redraw();
+        } elseif ($this->frame !== null) {
+            EventLoop::current()->cancel($this->frame);
+            $this->frame = null;
+        }
+    }
+
     public function redraw(): void
     {
         $this->shown = [];
@@ -347,7 +365,7 @@ final class Screen implements Surface
 
     private function schedule(): void
     {
-        if ($this->frame !== null) {
+        if ($this->frame !== null || !$this->visible) {
             return;
         }
         $this->frame = EventLoop::current()->delay($this->interval, function (): void {
@@ -700,6 +718,9 @@ final class Screen implements Surface
 
     private function render(): void
     {
+        if (!$this->visible) {
+            return;
+        }
         $began = hrtime(true);
         $columns = $this->terminal->columns();
         $screenRows = $this->terminal->rows();

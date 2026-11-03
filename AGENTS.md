@@ -96,6 +96,24 @@ the rule here first, with the user's agreement.
 - Every row opens in place with a click, and all of them with Ctrl-O: a
   collapsed run opens under its line, and closes by a click on that line.
 
+**Subagents**
+- The main agent hands a subagent a task with the `agent` tool and gets
+  back its answer alone; its row is `• Asked readme · Check the README
+  links`, the answer's first lines under it, and a run of them collapses
+  to `asked 2 agents`.
+- While there are subagents, the footer lists them under the status line,
+  one row each: `main` first, then each, a dot (`●` green working, `○` dim
+  idle or done, `●` red failed or stopped), the name, and dim what it does
+  now; cut with `…`. Finished ones go at the user's next message.
+- ↓ from the input's last line enters the list, `❯` marks the row chosen;
+  Enter or a click views that agent, `x` stops it, or closes it once done, Esc or ↑ past `main`
+  gives the keys back, and typing goes back to the input. With the input
+  empty, Alt+←/→ steps through the agents.
+- Fullscreen, a subagent's page takes the conversation's place, drawn by
+  these same rules, its task shaded as a user's message; the input steers
+  it while it works, and Esc returns to the conversation. Inline, viewing
+  one prints its run so far under `· agent · readme`.
+
 **Render modes**
 - `normal` shows text as it arrives; `smooth` paces it through `Tui\Pacer`;
   `power` paces it and draws `Tui\Effects` over it. Effects only ever draw

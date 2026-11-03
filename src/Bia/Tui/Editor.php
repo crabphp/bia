@@ -37,6 +37,15 @@ final class Editor
         return implode("\n", $this->lines);
     }
 
+    /**
+     * Whether Down has nowhere to go: the cursor on the last line, and no
+     * older message from history being looked at.
+     */
+    public function atBottom(): bool
+    {
+        return $this->row === count($this->lines) - 1 && $this->browsing >= count($this->history);
+    }
+
     public function empty(): bool
     {
         return $this->lines === [''];

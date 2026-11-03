@@ -6,6 +6,8 @@ namespace Bia\Terminal;
 
 use Bia\Agent\Agent;
 use Bia\Agent\Inspection;
+use Bia\Agent\Subagents;
+use Bia\Tui\Transcript;
 use Bia\Config\Config;
 use Bia\Contracts\Image;
 use Bia\Contracts\Message;
@@ -95,6 +97,12 @@ final class Chat
     /** Counts as things happen, shown or not, so turning /stats on shows the whole session. */
     private readonly Stats $stats;
     private bool $showStats = false;
+    /** The subagent whose run is on screen, by name; null for the conversation. */
+    private ?string $viewing = null;
+    /** The row chosen in the list of agents, 0 for main; null while the input has the keys. */
+    private ?int $agentRow = null;
+    /** How many rows the list of agents takes, at the bottom. */
+    private int $agentRows = 0;
     private ?string $statsTicker = null;
 
     /**
@@ -122,6 +130,7 @@ final class Chat
         private readonly ?Images $images = null,
         private readonly bool $reloaded = false,
         private readonly ?Inspection $inspection = null,
+        private readonly ?Subagents $subagents = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->stats = new Stats();
@@ -284,12 +293,19 @@ final class Chat
     private function handle(Key $key): void
     {
         if ($key->is('wheel-up', 'wheel-down')) {
-            $this->region->scroll($key->is('wheel-up') ? -3 : 3);
+            $this->shown()->scroll($key->is('wheel-up') ? -3 : 3);
             return;
         }
         if ($key->is('mouse-down', 'mouse-drag', 'mouse-up')) {
             [$column, $row] = array_map('intval', explode(',', $key->text) + [1 => '0']);
-            $copied = $this->region->pointer(substr($key->name, 6), $column, $row);
+            // A click on a row of the list of agents, at the bottom of the screen, views that agent.
+            $index = $row - ($this->terminal->rows() - $this->agentRows) - 1;
+            if ($key->is('mouse-down') && $this->agentRows > 0 && $this->region->page() > 0 && $index >= 0) {
+                $this->agentRow = null;
+                $this->view($this->agentAt($index));
+                return;
+            }
+            $copied = $this->shown()->pointer(substr($key->name, 6), $column, $row);
             if ($copied !== null && $copied !== '') {
                 // The terminal is asked to copy; whether it did, nothing says. Shift+drag is its own selection.
                 $this->say('Copied (OSC 52) · Shift+drag if not', 3.0);
@@ -299,8 +315,18 @@ final class Chat
         if ($key->is('mouse')) {
             return;
         }
-        if ($key->is('pageup', 'pagedown') && $this->menu === null && $this->region->page() > 0) {
-            $this->region->scroll(($key->is('pageup') ? -1 : 1) * $this->region->page());
+        if ($key->is('pageup', 'pagedown') && $this->menu === null && $this->shown()->page() > 0) {
+            $this->shown()->scroll(($key->is('pageup') ? -1 : 1) * $this->shown()->page());
+            return;
+        }
+        if ($this->agentRow !== null && $this->menu === null && $this->agentKey($key)) {
+            return;
+        }
+        if ($key->is('ctrl-left', 'ctrl-right') && $this->menu === null && $this->agentRows > 0 && $this->editor->empty()) {
+            // Like Codex, Alt+Left/Right: the agent before or after the one on screen; with words typed, it moves by word.
+            $names = $this->agentNames();
+            $at = (int) array_search($this->viewing, $names, true);
+            $this->view($names[($at + ($key->is('ctrl-left') ? -1 : 1) + count($names)) % count($names)]);
             return;
         }
         if ($this->menuKind === 'confirm') {
@@ -328,6 +354,8 @@ final class Chat
         if ($key->is('escape')) {
             if ($this->menu !== null) {
                 $this->closeMenu();
+            } elseif ($this->viewing !== null) {
+                $this->view(null);
             } elseif ($this->turn !== null) {
                 $this->turn->cancel();
             }
@@ -340,7 +368,7 @@ final class Chat
         if ($key->is('ctrl-o')) {
             // Every tool call's output, opened or closed again.
             $this->opened = !$this->opened;
-            $this->region->folds($this->opened);
+            $this->shown()->folds($this->opened);
             return;
         }
         if (in_array($this->menuKind, ['model', 'session', 'effort'], true)) {
@@ -379,11 +407,174 @@ final class Chat
             }
             return;
         }
+        if ($key->is('down') && $this->menu === null && $this->agentRows > 0 && $this->editor->atBottom()) {
+            // Below the input's last line: the list of agents, on the one on screen.
+            $this->agentRow = (int) array_search($this->viewing, $this->agentNames(), true);
+            return;
+        }
         if ($this->editor->key($key) === true) {
             $this->submit($this->editor->text());
             return;
         }
         $this->suggest();
+    }
+
+    /**
+     * A key while the list of agents has them: Up and Down choose, Enter
+     * views, x stops one, Esc gives the keys back; anything typed goes back
+     * to the input, typed there.
+     */
+    private function agentKey(Key $key): bool
+    {
+        $names = $this->agentNames();
+        $row = min((int) $this->agentRow, count($names) - 1);
+        if ($key->is('up')) {
+            $this->agentRow = $row > 0 ? $row - 1 : null;
+            return true;
+        }
+        if ($key->is('down')) {
+            $this->agentRow = min($row + 1, count($names) - 1);
+            return true;
+        }
+        if ($key->is('enter')) {
+            $this->agentRow = null;
+            $this->view($names[$row]);
+            return true;
+        }
+        if ($key->is('escape')) {
+            $this->agentRow = null;
+            return true;
+        }
+        if ($key->is('char') && strtolower($key->text) === 'x' && $names[$row] !== null) {
+            // Working, it is stopped; finished, it is closed and the row below is chosen.
+            $this->subagents?->close($names[$row]);
+            $this->agentRow = $this->agentRows > 2 ? min($row, $this->agentRows - 2) : null;
+            return true;
+        }
+        $this->agentRow = null;
+        return false;
+    }
+
+    /**
+     * Names in the list's order, null for main first.
+     *
+     * @return list<string|null>
+     */
+    private function agentNames(): array
+    {
+        return [null, ...array_column($this->subagents?->all() ?? [], 'name')];
+    }
+
+    private function agentAt(int $index): ?string
+    {
+        return $this->agentNames()[$index] ?? $this->viewing;
+    }
+
+    /**
+     * Shows a subagent's run, or the conversation again: fullscreen, its
+     * page in place of the conversation; inline, its run so far printed.
+     */
+    private function view(?string $name): void
+    {
+        $view = $name === null ? null : (array_column($this->subagents?->all() ?? [], 'view', 'name')[$name] ?? null);
+        $surface = is_array($view) ? ($view['surface'] ?? null) : null;
+        if ($name !== null && !$surface instanceof Screen) {
+            if ($surface instanceof Transcript) {
+                $this->note("agent · {$name}");
+                $this->region->print(rtrim($surface->text()) . "\n");
+            }
+            return;
+        }
+        $before = $this->shown();
+        $this->viewing = $name;
+        $after = $this->shown();
+        if ($before !== $after) {
+            if ($before instanceof Screen) {
+                $before->show(false);
+            }
+            if ($after instanceof Screen) {
+                $after->show(true);
+            }
+        }
+    }
+
+    /**
+     * What is on screen: a subagent's page, or the conversation.
+     */
+    private function shown(): Surface
+    {
+        if ($this->viewing !== null) {
+            $view = array_column($this->subagents?->all() ?? [], 'view', 'name')[$this->viewing] ?? null;
+            if (is_array($view) && ($view['surface'] ?? null) instanceof Screen) {
+                return $view['surface'];
+            }
+        }
+        return $this->region;
+    }
+
+    /**
+     * The subagents changed: one started, did something, or ended.
+     */
+    public function agentsChanged(): void
+    {
+        if ($this->viewing !== null && !in_array($this->viewing, $this->agentNames(), true)) {
+            $this->view(null);
+        }
+        if ($this->running) {
+            $this->draw();
+        }
+    }
+
+    public function config(): Config
+    {
+        return $this->config;
+    }
+
+    /**
+     * The list of agents under the status line, once there are subagents:
+     * main, then each, as a dot (green working, dim idle or done, red failed
+     * or stopped), its name, and what it does now.
+     *
+     * @return list<string>
+     */
+    private function agentLines(int $width): array
+    {
+        $agents = $this->subagents?->all() ?? [];
+        if ($agents === []) {
+            $this->agentRow = null;
+            return [];
+        }
+        $rows = [['main', $this->turn !== null ? 'working' : 'idle', $this->agentRow !== null ? 'Enter view · x stop or close · Esc back' : '↓ to choose · Alt+←/→']];
+        foreach ($agents as $agent) {
+            $took = self::duration(($agent['ended'] ?? microtime(true)) - $agent['started']);
+            $rows[] = [$agent['name'], $agent['state'], match ($agent['state']) {
+                'working' => ($agent['doing'] !== '' ? $agent['doing'] : 'Thinking') . ' · ' . $took,
+                'waiting' => 'Waiting',
+                'done' => "Done · {$agent['calls']} " . ($agent['calls'] === 1 ? 'call' : 'calls') . " · {$took}",
+                'failed' => 'Failed · ' . $agent['doing'],
+                default => 'Stopped',
+            }];
+        }
+        $names = max(array_map(static fn (array $row): int => mb_strwidth($row[0]), $rows));
+        $lines = [];
+        foreach ($rows as $index => [$name, $state, $doing]) {
+            $dot = match ($state) {
+                'working' => Style::ok('●'),
+                'failed', 'stopped' => Style::error('●'),
+                default => Style::dim('○'),
+            };
+            $label = $name . str_repeat(' ', $names - mb_strwidth($name));
+            $viewed = ($this->viewing ?? 'main') === $name;
+            $lines[] = ($this->agentRow === $index ? Style::accent('❯') : ' ') . ' ' . $dot . ' '
+                . ($viewed ? $label : Style::dim($label)) . '  ' . Style::dim(Style::truncate($doing, max(1, $width - $names - 6)));
+        }
+        return $lines;
+    }
+
+    private static function duration(float $seconds): string
+    {
+        $seconds = (int) round($seconds);
+        return $seconds < 60 ? "{$seconds}s" : intdiv($seconds, 60) . 'm ' . ($seconds % 60) . 's';
     }
 
     /**
@@ -496,6 +687,18 @@ final class Chat
             }
             return;
         }
+        if ($this->viewing !== null) {
+            $view = array_column($this->subagents?->all() ?? [], 'view', 'name')[$this->viewing] ?? null;
+            if ($this->subagents?->steer($this->viewing, $text) === true) {
+                // Shown on its page where it joins, as it will be in its conversation.
+                if (is_array($view) && ($view['surface'] ?? null) instanceof Surface) {
+                    self::echoOn($view['surface'], $text);
+                }
+                return;
+            }
+            $this->say("{$this->viewing} is done · sent to main");
+            $this->view(null);
+        }
         if ($this->turn !== null) {
             // Bia is working: the message steers it, at its next step.
             $this->steering[] = $text;
@@ -509,6 +712,8 @@ final class Chat
         // A session is made by its first message, so starting Bia leaves no empty ones.
         $sessionId = $this->sessionId ??= $this->sessions->create($this->workspace, $this->config->modelLabel());
         $this->used = true;
+        // A new message starts something new: the subagents done with are forgotten.
+        $this->subagents?->forget();
         // A turn stopped or failed is left as it was until the next one starts: then it collapses too.
         $this->renderer->collapse();
         $this->echo($text);
@@ -605,8 +810,16 @@ final class Chat
 
     private function echo(string $text): void
     {
-        $this->region->gap();
-        // The user's words on a shaded background, a line at a time, set apart from the answer.
+        self::echoOn($this->region, $text);
+    }
+
+    /**
+     * The user's words on a shaded background, a line at a time, set apart
+     * from the answer: on the conversation, or on a subagent's page.
+     */
+    public static function echoOn(Surface $surface, string $text): void
+    {
+        $surface->gap();
         $lines = explode("\n", $text);
         $shown = Style::bar('› ' . array_shift($lines));
         foreach ($lines as $line) {
@@ -616,8 +829,8 @@ final class Chat
             // A shaded row above and below, to give the words room; without colour they would only be blank.
             $shown = Style::bar('') . "\n" . $shown . "\n" . Style::bar('');
         }
-        $this->region->print($shown . "\n");
-        $this->region->gap();
+        $surface->print($shown . "\n");
+        $surface->gap();
     }
 
     private function model(string $name): void
@@ -1050,6 +1263,7 @@ final class Chat
             Ctrl-W delete word · Ctrl-U delete to line start · Ctrl-L clear screen · Ctrl-D leave
             Ctrl-V paste an image from the clipboard · paste or drop an image file to attach it
             Type while Bia works: Enter steers it, at its next step.
+            With subagents: Down from the input to their list · Enter or a click views one · x stops or closes it · Alt+Left/Right switches, the input empty
             TEXT;
         if ($this->region->page() > 0) {
             $keys .= "\nWheel or PageUp/PageDown scroll · drag to select and copy · click a tool call to open it, Ctrl-O all";
@@ -1170,7 +1384,11 @@ final class Chat
         } else {
             [$rows, [$row, $column]] = $this->editor->render(
                 $width,
-                $this->turn === null ? 'Cook anything · / commands · @ files' : 'Steer the turn',
+                match (true) {
+                $this->viewing !== null && in_array($this->viewing, array_column(array_filter($this->subagents?->all() ?? [], static fn (array $agent): bool => $agent['state'] === 'working'), 'name'), true) => "Steer {$this->viewing}",
+                    $this->turn === null => 'Cook anything · / commands · @ files',
+                    default => 'Steer the turn',
+                },
             );
             // Suggestions open above the input, so the input does not move as they come and go.
             if ($this->menu !== null) {
@@ -1181,15 +1399,22 @@ final class Chat
             array_push($lines, ...$rows);
             $lines[] = $rule;
         }
+        $surface = $this->shown();
         if ($this->showStats) {
-            $stats = $this->stats->lines($this->region->metrics());
-            if ($this->region->page() > 0) {
-                $this->region->overlay($stats); // fullscreen: over the top right
+            $stats = $this->stats->lines($surface->metrics());
+            if ($surface->page() > 0) {
+                $surface->overlay($stats); // fullscreen: over the top right
             } else {
                 $lines[] = Style::dim(Style::truncate(implode(' · ', $stats), $width)); // inline: no corner stays
             }
         }
         $lines[] = $this->status($width);
+        $agents = $this->agentLines($width);
+        $this->agentRows = count($agents);
+        array_push($lines, ...$agents);
+        if ($this->agentRow !== null) {
+            $cursor = null; // the keys are the list's
+        }
         $pad = str_repeat(' ', $margin);
         $lines = array_map(static fn (string $line): string => $line === $rule || $line === '' ? $line : $pad . $line, $lines);
         // A blank line sets the live lines apart from the output, as blocks are.
@@ -1197,7 +1422,7 @@ final class Chat
         if ($cursor !== null) {
             $cursor = [$cursor[0] + 1, $cursor[1] + $margin];
         }
-        $this->region->set($lines, $cursor);
+        $surface->set($lines, $cursor);
     }
 
     /**

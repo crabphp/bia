@@ -347,6 +347,8 @@ final class TuiRenderer implements Renderer
             $call->name === 'apply_patch' => ($running ? 'Patching' : 'Patched') . self::patched($data),
             $call->name === 'git_diff' => $running ? 'Reading the diff' : 'Read the diff',
             $call->name === 'skill' => 'Used the skill ' . ($arguments['name'] ?? ''),
+            $call->name === 'agent' => ($running ? 'Asking ' : 'Asked ') . \Bia\Agent\Subagents::name((string) ($arguments['name'] ?? ''))
+                . ' · ' . (strtok((string) ($arguments['task'] ?? ''), "\n") ?: ''),
             preg_match('/^mcp__(.+?)__(.+)$/', $call->name, $m) === 1 => "Called {$m[1]} · {$m[2]}" . self::subjectOf($arguments),
             default => $call->name . self::subjectOf($arguments),
         };
@@ -355,6 +357,15 @@ final class TuiRenderer implements Renderer
             $title .= ' ' . self::counts($diff);
         }
         return Style::truncate(self::printable($title), 160);
+    }
+
+    /**
+     * What a call is doing, in plain words, as its row says while it runs:
+     * "Reading src/App.php".
+     */
+    public static function doing(ToolCall $call): string
+    {
+        return self::title($call, [], running: true);
     }
 
     /**

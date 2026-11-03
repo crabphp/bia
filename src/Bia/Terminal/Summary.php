@@ -20,7 +20,7 @@ final class Summary
      */
     public static function line(array $calls): string
     {
-        $commands = $shells = $searches = $lists = $tools = $failed = $added = $removed = 0;
+        $commands = $shells = $searches = $lists = $tools = $agents = $failed = $added = $removed = 0;
         $read = $edited = $skills = [];
         $diff = false;
         foreach ($calls as [$call, $result]) {
@@ -46,6 +46,9 @@ final class Summary
                     break;
                 case 'git_diff':
                     $diff = true;
+                    break;
+                case 'agent':
+                    $agents++;
                     break;
                 case 'skill':
                     $skills[(string) ($call->arguments['name'] ?? '')] = true;
@@ -79,6 +82,7 @@ final class Summary
             }
         }
         $parts = array_filter([
+            $agents > 0 ? 'asked ' . self::count($agents, 'agent') : '',
             $commands > 0 ? 'ran ' . self::count($commands, 'command') : '',
             $edited !== [] ? 'edited ' . self::count(count($edited), 'file') . ($added + $removed > 0 ? " (+{$added} −{$removed})" : '') : '',
             $read !== [] ? 'read ' . self::count(count($read), 'file') : '',

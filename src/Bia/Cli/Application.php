@@ -6,6 +6,11 @@ namespace Bia\Cli;
 
 use Bia\Agent\Agent;
 use Bia\Agent\Inspection;
+use Bia\Agent\AgentTool;
+use Bia\Agent\Subagents;
+use Bia\Session\MemoryStore;
+use Bia\Terminal\Watched;
+use Bia\Tui\Transcript;
 use Bia\Agent\Compactor;
 use Bia\Agent\SystemPrompt;
 use Bia\Config\Config;
@@ -382,6 +387,39 @@ final class Application
                 $tools->from($mcp['manager']->tools(...));
             }
             $inspection = new Inspection();
+            // Subagents only read: what they find goes back to the main agent, which does the work.
+            $reads = (new Registry())
+                ->add(new ReadFileTool($workspace, outputs: $outputs))
+                ->add(new ListFilesTool($workspace, $runner))
+                ->add(new SearchTool($workspace, $runner))
+                ->add(new GitDiffTool($workspace, $runner));
+            $subagents = new Subagents(
+                static function (string $name, \Closure $doing, \Closure $called) use (&$chat, $config, $terminal, $region, $http, $reads, $workspace, $outputs): array {
+                    // Fullscreen, a page of its own, hidden until viewed; inline, its run kept to print.
+                    $surface = $region instanceof Screen ? new Screen($terminal) : new Transcript($terminal);
+                    if ($surface instanceof Screen) {
+                        $surface->show(false);
+                    }
+                    $view = new TuiRenderer($surface);
+                    $store = new MemoryStore();
+                    $current = $chat instanceof Chat ? $chat->config() : $config;
+                    $session = $store->create($workspace->root(), $current->modelLabel());
+                    $agent = self::agent($current, $http, $reads, $store, new Watched($view, $doing, $called), $workspace, $outputs);
+                    return [$agent, $session, ['surface' => $surface, 'renderer' => $view]];
+                },
+                static function () use (&$chat): void {
+                    if ($chat instanceof Chat) {
+                        $chat->agentsChanged();
+                    }
+                },
+                $system,
+                static function (mixed $view, string $task): void {
+                    if (is_array($view)) {
+                        Chat::echoOn($view['surface'], $task);
+                    }
+                },
+            );
+            $tools->add(new AgentTool($subagents));
             $makeAgent = static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection);
             $chat = new Chat(
                 $terminal,
@@ -403,6 +441,7 @@ final class Application
                 images: new \Bia\Terminal\Images($runner, dirname($config->databasePath()) . '/images', $workspace->root()),
                 reloaded: $reloaded,
                 inspection: $inspection,
+                subagents: $subagents,
             );
             $loop->execute($chat->run(...));
             if (($again = $chat->reloading()) !== null) {
@@ -583,7 +622,7 @@ final class Application
     /**
      * The agent for the configured model; /model builds another.
      */
-    private static function agent(Config $config, Client $http, Registry $tools, SqliteStore $store, Renderer $renderer, Workspace $workspace, string $outputs, ?Inspection $inspection = null): Agent
+    private static function agent(Config $config, Client $http, Registry $tools, \Bia\Contracts\SessionStore $store, Renderer $renderer, Workspace $workspace, string $outputs, ?Inspection $inspection = null): Agent
     {
         // Shown as it happens, and kept for /inspect.
         $notice = static function (string $message) use ($renderer, $inspection): void {
