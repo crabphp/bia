@@ -46,6 +46,15 @@ final class ModelException extends \RuntimeException
     }
 
     /**
+     * Whether the provider refused the request for a field it does not
+     * take, as a model without reasoning refuses `reasoning_effort`.
+     */
+    public function rejects(string $field): bool
+    {
+        return in_array($this->status, [400, 422], true) && stripos($this->getMessage(), $field) !== false;
+    }
+
+    /**
      * Reads a provider's error answer and says whether it is about the
      * context window being too small for the request.
      *

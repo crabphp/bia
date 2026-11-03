@@ -29,15 +29,15 @@ final readonly class Config
         private array $explicit,
     ) {}
 
-    /**
-     * Settings a project's `.agents/bia.json` may set, as dotted prefixes.
-     */
     /** Settings chosen inside a conversation, kept in the user's config.php for the next ones. */
     public const REMEMBERED_KEYS = ['model.name', 'model.reasoning_effort', 'tui.render'];
 
     /** How hard a reasoning model thinks; default sends none and leaves it to the provider. */
     public const EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
+    /**
+     * Settings a project's `.agents/bia.json` may set, as dotted prefixes.
+     */
     public const PROJECT_KEYS = ['model.name', 'model.context_window', 'model.reasoning_effort', 'prompt.system', 'permissions', 'tools', 'compaction'];
 
     public static function load(?string $projectRoot = null, array $overrides = []): self

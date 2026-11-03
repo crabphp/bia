@@ -14,6 +14,7 @@ use Bia\Mcp\Manager;
 use Bia\Mcp\Server;
 use Bia\Mcp\Trust;
 use Bia\Model\Fallback;
+use Bia\Model\Lenient;
 use Bia\Model\ModelCatalog;
 use Bia\Model\OpenAiCompatibleModel;
 use Bia\Session\SqliteStore;
@@ -550,12 +551,18 @@ final class Application
                 (float) $config->get('fallback.cooldown'),
             );
         }
+        $effort = $config->effort();
+        if ($effort !== null) {
+            $model = new Lenient($model, static fn (string $message) => $renderer->notice($message));
+        }
         $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
             $model,
             $modelName,
             (int) $config->get('model.context_window'),
             (int) $config->get('compaction.reserve_tokens'),
             (int) $config->get('compaction.keep_tokens'),
+            // A summary needs no deep thought: at most low, and quicker for it.
+            $effort === null ? [] : ['reasoning_effort' => in_array($effort, ['none', 'minimal'], true) ? $effort : 'low'],
         );
         return new Agent(
             $model,
@@ -568,7 +575,7 @@ final class Application
             maxOutputBytes: (int) $config->get('tools.output_bytes'),
             maxOutputLines: (int) $config->get('tools.output_lines'),
             outputs: $outputs,
-            options: ($effort = $config->effort()) !== null ? ['reasoning_effort' => $effort] : [],
+            options: $effort !== null ? ['reasoning_effort' => $effort] : [],
         );
     }
 

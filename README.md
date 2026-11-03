@@ -128,6 +128,7 @@ bia init --global                   Create ~/.config/bia/config.php with every s
 | `--model NAME` | Model for this run |
 | `--base-url URL` | OpenAI-compatible API base URL |
 | `--api-key KEY` | API key for this run |
+| `--effort LEVEL` | Reasoning effort for this run: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `default` to send none |
 | `--resume ID` | Continue a session (same as `bia resume ID`) |
 | `--yes` | Approve tools whose permission is `ask` |
 | `--json` | Emit JSONL events on standard output |
@@ -166,6 +167,7 @@ completes.
 |---|---|
 | `/model` | Pick a model from every provider you have a key for, fuzzy-filtered as you type |
 | `/model provider/name` | Switch straight to that model; the session goes on |
+| `/effort [level]` | How hard a reasoning model thinks: `none` to `xhigh`, or `default` to leave it to the provider. Kept across `/model`; a model that refuses it is sent none, with a note. A summary for compaction asks for at most `low` |
 | `/resume` | Pick one of this folder's sessions, by its first prompt, and continue it |
 | `/resume <id>` | Continue that session; the start of its id is enough |
 | `/new` | Start a new session |
@@ -427,8 +429,9 @@ return [
 ```
 
 
-What you pick in a conversation is kept for the next ones: `/model` and
-`/render` set `model.name` and `tui.render` in this file. Only that value
+What you pick in a conversation is kept for the next ones: `/model`,
+`/effort` and `/render` set `model.name`, `model.reasoning_effort` and
+`tui.render` in this file. Only that value
 changes; your comments, `env()` calls and layout stay as you wrote them.
 
 ### Providers

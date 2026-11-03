@@ -5,10 +5,15 @@ declare(strict_types=1);
 namespace Bia\Tests;
 
 use Bia\Contracts\Message;
+use Bia\Contracts\Model;
 use Bia\Contracts\ModelEvent;
 use Bia\Contracts\ModelRequest;
+use Bia\Contracts\ModelResult;
+use Bia\Model\Lenient;
+use Bia\Model\ModelException;
 use Bia\Model\OpenAiCompatibleModel;
 use Bia\Terminal\Loop;
+use Crab\Engine\Async\Cancellation;
 use Crab\HttpClient\FakeClient;
 use PHPUnit\Framework\TestCase;
 
@@ -77,6 +82,41 @@ final class ModelTest extends TestCase
 
         $body = json_decode((string) $http->sent('POST https://proxy.example/v1/chat/completions')[0]->getBody(), true);
         self::assertSame('high', $body['reasoning_effort']);
+    }
+
+    public function testAnOptionTheProviderRefusesIsDroppedOnceAndForAll(): void
+    {
+        $refusing = new class implements Model {
+            /** @var list<array<string, mixed>> */
+            public array $sent = [];
+
+            public function stream(ModelRequest $request, callable $emit, ?Cancellation $cancellation = null): ModelResult
+            {
+                $this->sent[] = $request->options;
+                if (isset($request->options['reasoning_effort'])) {
+                    throw new ModelException("Unrecognized request argument supplied: reasoning_effort", 400);
+                }
+                return new ModelResult('ok');
+            }
+        };
+        $notes = [];
+        $model = new Lenient($refusing, static function (string $note) use (&$notes): void {
+            $notes[] = $note;
+        });
+        $request = new ModelRequest('gpt-4o', [new Message('user', 'hi')], [], ['reasoning_effort' => 'high', 'other' => 1]);
+
+        self::assertSame('ok', $model->stream($request, static function (): void {})->text);
+        self::assertSame('ok', $model->stream($request, static function (): void {})->text);
+        self::assertSame([['reasoning_effort' => 'high', 'other' => 1], ['other' => 1], ['other' => 1]], $refusing->sent, 'Refused once, then never sent again.');
+        self::assertSame(['gpt-4o takes no reasoning_effort; sent without it'], $notes);
+
+        $this->expectException(ModelException::class);
+        (new Lenient(new class implements Model {
+            public function stream(ModelRequest $request, callable $emit, ?Cancellation $cancellation = null): ModelResult
+            {
+                throw new ModelException('Invalid messages', 400);
+            }
+        }, static function (): void {}))->stream($request, static function (): void {});
     }
 
     public function testAProviderErrorCarriesItsMessageAndSaysWhenTheContextIsFull(): void

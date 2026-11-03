@@ -32,12 +32,16 @@ final readonly class Compactor
         Be specific and complete but brief. Do not invent anything that is not in the conversation.
         TEXT;
 
+    /**
+     * @param array<string, mixed> $options Sent with the summary's request, as its reasoning effort.
+     */
     public function __construct(
         private Model $model,
         private string $modelName,
         private int $contextWindow = 128_000,
         private int $reserveTokens = 16_384,
         private int $keepTokens = 20_000,
+        private array $options = [],
     ) {
         if ($this->contextWindow <= $this->reserveTokens || $this->keepTokens < 1) {
             throw new \InvalidArgumentException('Compaction needs a context window larger than its reserve, and something to keep.');
@@ -92,7 +96,7 @@ final readonly class Compactor
             new ModelRequest($this->modelName, [
                 Message::system('You summarize a coding session between a user and a coding agent, for the agent to continue from.'),
                 Message::user("<conversation>\n{$transcript}\n</conversation>\n\n" . self::INSTRUCTIONS),
-            ]),
+            ], [], $this->options),
             static function (): void {},
             $cancellation,
         );
