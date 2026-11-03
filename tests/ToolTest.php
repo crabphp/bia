@@ -41,6 +41,13 @@ final class ToolTest extends TestCase
         self::assertTrue($ok->ok, $ok->text);
         self::assertSame("two\n", file_get_contents($root . '/a.txt'));
 
+        file_put_contents($root . '/b.txt', "b\n");
+        $half = $patch->execute([
+            'patch' => "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-two\n+three\n--- a/b.txt\n+++ b/b.txt\n@@ -1 +1 @@\n-not there\n+x\n",
+        ], $context);
+        self::assertFalse($half->ok);
+        self::assertSame("two\n", file_get_contents($root . '/a.txt'), 'A patch that fails in part changes nothing: one git apply is all or nothing.');
+
         $mode = $patch->execute([
             'patch' => "diff --git a/a.txt b/a.txt\nold mode 100644\nnew mode 100755\n",
         ], $context);
@@ -104,7 +111,23 @@ final class ToolTest extends TestCase
 
         $part = $read->execute(['path' => 'lines.txt', 'offset' => 3, 'limit' => 2], $context);
         self::assertSame("3\n4\n[lines 3-4 shown; read on with offset 5]", $part->text);
+        self::assertSame("5\n6\n[lines 5-6 shown; read on with offset 7]", $read->execute(['path' => 'lines.txt', 'offset' => 5, 'limit' => 2], $context)->text, 'The next page, from where the last one ended.');
+        self::assertSame("2\n[lines 2-2 shown; read on with offset 3]", $read->execute(['path' => 'lines.txt', 'offset' => 2, 'limit' => 1], $context)->text, 'A page before the last one, from the top.');
+        self::assertSame('[lines.txt has 10 lines: there is no line 11]', $read->execute(['path' => 'lines.txt', 'offset' => 11], $context)->text);
         self::assertFalse($read->execute(['path' => 'blob.bin'], $context)->ok);
+
+        // Changed between pages: where the last page ended no longer holds, and is not used.
+        $read->execute(['path' => 'lines.txt', 'offset' => 3, 'limit' => 2], $context);
+        file_put_contents($root . '/lines.txt', "a\nb\nc\nd\ne\nf\ng");
+        touch($root . '/lines.txt', time() + 5);
+        self::assertSame("e\nf\n[lines 5-6 shown; read on with offset 7]", $read->execute(['path' => 'lines.txt', 'offset' => 5, 'limit' => 2], $context)->text);
+        self::assertSame('g', $read->execute(['path' => 'lines.txt', 'offset' => 7], $context)->text, 'A last line without its line end.');
+        self::assertSame('[lines.txt has 7 lines: there is no line 8]', $read->execute(['path' => 'lines.txt', 'offset' => 8], $context)->text, 'Counted too.');
+
+        // Pages far into a file of many blocks start at the very line asked for.
+        file_put_contents($root . '/big.txt', implode("\n", range(1, 300_000)) . "\n");
+        self::assertSame("250000\n[lines 250000-250000 shown; read on with offset 250001]", $read->execute(['path' => 'big.txt', 'offset' => 250_000, 'limit' => 1], $context)->text);
+        self::assertSame("299999\n300000\n", $read->execute(['path' => 'big.txt', 'offset' => 299_999], $context)->text);
     }
 
     public function testListingKeepsHiddenFileNames(): void

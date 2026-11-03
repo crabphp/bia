@@ -40,18 +40,26 @@ final readonly class ListFilesTool implements Tool
         }
         $limit = max(1, min(2000, (int) ($arguments['limit'] ?? 500)));
         try {
-            $rg = $this->process->run(['rg', '--files', '--hidden', '-g', '!.git', '-g', '!vendor'], $directory, 10.0, 256_000, cancellation: $cancellation);
+            // Stopped once it has listed about what is kept: a tree of a hundred thousand files costs no more.
+            $rg = $this->process->run(['rg', '--files', '--hidden', '-g', '!.git', '-g', '!vendor'], $directory, 10.0, ($limit + 1) * 1024, cancellation: $cancellation);
         } catch (\RuntimeException) {
             $rg = null;
         }
         if ($rg !== null && ($rg->truncated || $rg->exitCode === 0 || ($rg->exitCode === 1 && $rg->stdout === ''))) {
-            $lines = array_slice(array_values(array_filter(explode("\n", trim($rg->stdout)))), 0, $limit);
-            if ($relative !== '.') {
-                $lines = array_map(static function (string $line) use ($relative): string {
-                    return rtrim($relative, '/') . '/' . $line;
-                }, $lines);
+            $found = array_values(array_filter(explode("\n", $rg->stdout), static fn (string $line): bool => $line !== ''));
+            if ($rg->truncated) {
+                array_pop($found); // stopped partway through it
             }
-            return new ToolResult(implode("\n", $lines), true, ['count' => count($lines)]);
+            $lines = array_slice($found, 0, $limit);
+            if ($relative !== '.') {
+                $lines = array_map(static fn (string $line): string => rtrim($relative, '/') . '/' . $line, $lines);
+            }
+            $cut = $rg->truncated || count($found) > $limit;
+            return new ToolResult(
+                implode("\n", $lines) . ($cut ? "\n[the first {$limit} files; there are more: list a directory inside]" : ''),
+                true,
+                ['count' => count($lines)],
+            );
         }
         $lines = [];
         $iterator = new \RecursiveIteratorIterator(
