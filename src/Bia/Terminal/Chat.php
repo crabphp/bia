@@ -53,6 +53,20 @@ final class Chat
      */
     private const MASCOT = ['▙▄▄▄▄▄▟', '█▄███▄█'];
     private const MASCOT_COLOUR = 214;
+    /** Her face with her eyes shut: the gaps filled. */
+    private const MASCOT_BLINK = '███████';
+    /** Seconds after the banner of each blink: one. */
+    private const BLINKS = [0.6];
+    /** Seconds her eyes stay shut. */
+    private const BLINK = 0.14;
+
+    /** The banner's line with the mascot's eyes, and the timers blinking them. */
+    private ?int $bannerLine = null;
+    /** @var list<string> */
+    private array $blinking = [];
+    /** Whether the mascot has blinked: she does once, at the start. */
+    private bool $blinked = false;
+    private int $bannerWidth = 0;
 
     private readonly Editor $editor;
     private readonly Commands $commands;
@@ -191,7 +205,7 @@ final class Chat
                 $this->draw();
             })
             : null;
-        $this->region->print($this->banner(max(20, $this->terminal->columns())));
+        $this->greet();
         if ($this->sessionId !== null) {
             $this->replay($this->sessionId);
         } elseif ($this->pickSession) {
@@ -214,6 +228,7 @@ final class Chat
         } finally {
             $this->turn?->cancel();
             $this->confirming?->resume(false);
+            $this->stopBlinking();
             if ($resize !== null) {
                 $loop->cancel($resize);
             }
@@ -654,7 +669,7 @@ final class Chat
         $this->used = false;
         $this->contextTokens = null;
         $this->region->clear(scrollback: true);
-        $this->region->print($this->banner(max(20, $this->terminal->columns())));
+        $this->greet();
         $this->region->print(Style::dim('· new session' . ($left !== null ? " · /resume {$left} to go back" : '')) . "\n");
     }
 
@@ -1104,11 +1119,53 @@ final class Chat
     }
 
     /**
+     * Prints the banner, and blinks the mascot's eyes once, the first time
+     * only, as a cat looking up when someone comes in. Fullscreen only, and in colour:
+     * inline, its rows are the terminal's once printed.
+     */
+    private function greet(): void
+    {
+        $this->stopBlinking();
+        $this->bannerWidth = max(20, $this->terminal->columns());
+        $this->bannerLine = $this->region->here() + 1;
+        $this->region->print($this->banner($this->bannerWidth));
+        if ($this->blinked || !$this->region instanceof Screen || !Style::color()) {
+            return;
+        }
+        $this->blinked = true;
+        $loop = EventLoop::current();
+        foreach (self::BLINKS as $at) {
+            $this->blinking[] = $loop->delay($at, fn () => $this->eyes(true));
+            $this->blinking[] = $loop->delay($at + self::BLINK, fn () => $this->eyes(false));
+        }
+    }
+
+    /**
+     * The banner's eye line with her eyes shut, or open again.
+     */
+    private function eyes(bool $shut): void
+    {
+        if ($this->bannerLine === null) {
+            return;
+        }
+        $line = explode("\n", $this->banner($this->bannerWidth, $shut))[1];
+        $this->region->change($this->bannerLine, $line);
+    }
+
+    private function stopBlinking(): void
+    {
+        foreach ($this->blinking as $timer) {
+            EventLoop::current()->cancel($timer);
+        }
+        $this->blinking = [];
+    }
+
+    /**
      * The greeting: Bia the cat beside its version and the model, and the
      * project's folder under them. Each line is cut to the room beside the
      * cat, so none wraps under it on a narrow screen.
      */
-    private function banner(int $width): string
+    private function banner(int $width, bool $blink = false): string
     {
         // The screen's width, less its margins, the cat and the space after it.
         $indent = Style::width(self::MASCOT[0]) + 3;
@@ -1116,7 +1173,7 @@ final class Chat
         $version = Style::bold('bia') . ' ' . Style::dim(Style::truncate($this->version, max(0, $room - 4)));
         $model = Style::dim(Style::truncate($this->modelShown(), $room));
         $place = Style::dim(Style::truncate($this->place, $room));
-        [$first, $second] = self::mascot();
+        [$first, $second] = self::mascot($blink);
         return $first . '   ' . $version . "\n" . $second . '   ' . $model . "\n" . str_repeat(' ', $indent) . $place . "\n\n";
     }
 
@@ -1125,10 +1182,10 @@ final class Chat
      *
      * @return array{string, string}
      */
-    private static function mascot(): array
+    private static function mascot(bool $blink = false): array
     {
         $paint = static fn (string $line): string => Style::color() ? "\e[38;5;" . self::MASCOT_COLOUR . "m{$line}\e[0m" : $line;
-        return [$paint(self::MASCOT[0]), $paint(self::MASCOT[1])];
+        return [$paint(self::MASCOT[0]), $paint($blink ? self::MASCOT_BLINK : self::MASCOT[1])];
     }
 
     private function status(int $width): string

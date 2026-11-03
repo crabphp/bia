@@ -89,6 +89,11 @@ final class Region implements Surface
         return 0;
     }
 
+    public function change(int $line, string $text): void
+    {
+        // Inline, what was printed is the terminal's scrollback: it stays as it was.
+    }
+
     public function collapse(int $from, int $to, string $summary): void
     {
         // Inline, what was printed is the terminal's scrollback: it stays as it was.

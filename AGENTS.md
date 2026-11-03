@@ -93,6 +93,8 @@ the rule here first, with the user's agreement.
   `power` paces it and draws `Tui\Effects` over it. Effects only ever draw
   over a frame: they change nothing kept, nothing copied, and nothing once
   they have settled. Anything else drawn first catches the paced text up.
+- The banner's cat blinks once as it is first drawn, at the start
+  only (not on `/new`), fullscreen and in colour only; nothing else in it moves.
 
 **Checking**
 - A change to what is shown is not done until it was looked at in a real

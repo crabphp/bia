@@ -139,6 +139,16 @@ final class Screen implements Surface
         return $this->next + ($this->partial . $this->draft !== '' ? 1 : 0);
     }
 
+    public function change(int $line, string $text): void
+    {
+        if (!isset($this->done[$line]) || isset($this->folds[$line]) || $this->done[$line] === $text) {
+            return;
+        }
+        $this->done[$line] = $text;
+        unset($this->wrapped[$line]);
+        $this->schedule();
+    }
+
     public function collapse(int $from, int $to, string $summary): void
     {
         $from = max($from, $this->start);

@@ -46,6 +46,14 @@ interface Surface
     public function here(): int;
 
     /**
+     * Changes a finished line, by its number from here(), as it is shown:
+     * a small animation of something kept, as a blink. A line no longer
+     * kept, or one that opens, is left alone; where the output is the
+     * terminal's own, nothing changes.
+     */
+    public function change(int $line, string $text): void;
+
+    /**
      * Shows finished lines, from one mark up to another, as one line, as a
      * finished turn's run of tool calls: they come back with a click on it
      * or with folds(true). Where the output is the terminal's own, what
