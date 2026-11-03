@@ -97,6 +97,35 @@ final readonly class Compactor
     }
 
     /**
+     * The old tool results to prune, oldest first, before summarizing: just
+     * enough to bring $tokens a fifth under the limit, none in the recent
+     * part a compaction would keep. Null when pruning cannot get there.
+     *
+     * @return array{list<array{int, Message}>, int}|null Each result with its entry id, and the tokens after.
+     */
+    public function prunable(Context $context, int $tokens, float $idle = 0.0): ?array
+    {
+        $limit = min($this->contextWindow - $this->reserveTokens, $this->atTokens ?? PHP_INT_MAX);
+        if ($this->idleSeconds !== null && $idle >= $this->idleSeconds) {
+            $limit = min($limit, $this->idleTokens);
+        }
+        $target = intdiv($limit * 4, 5);
+        $cut = $this->cut($context) ?? 0;
+        $picked = [];
+        foreach (array_slice($context->items, 0, $cut) as [$id, $message]) {
+            if ($tokens <= $target) {
+                break;
+            }
+            if ($id === null || $message->role !== 'tool' || mb_strlen($message->text, 'UTF-8') <= Context::PRUNE_OVER) {
+                continue;
+            }
+            $picked[] = [$id, $message];
+            $tokens -= self::size($message) - self::size(Context::prune($message, null));
+        }
+        return $picked !== [] && $tokens <= $target ? [$picked, $tokens] : null;
+    }
+
+    /**
      * Seconds since the latest reply in $entries, or 0 when there is none.
      *
      * @param list<Entry> $entries

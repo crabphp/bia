@@ -296,7 +296,11 @@ final class Application
             fwrite(STDOUT, json_encode([
                 'id' => $entry->id,
                 'parent_id' => $entry->parentId,
-                'type' => $entry->payload instanceof \Bia\Contracts\Message ? 'message' : 'compaction',
+                'type' => match (true) {
+                    $entry->payload instanceof \Bia\Contracts\Message => 'message',
+                    $entry->payload instanceof \Bia\Contracts\Pruning => 'pruning',
+                    default => 'compaction',
+                },
                 'created_at' => $entry->createdAt,
                 'data' => $entry->payload->toArray(),
             ], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . PHP_EOL);
@@ -597,9 +601,8 @@ final class Application
             );
         }
         $effort = $config->effort();
-        if ($effort !== null) {
-            $model = new Lenient($model, $notice);
-        }
+        // Whatever the provider refuses (an effort, reasoning sent back, or none of it) is mended once.
+        $model = new Lenient($model, $notice);
         $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
             $model,
             $modelName,

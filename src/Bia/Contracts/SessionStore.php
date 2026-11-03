@@ -20,7 +20,7 @@ interface SessionStore
      *
      * @return Entry The stored entry, with its id.
      */
-    public function append(string $sessionId, Message|Compaction $payload): Entry;
+    public function append(string $sessionId, Message|Compaction|Pruning $payload): Entry;
 
     /**
      * The entries from the root to the session's head, in order.

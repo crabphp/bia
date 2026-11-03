@@ -55,7 +55,7 @@ final readonly class OpenAiCompatibleModel implements Model
     ): ModelResult {
         $payload = [
             'model' => $request->model !== '' ? $request->model : $this->defaultModel,
-            'messages' => self::messages($request->messages),
+            'messages' => self::messages($request->messages, $request->reasoning),
             'stream' => true,
         ];
         if ($this->streamUsage && str_ends_with(rtrim($this->endpoint, '/'), 'chat/completions')) {
@@ -96,7 +96,7 @@ final readonly class OpenAiCompatibleModel implements Model
             if ($text !== '') {
                 $emit(ModelEvent::text($text));
             }
-            $reasoning = self::reasoning($data);
+            [$reasoning, $field] = self::reasoning($data);
             $usage = self::usage($data['usage'] ?? null);
             if ($usage !== []) {
                 $emit(ModelEvent::usage($usage));
@@ -107,11 +107,12 @@ final readonly class OpenAiCompatibleModel implements Model
                 $emit(ModelEvent::toolCall($toolCall->toArray()));
             }
             $emit(ModelEvent::completed(['finish_reason' => $finishReason, 'usage' => $usage]));
-            return new ModelResult($text, $finishReason, $usage, $toolCalls, $data, $reasoning);
+            return new ModelResult($text, $finishReason, $usage, $toolCalls, $data, $reasoning, reasoningField: $reasoning !== '' ? $field : '');
         }
 
         $text = '';
         $reasoning = '';
+        $field = '';
         $usage = [];
         $finishReason = 'stop';
         $raw = [];
@@ -134,8 +135,9 @@ final readonly class OpenAiCompatibleModel implements Model
                 $text .= $delta;
                 $emit(ModelEvent::text($delta));
             }
-            $thought = self::reasoning($data);
+            [$thought, $from] = self::reasoning($data);
             if ($thought !== '') {
+                $field = $from;
                 $reasoning .= $thought;
                 $emit(ModelEvent::reasoning($thought));
             }
@@ -157,17 +159,19 @@ final readonly class OpenAiCompatibleModel implements Model
             $emit(ModelEvent::toolCall($toolCall->toArray()));
         }
         $emit(ModelEvent::completed(['finish_reason' => $finishReason, 'usage' => $usage]));
-        return new ModelResult($text, $finishReason, $usage, $toolCalls, $raw, $reasoning);
+        return new ModelResult($text, $finishReason, $usage, $toolCalls, $raw, $reasoning, reasoningField: $field);
     }
 
     /**
-     * Neutral messages in the Chat Completions format. Reasoning stays out:
-     * Chat Completions takes none back.
+     * Neutral messages in the Chat Completions format. A reply's reasoning
+     * goes back in the field it came in, as DeepSeek requires once tools are
+     * in play, and stays out where none was sent in a field of its own (see
+     * ModelRequest::$reasoning for the other ways).
      *
      * @param list<Message> $messages
      * @return list<array<string, mixed>>
      */
-    public static function messages(array $messages): array
+    public static function messages(array $messages, string $reasoning = 'stored'): array
     {
         $wire = [];
         foreach ($messages as $message) {
@@ -201,6 +205,14 @@ final readonly class OpenAiCompatibleModel implements Model
                     ],
                 ], $message->toolCalls);
             }
+            if ($message->role === 'assistant' && $reasoning !== 'none') {
+                $field = (string) ($message->meta['reasoning_field'] ?? '');
+                if ($field !== '' && $message->reasoning !== '') {
+                    $item[$field] = $message->reasoning;
+                } elseif ($reasoning === 'all') {
+                    $item['reasoning_content'] = $message->reasoning;
+                }
+            }
             $wire[] = $item;
         }
         return $wire;
@@ -226,15 +238,21 @@ final readonly class OpenAiCompatibleModel implements Model
     }
 
     /**
-     * Reasoning text, as DeepSeek, vLLM and OpenRouter stream it.
+     * Reasoning text, as DeepSeek, vLLM and OpenRouter stream it, and the
+     * field it came in.
      *
      * @param array<string, mixed> $data
+     * @return array{string, string}
      */
-    private static function reasoning(array $data): string
+    private static function reasoning(array $data): array
     {
         $part = $data['choices'][0]['delta'] ?? $data['choices'][0]['message'] ?? [];
-        $value = is_array($part) ? ($part['reasoning_content'] ?? $part['reasoning'] ?? '') : '';
-        return is_string($value) ? $value : '';
+        foreach (['reasoning_content', 'reasoning'] as $field) {
+            if (is_array($part) && is_string($part[$field] ?? null) && $part[$field] !== '') {
+                return [$part[$field], $field];
+            }
+        }
+        return ['', ''];
     }
 
     /**

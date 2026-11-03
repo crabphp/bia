@@ -52,7 +52,7 @@ final class Fallback implements Model
             $started = false;
             try {
                 $result = $entry['model']->stream(
-                    new ModelRequest($entry['name'], $request->messages, $request->tools, $request->options),
+                    $request->with(model: $entry['name']),
                     static function ($event) use (&$started, $emit): void {
                         $started = true;
                         $emit($event);
@@ -73,7 +73,7 @@ final class Fallback implements Model
                 ($this->notice)(($why !== '' ? "{$why} · " : '') . '→ ' . $entry['label']);
                 $this->current = $index;
             }
-            return new ModelResult($result->text, $result->finishReason, $result->usage, $result->toolCalls, $result->raw, $result->reasoning, $index === 0 ? '' : $entry['label']);
+            return new ModelResult($result->text, $result->finishReason, $result->usage, $result->toolCalls, $result->raw, $result->reasoning, $index === 0 ? '' : $entry['label'], $result->reasoningField);
         }
         throw $failure ?? new \LogicException('No model was asked.');
     }

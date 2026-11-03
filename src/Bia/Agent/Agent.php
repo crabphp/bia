@@ -7,6 +7,7 @@ namespace Bia\Agent;
 use Bia\Contracts\Compaction;
 use Bia\Contracts\Entry;
 use Bia\Contracts\Message;
+use Bia\Contracts\Pruning;
 use Bia\Contracts\Model;
 use Bia\Contracts\ModelRequest;
 use Bia\Contracts\ModelResult;
@@ -37,6 +38,12 @@ final readonly class Agent
      * passing reason, doubling: 31 seconds over five tries in all.
      */
     public const RETRY_DELAYS = [1.0, 2.0, 4.0, 8.0, 16.0];
+
+    /**
+     * How many times a call may give the same result in a turn before the
+     * model is reminded that it is going round: on the third, fifth and eighth.
+     */
+    public const REPEATS = [3, 5, 8];
 
     /** The longest wait a provider's Retry-After is followed for. */
     private const RETRY_AFTER_LIMIT = 60.0;
@@ -80,6 +87,8 @@ final readonly class Agent
         $retried = false;
         $stepped = false;
         $this->inspection?->turn();
+        /** @var array<string, int> How often each call has given each result, this turn. */
+        $repeats = [];
 
         for ($turn = 0; $turn < $this->maxTurns; $turn++) {
             $cancellation?->throwIfCancelled();
@@ -88,6 +97,7 @@ final readonly class Agent
             if ($stepped && $steer !== null) {
                 // After the tool results, where a user message may follow them: the user steers.
                 foreach ($steer() as $message) {
+                    $repeats = []; // a word from the user is a new direction: nothing repeats it
                     $entries[] = $this->sessions->append($sessionId, $message instanceof Message
                         ? Message::user(self::clean($message->text), $message->images)
                         : Message::user(self::clean($message)));
@@ -97,7 +107,10 @@ final readonly class Agent
             $context = Context::build($entries);
             if ($this->compactor !== null) {
                 $tokens = $this->compactor->tokens($context, $system, $definitions);
-                if ($this->compactor->needed($tokens, $turn === 0 ? $idle : 0.0) && ($entry = $this->compactEntries($sessionId, $context, $tokens, $cancellation)) !== null) {
+                $rested = $turn === 0 ? $idle : 0.0;
+                // Room is made by pruning old tool results when that is enough, which asks no model; else by a summary.
+                if ($this->compactor->needed($tokens, $rested)
+                    && ($entry = $this->prune($sessionId, $context, $tokens, $rested) ?? $this->compactEntries($sessionId, $context, $tokens, $cancellation)) !== null) {
                     $entries[] = $entry;
                     $context = Context::build($entries);
                 }
@@ -128,7 +141,12 @@ final readonly class Agent
                 $result->text,
                 $result->toolCalls,
                 $result->reasoning,
-                meta: array_filter(['usage' => $result->usage, 'finish_reason' => $result->finishReason, 'model' => $result->model !== '' ? $result->model : $this->modelName]),
+                meta: array_filter([
+                    'usage' => $result->usage,
+                    'finish_reason' => $result->finishReason,
+                    'model' => $result->model !== '' ? $result->model : $this->modelName,
+                    'reasoning_field' => $result->reasoningField,
+                ]),
             ));
             if ($result->toolCalls === []) {
                 $this->renderer->finish($result);
@@ -140,9 +158,19 @@ final readonly class Agent
                 foreach ($this->execute($batch, $toolContext, $cancellation) as $index => $toolResult) {
                     $call = $batch[$index];
                     $this->renderer->tool($call, $toolResult);
+                    $text = $this->bound($toolResult->text, $sessionId, $call);
+                    $key = hash('xxh128', $call->name . "\0" . self::canonical($call->arguments) . "\0" . $toolResult->text);
+                    $times = $repeats[$key] = ($repeats[$key] ?? 0) + 1;
+                    if (in_array($times, self::REPEATS, true)) {
+                        $text .= "\n\n[Bia: this exact call has now given this exact result {$times} times in this turn."
+                            . ' Nothing it reads has changed. Use what it says, try another way, or finish.]';
+                        $notice = "Same call, same result {$times}× · reminded the model";
+                        $this->inspection?->event($notice);
+                        $this->renderer->notice($notice);
+                    }
                     $entries[] = $this->sessions->append($sessionId, Message::toolResult(
                         $call,
-                        $this->bound($toolResult->text, $sessionId, $call),
+                        $text,
                         $toolResult->ok,
                         $toolResult->data === [] ? [] : ['data' => $toolResult->data],
                     ));
@@ -248,6 +276,28 @@ final readonly class Agent
         return $payload instanceof Compaction ? $payload : null;
     }
 
+    /**
+     * Cuts old tool results to their start and end, each whole one saved for
+     * the model to read again, when that alone gives the conversation room.
+     */
+    private function prune(string $sessionId, Context $context, int $tokens, float $idle): ?Entry
+    {
+        $picked = $this->compactor?->prunable($context, $tokens, $idle);
+        if ($picked === null) {
+            return null;
+        }
+        [$results, $after] = $picked;
+        $saved = [];
+        foreach ($results as [$id, $message]) {
+            $saved[$id] = $this->save($message->text, $sessionId, ($message->toolCallId ?? (string) $id) . '-whole');
+        }
+        $count = count($results);
+        $notice = "Pruned {$count} old tool " . ($count === 1 ? 'output' : 'outputs') . ' · ' . self::thousands($tokens) . ' → ' . self::thousands($after) . ' tokens';
+        $this->inspection?->event($notice);
+        $this->renderer->notice($notice);
+        return $this->sessions->append($sessionId, new Pruning($saved, $tokens, $after));
+    }
+
     private function compactEntries(string $sessionId, Context $context, int $tokens, ?Cancellation $cancellation): ?Entry
     {
         $this->renderer->notice('Compacting the conversation (about ' . self::thousands($tokens) . ' tokens)…');
@@ -342,7 +392,7 @@ final readonly class Agent
         if (strlen($text) <= $this->maxOutputBytes && count($lines) <= $this->maxOutputLines) {
             return $text;
         }
-        $saved = $this->save($text, $sessionId, $call);
+        $saved = $this->save($text, $sessionId, $call->id);
         $budget = intdiv($this->maxOutputBytes, 2) - 128;
         $head = self::take($lines, $budget, intdiv($this->maxOutputLines, 2));
         $tail = array_reverse(self::take(array_reverse(array_slice($lines, count($head))), $budget, intdiv($this->maxOutputLines, 2)));
@@ -374,17 +424,37 @@ final readonly class Agent
         return $taken;
     }
 
-    private function save(string $text, string $sessionId, ToolCall $call): ?string
+    private function save(string $text, string $sessionId, string $name): ?string
     {
         if ($this->outputs === null) {
             return null;
         }
         $directory = $this->outputs . '/' . preg_replace('/[^A-Za-z0-9_-]/', '_', $sessionId);
-        $path = $directory . '/' . preg_replace('/[^A-Za-z0-9_-]/', '_', $call->id) . '.txt';
+        $path = $directory . '/' . preg_replace('/[^A-Za-z0-9_-]/', '_', $name) . '.txt';
         if ((!is_dir($directory) && !@mkdir($directory, 0700, true) && !is_dir($directory)) || @file_put_contents($path, $text) === false) {
             return null;
         }
         return $path;
+    }
+
+    /**
+     * Arguments as one string whatever their keys' order, so that the same
+     * call is known as the same.
+     *
+     * @param array<mixed> $arguments
+     */
+    private static function canonical(array $arguments): string
+    {
+        $sort = static function (mixed $value) use (&$sort): mixed {
+            if (!is_array($value)) {
+                return $value;
+            }
+            if (!array_is_list($value)) {
+                ksort($value);
+            }
+            return array_map($sort, $value);
+        };
+        return (string) json_encode($sort($arguments), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
     }
 
     private static function clean(string $text): string

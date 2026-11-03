@@ -156,6 +156,69 @@ final class ModelTest extends TestCase
 
         self::assertSame('answer', $result->text);
         self::assertSame('think', $result->reasoning);
+        self::assertSame('reasoning_content', $result->reasoningField, 'The field it came in, to send it back in.');
+    }
+
+    public function testReasoningGoesBackInTheFieldItCameIn(): void
+    {
+        $thought = new Message('assistant', 'a', reasoning: 'why', meta: ['reasoning_field' => 'reasoning_content']);
+        $kept = new Message('assistant', 'b', reasoning: 'old, from before the field was kept');
+        $plain = new Message('assistant', 'c');
+
+        $stored = OpenAiCompatibleModel::messages([$thought, $kept, $plain]);
+        self::assertSame('why', $stored[0]['reasoning_content']);
+        self::assertArrayNotHasKey('reasoning_content', $stored[1], 'Not knowing the field, it is not guessed.');
+        self::assertArrayNotHasKey('reasoning_content', $stored[2]);
+
+        $all = OpenAiCompatibleModel::messages([$thought, $kept, $plain], 'all');
+        self::assertSame(['why', 'old, from before the field was kept', ''], array_column($all, 'reasoning_content'));
+
+        self::assertArrayNotHasKey('reasoning_content', OpenAiCompatibleModel::messages([$thought], 'none')[0]);
+    }
+
+    public function testAProviderIsSentItsReasoningAsItAsksOnceAndForAll(): void
+    {
+        // As DeepSeek with tools: every earlier reply's reasoning must come back, or 400.
+        $strict = new class implements Model {
+            /** @var list<string> */
+            public array $modes = [];
+
+            public function stream(ModelRequest $request, callable $emit, ?Cancellation $cancellation = null): ModelResult
+            {
+                $this->modes[] = $request->reasoning;
+                if ($request->reasoning !== 'all') {
+                    throw new ModelException('The reasoning_content in the thinking mode must be passed back to the API.', 400);
+                }
+                return new ModelResult('ok');
+            }
+        };
+        $notes = [];
+        $model = new Lenient($strict, static function (string $note) use (&$notes): void {
+            $notes[] = $note;
+        });
+        $request = new ModelRequest('deepseek-v4-pro', [Message::user('hi'), new Message('assistant', 'from another model'), Message::user('go on')]);
+        $model->stream($request, static function (): void {});
+        $model->stream($request, static function (): void {});
+        self::assertSame(['stored', 'all', 'all'], $strict->modes, 'Mended once, then sent so from the start.');
+        self::assertSame(['deepseek-v4-pro wants its reasoning back on every reply; sent'], $notes);
+
+        // One that refuses the field: sent none from then on.
+        $refusing = new class implements Model {
+            /** @var list<string> */
+            public array $modes = [];
+
+            public function stream(ModelRequest $request, callable $emit, ?Cancellation $cancellation = null): ModelResult
+            {
+                $this->modes[] = $request->reasoning;
+                if ($request->reasoning !== 'none') {
+                    throw new ModelException("Unrecognized field 'messages[1].reasoning_content'", 400);
+                }
+                return new ModelResult('ok');
+            }
+        };
+        $thought = new Message('assistant', 'a', reasoning: 'why', meta: ['reasoning_field' => 'reasoning_content']);
+        (new Lenient($refusing, static function (): void {}))->stream(new ModelRequest('other', [Message::user('hi'), $thought]), static function (): void {});
+        self::assertSame(['stored', 'none'], $refusing->modes);
     }
 
     public function testBrokenToolArgumentsBecomeAnError(): void

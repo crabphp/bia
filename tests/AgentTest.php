@@ -46,6 +46,24 @@ final class AgentTest extends TestCase
         self::assertContains('user:no, the other file', array_map(static fn (Message $m): string => $m->role . ':' . $m->text, self::messages($store, $session)), 'It is kept in the session.');
     }
 
+    public function testAModelGoingRoundIsRemindedOnTheThirdSameResult(): void
+    {
+        [$store, $session] = $this->session();
+        $same = static fn (string $id): ToolCall => self::call($id, 'echo', ['value' => 'x', 'n' => 1]);
+        $reordered = self::call('c3', 'echo', ['n' => 1, 'value' => 'x']);
+        $model = new ScriptedModel([[$same('c1')], [self::call('c-other', 'echo', ['value' => 'y'])], [$same('c2')], [$reordered], [$same('c4')]]);
+        $renderer = new FakeRenderer();
+        $agent = new Agent($model, 'fake', (new Registry())->add(new EchoTool()), $store, $renderer, '/workspace');
+
+        $agent->run($session, 'go');
+
+        $results = array_values(array_filter(self::messages($store, $session), static fn (Message $m): bool => $m->role === 'tool'));
+        self::assertStringNotContainsString('[Bia:', $results[2]->text, 'Twice is not going round.');
+        self::assertStringContainsString('given this exact result 3 times', $results[3]->text, 'Its keys in another order, it is the same call; another call between does not hide it.');
+        self::assertStringNotContainsString('[Bia:', $results[4]->text, 'Reminded at 3, 5 and 8, not each time.');
+        self::assertSame(['Same call, same result 3× · reminded the model'], $renderer->notices);
+    }
+
     public function testAPassingFailureIsTriedAgain(): void
     {
         [$store, $session] = $this->session();
@@ -257,6 +275,39 @@ final class AgentTest extends TestCase
         $types = array_map(static fn (Entry $entry): string => $entry->payload::class, $store->path($session));
         self::assertContains(\Bia\Contracts\Compaction::class, $types);
         self::assertCount(15, $types, 'Compaction rewrote the log instead of appending to it.');
+    }
+
+    public function testOldToolOutputIsPrunedBeforeAnythingIsSummarized(): void
+    {
+        [$store, $session] = $this->session();
+        for ($i = 1; $i <= 8; $i++) {
+            $call = self::call("old-{$i}", 'echo', ['value' => $i]);
+            $store->append($session, Message::user("step {$i}"));
+            $store->append($session, new Message('assistant', '', [$call]));
+            $store->append($session, Message::toolResult($call, "START {$i}\n" . str_repeat("a line of output\n", 1400) . "END {$i}", true));
+        }
+        $model = new ScriptedModel([]);
+        $summarizer = new SummarizingModel();
+        $renderer = new FakeRenderer();
+        $outputs = sys_get_temp_dir() . '/bia-prune-' . bin2hex(random_bytes(4));
+        $agent = new Agent($model, 'fake', new Registry(), $store, $renderer, '/workspace', new Compactor($summarizer, 'fake', 40_000, 1024, 1200), outputs: $outputs);
+
+        $agent->run($session, 'final question');
+
+        self::assertSame(0, $summarizer->calls, 'Pruning was enough: no model was asked to summarize.');
+        $sent = array_values(array_filter($model->requests[0]->messages, static fn (Message $m): bool => $m->role === 'tool'));
+        self::assertCount(8, $sent, 'Nothing was dropped, only cut.');
+        self::assertStringContainsString('lines cut later', $sent[0]->text, 'The oldest first.');
+        self::assertStringStartsWith('START 1', $sent[0]->text);
+        self::assertStringEndsWith('END 1', $sent[0]->text, 'Its start and its end are kept.');
+        self::assertStringNotContainsString('lines cut later', $sent[7]->text, 'The recent part stays whole.');
+        preg_match('/saved at (\S+):/', $sent[0]->text, $match);
+        self::assertStringEndsWith('END 1', (string) file_get_contents($match[1]), 'The whole output can be read again.');
+        self::assertMatchesRegularExpression('/^Pruned \d old tool outputs · \d+k → \d+k tokens$/', $renderer->notices[0]);
+
+        $model->requests = [];
+        $agent->run($session, 'and again');
+        self::assertStringContainsString('lines cut later', $model->requests[0]->messages[2]->text, 'The pruning is kept with the session, so the same prefix is sent again.');
     }
 
     public function testCompactionComesAtTheSetTokensAndAfterTheCacheIsGone(): void

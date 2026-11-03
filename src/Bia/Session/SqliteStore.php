@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Bia\Session;
 
 use Bia\Contracts\Compaction;
+use Bia\Contracts\Pruning;
 use Bia\Contracts\Entry;
 use Bia\Contracts\Message;
 use Bia\Contracts\SessionStore;
@@ -32,7 +33,7 @@ final class SqliteStore implements SessionStore
         return $id;
     }
 
-    public function append(string $sessionId, Message|Compaction $payload): Entry
+    public function append(string $sessionId, Message|Compaction|Pruning $payload): Entry
     {
         $pdo = $this->open();
         $pdo->beginTransaction();
@@ -50,7 +51,11 @@ final class SqliteStore implements SessionStore
             )->execute([
                 $sessionId,
                 $parent,
-                $payload instanceof Message ? 'message' : 'compaction',
+                match (true) {
+                    $payload instanceof Message => 'message',
+                    $payload instanceof Pruning => 'pruning',
+                    default => 'compaction',
+                },
                 json_encode($payload->toArray(), JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
                 $now,
             ]);
@@ -88,7 +93,11 @@ final class SqliteStore implements SessionStore
             $entries[] = new Entry(
                 (int) $row['id'],
                 $row['parent_id'] === null ? null : (int) $row['parent_id'],
-                $row['type'] === 'compaction' ? Compaction::fromArray($data) : Message::fromArray($data),
+                match ($row['type']) {
+                    'compaction' => Compaction::fromArray($data),
+                    'pruning' => Pruning::fromArray($data),
+                    default => Message::fromArray($data),
+                },
                 (string) $row['created_at'],
             );
         }

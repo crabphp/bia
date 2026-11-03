@@ -14,7 +14,7 @@ final readonly class Entry
     public function __construct(
         public int $id,
         public ?int $parentId,
-        public Message|Compaction $payload,
+        public Message|Compaction|Pruning $payload,
         public string $createdAt = '',
     ) {}
 

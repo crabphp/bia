@@ -831,7 +831,7 @@ final class Chat
         };
         foreach ($shown as $entry) {
             $payload = $entry->payload;
-            if ($payload instanceof Message && $payload->role === 'tool') {
+            if (($payload instanceof Message && $payload->role === 'tool') || $payload instanceof \Bia\Contracts\Pruning) {
                 continue;
             }
             if (!$payload instanceof Message || $payload->role === 'user' || $payload->text !== '') {

@@ -14,6 +14,7 @@ final readonly class ModelResult
      * @param list<ToolCall> $toolCalls
      * @param array<string, mixed> $raw
      * @param string $model The model that answered, when another than the one asked for did.
+     * @param string $reasoningField The field the provider sent its reasoning in, to send it back in.
      */
     public function __construct(
         public string $text,
@@ -23,5 +24,6 @@ final readonly class ModelResult
         public array $raw = [],
         public string $reasoning = '',
         public string $model = '',
+        public string $reasoningField = '',
     ) {}
 }

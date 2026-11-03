@@ -7,6 +7,7 @@ namespace Bia\Agent;
 use Bia\Contracts\Compaction;
 use Bia\Contracts\Entry;
 use Bia\Contracts\Message;
+use Bia\Contracts\Pruning;
 
 /**
  * What is sent to the model, built from a session's path of entries.
@@ -14,9 +15,15 @@ use Bia\Contracts\Message;
  * The latest compaction stands in for everything before the entry it kept
  * first. Every tool call is given a result, so a session cut off between a
  * call and its result (a crash, a kill) is never refused by the provider.
+ * A pruning cuts the old tool results it names to their start and end.
  */
 final readonly class Context
 {
+    /** A tool result longer than this, in characters, may be pruned to its first and last. */
+    public const PRUNE_OVER = 8192;
+    public const PRUNE_HEAD = 4096;
+    public const PRUNE_TAIL = 1024;
+
     /**
      * @param list<array{int|null, Message}> $items Each message with the entry it came from; null for a summary or a filled-in result.
      * @param int $sinceCompaction The index of the first item stored after the latest compaction.
@@ -33,10 +40,18 @@ final readonly class Context
     public static function build(array $entries): self
     {
         $last = null;
+        $pruned = [];
         foreach ($entries as $index => $entry) {
             if ($entry->payload instanceof Compaction) {
                 $last = $index;
+            } elseif ($entry->payload instanceof Pruning) {
+                $pruned = $entry->payload->entries + $pruned;
             }
+        }
+        if ($pruned !== []) {
+            $entries = array_map(static fn (Entry $entry): Entry => $entry->payload instanceof Message && array_key_exists($entry->id, $pruned)
+                ? new Entry($entry->id, $entry->parentId, self::prune($entry->payload, $pruned[$entry->id]), $entry->createdAt)
+                : $entry, $entries);
         }
         $items = [];
         $since = 0;
@@ -60,6 +75,25 @@ final readonly class Context
             }
         }
         return new self(self::repair($items), $since, $compaction);
+    }
+
+    /**
+     * A tool result cut to its start and end, saying where the whole of it is.
+     */
+    public static function prune(Message $message, ?string $path): Message
+    {
+        $text = $message->text;
+        $length = mb_strlen($text, 'UTF-8');
+        if ($length <= self::PRUNE_HEAD + self::PRUNE_TAIL) {
+            return $message;
+        }
+        $head = mb_substr($text, 0, self::PRUNE_HEAD, 'UTF-8');
+        $tail = mb_substr($text, $length - self::PRUNE_TAIL, null, 'UTF-8');
+        $cut = substr_count(mb_substr($text, self::PRUNE_HEAD, $length - self::PRUNE_HEAD - self::PRUNE_TAIL, 'UTF-8'), "\n");
+        $note = "[… {$cut} lines cut later, to give the conversation room"
+            . ($path !== null ? "; the whole output is saved at {$path}: page through it with read_file offset/limit" : '')
+            . ' …]';
+        return new Message($message->role, "{$head}\n{$note}\n{$tail}", $message->toolCalls, $message->reasoning, $message->toolCallId, $message->toolName, $message->ok, $message->meta, $message->images);
     }
 
     /**
