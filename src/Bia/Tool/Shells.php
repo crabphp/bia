@@ -99,6 +99,16 @@ final class Shells
     }
 
     /**
+     * Stops every background command, as before Bia replaces itself on /reload.
+     */
+    public function stopAll(): void
+    {
+        foreach ($this->running() as $id) {
+            $this->stop($id);
+        }
+    }
+
+    /**
      * @return list<int> The numbers of the commands still running.
      */
     public function running(): array

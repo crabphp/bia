@@ -173,6 +173,7 @@ completes.
 | `/new` | Start a new session |
 | `/compact` | Summarize the conversation so far now |
 | `/clear` | Clear the screen |
+| `/reload` | Restart Bia in place on the same session, model and effort: Bia's code, config, instructions and MCP servers read again. Background commands are stopped first |
 | `/stats` | Show or hide live stats at the top right: drawing (fps, ms a frame), first token and tokens a second, tokens in and out, memory |
 | `/render [normal\|smooth\|power]` | How answers appear: `normal` as the text arrives; `smooth` evened out to a steady flow of characters; `power` each character dropping into place and landing with a flash (fullscreen). `tui.render` in your config sets the default |
 | `/help` | List commands and keys |

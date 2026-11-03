@@ -360,6 +360,9 @@ final class Application
         $loop = new Loop();
         $mcp = self::mcp($config, $runner, $http, $workspace->root());
 
+        // Set by /reload for the Bia it starts, and for no one after it.
+        $reloaded = getenv('BIA_RELOADED') === '1';
+        putenv('BIA_RELOADED');
         if ($repl && !$json && Terminal::interactive()) {
             $terminal = new Terminal();
             $region = $config->get('tui.fullscreen') === false ? new Region($terminal) : new Screen($terminal);
@@ -369,7 +372,7 @@ final class Application
             $ask = static function (string $question) use (&$chat): bool {
                 return $chat instanceof Chat && $chat->confirm($question);
             };
-            $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs);
+            $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs, $shells = new Shells($runner));
             if ($mcp['manager'] !== null) {
                 $tools->from($mcp['manager']->tools(...));
             }
@@ -392,8 +395,14 @@ final class Application
                 mcp: $mcp,
                 skills: Catalog::for((string) getenv('HOME'), $workspace->root()),
                 images: new \Bia\Terminal\Images($runner, dirname($config->databasePath()) . '/images', $workspace->root()),
+                reloaded: $reloaded,
             );
             $loop->execute($chat->run(...));
+            if (($again = $chat->reloading()) !== null) {
+                // What Bia started ends now: the same process goes on as the new Bia, so nothing else would end it.
+                $shells->stopAll();
+                self::reload($options, $again);
+            }
             return 0;
         }
         if ($resume === '') {
@@ -517,7 +526,7 @@ final class Application
      * @param array<string, string|bool> $options
      * @param \Closure(string): bool $ask Asks the user a yes/no question.
      */
-    private static function tools(Config $config, array $options, \Closure $ask, bool $canPrompt, Workspace $workspace, ProcessRunner $runner, string $outputs): Registry
+    private static function tools(Config $config, array $options, \Closure $ask, bool $canPrompt, Workspace $workspace, ProcessRunner $runner, string $outputs, ?Shells $shells = null): Registry
     {
         return (new Registry(self::approval($config, $options, $ask, $canPrompt)))
             ->add(new ReadFileTool($workspace, outputs: $outputs))
@@ -526,7 +535,7 @@ final class Application
             ->add(new EditTool($workspace))
             ->add(new WriteFileTool($workspace))
             ->add(new ApplyPatchTool($workspace, $runner))
-            ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout'), $shells = new Shells($runner)))
+            ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout'), $shells ??= new Shells($runner)))
             ->add(new ShellOutputTool($shells))
             ->add(new GitDiffTool($workspace, $runner))
             // Skills, read again each step; no tool at all while there are none.
@@ -534,6 +543,34 @@ final class Application
                 $skills = Catalog::for((string) getenv('HOME'), $workspace->root())->all();
                 return $skills === [] ? [] : [new SkillTool($skills)];
             });
+    }
+
+    /**
+     * Replaces this process with a new Bia on the same session, model and
+     * effort, as /reload asks: its code, config and instructions read again.
+     * Returns only when that could not be done, having said so.
+     *
+     * @param array<string, string|bool> $options
+     * @param array{session: ?string, model: string, effort: string} $again
+     */
+    private static function reload(array $options, array $again): void
+    {
+        $arguments = [];
+        foreach (array_diff_key($options, ['model' => 0, 'effort' => 0, 'resume' => 0]) as $name => $value) {
+            array_push($arguments, "--{$name}", ...($value === true ? [] : [(string) $value]));
+        }
+        array_push($arguments, '--model', $again['model'], '--effort', $again['effort']);
+        if ($again['session'] !== null) {
+            array_push($arguments, '--resume', $again['session']);
+        }
+        $script = (string) ($_SERVER['SCRIPT_FILENAME'] ?? 'bia');
+        if (function_exists('pcntl_exec')) {
+            putenv('BIA_RELOADED=1');
+            @pcntl_exec(PHP_BINARY, [$script, ...$arguments]);
+            putenv('BIA_RELOADED');
+        }
+        fwrite(STDERR, 'bia: could not restart' . (function_exists('pcntl_exec') ? '' : ' (/reload needs the pcntl extension)')
+            . ($again['session'] !== null ? "; bia resume {$again['session']}" : '') . PHP_EOL);
     }
 
     /**

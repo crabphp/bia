@@ -15,6 +15,7 @@ use Bia\Tui\Editor;
 use Bia\Tui\Fuzzy;
 use Bia\Tui\Key;
 use Bia\Tui\Markdown;
+use Bia\Tui\Region;
 use Bia\Tui\Surface;
 use Bia\Tui\SelectList;
 use Bia\Tui\Spinner;
@@ -83,6 +84,7 @@ final class Chat
     private string $notice = '';
     private float $noticeUntil = 0.0;
     private float $exitArmed = 0.0;
+    private bool $reload = false;
     private bool $running = true;
     private ?string $ticker = null;
     private ?int $contextTokens = null;
@@ -117,6 +119,7 @@ final class Chat
         private readonly ?array $mcp = null,
         private readonly ?\Bia\Skill\Catalog $skills = null,
         private readonly ?Images $images = null,
+        private readonly bool $reloaded = false,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->stats = new Stats();
@@ -166,6 +169,10 @@ final class Chat
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout <server>]')
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
+            ->add('reload', 'Restart Bia, keeping the session', function (string $_): void {
+                $this->reload = true;
+                $this->running = false;
+            })
             ->add('exit', 'Leave Bia', function (string $_): void {
                 $this->running = false;
             }, aliases: ['quit']);
@@ -205,11 +212,19 @@ final class Chat
                 $this->draw();
             })
             : null;
-        $this->greet();
-        if ($this->sessionId !== null) {
-            $this->replay($this->sessionId);
-        } elseif ($this->pickSession) {
-            $this->resume('');
+        if ($this->reloaded && $this->region instanceof Region) {
+            // Inline, the banner and the conversation are still on the terminal, as the old Bia left them.
+            $this->note('Reloaded');
+        } else {
+            $this->greet();
+            if ($this->sessionId !== null) {
+                $this->replay($this->sessionId);
+            } elseif ($this->pickSession) {
+                $this->resume('');
+            }
+            if ($this->reloaded) {
+                $this->note('Reloaded');
+            }
         }
         $this->draw();
         // After the first screen: no server keeps Bia from being ready.
@@ -239,10 +254,25 @@ final class Chat
             $this->mcp['manager']?->close(); // the servers Bia started end with it
             $this->region->close();
             $this->terminal->leave();
-            if ($this->used && $this->sessionId !== null) {
+            if ($this->used && $this->sessionId !== null && !$this->reload) {
                 $this->terminal->write("\n" . Style::accent("bia resume {$this->sessionId}") . "\n");
             }
         }
+    }
+
+    /**
+     * What to start again with when the conversation ended for /reload: its
+     * session, model and effort; null when it ended for good.
+     *
+     * @return array{session: ?string, model: string, effort: string}|null
+     */
+    public function reloading(): ?array
+    {
+        return $this->reload ? [
+            'session' => $this->sessionId,
+            'model' => $this->config->modelLabel(),
+            'effort' => (string) $this->config->get('model.reasoning_effort', 'default'),
+        ] : null;
     }
 
     private function handle(Key $key): void
