@@ -84,6 +84,16 @@ final class Region implements Surface
 
     public function folds(bool $open): void {}
 
+    public function here(): int
+    {
+        return 0;
+    }
+
+    public function collapse(int $from, int $to, string $summary): void
+    {
+        // Inline, what was printed is the terminal's scrollback: it stays as it was.
+    }
+
     public function burst(string $chars): void
     {
         // Inline, the rows above belong to the terminal's scrollback: nothing may be drawn over them.

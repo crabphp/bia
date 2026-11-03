@@ -11,6 +11,7 @@ use Bia\Contracts\ToolResult;
 use Bia\Terminal\Commands;
 use Bia\Terminal\History;
 use Bia\Terminal\Stats;
+use Bia\Terminal\Summary;
 use Bia\Terminal\TuiRenderer;
 use Bia\Tool\Diff;
 use Bia\Tui\Highlight;
@@ -544,7 +545,6 @@ final class TuiTest extends TestCase
         $gone = new ToolCall('5', 'shell', ['command' => 'ls nope']);
         $renderer->running($gone, '');
         $renderer->tool($gone, new ToolResult("ls: cannot access 'nope'\n[exit code 2]", false));
-        $renderer->finish(new ModelResult(''));
         $screen->flush();
         self::assertSame([
             ' • Explored',
@@ -557,12 +557,54 @@ final class TuiTest extends TestCase
             ' • Ran ls nope',
             "   └ ls: cannot access 'nope'",
             '     [exit code 2]',
-        ], array_slice(self::screenRows($output, 12), 0, 10), 'Done: the block, then each command with the end of its output, a failure with why.');
+        ], array_slice(self::screenRows($output, 12), 0, 10), 'While the turn runs: the block, then each command with the end of its output, a failure with why.');
+
+        $renderer->finish(new ModelResult('Done.'));
+        $screen->flush();
+        self::assertSame(
+            [' • Ran 2 commands, read 2 files, searched once · 1 failed', ''],
+            array_slice(self::screenRows($output, 12), 0, 2),
+            'Once the turn is done, its run of calls is one line.',
+        );
 
         $screen->pointer('down', 4, 1);
         $screen->pointer('up', 4, 1);
         $screen->flush();
-        self::assertContains(' • Searched "gap" in src', self::screenRows($output, 12), 'Opened, the block shows each call with what it gave.');
+        self::assertSame(' • Explored', self::screenRows($output, 12)[1], 'A click opens the run again, under its line.');
+        self::assertSame(' • Ran ls nope', self::screenRows($output, 12)[8]);
+
+        $screen->pointer('down', 4, 4);
+        $screen->pointer('up', 4, 4);
+        $screen->flush();
+        self::assertContains(' • Searched "gap" in src', self::screenRows($output, 12), 'Inside it, a call opens as before.');
+
+        // Opened, the output outgrew the screen: scrolled back up to the run's line.
+        $screen->scroll(-100);
+        $screen->flush();
+        self::assertSame(' • Ran 2 commands, read 2 files, searched once · 1 failed', self::screenRows($output, 12)[0]);
+        $screen->pointer('down', 4, 1);
+        $screen->pointer('up', 4, 1);
+        $screen->flush();
+        self::assertSame([' • Ran 2 commands, read 2 files, searched once · 1 failed', ''], array_slice(self::screenRows($output, 12), 0, 2), 'A click on its line closes it again.');
+
+        $screen->folds(true);
+        $screen->flush();
+        self::assertSame(' • Ran ls nope', array_values(array_filter(self::screenRows($output, 12), static fn (string $row): bool => str_contains($row, 'ls nope')))[0], 'Ctrl-O opens the runs too.');
+    }
+
+    public function testASummarySaysWhatARunDidInCounts(): void
+    {
+        $call = static fn (string $name, array $arguments): ToolCall => new ToolCall(uniqid(), $name, $arguments);
+        $line = Summary::line([
+            [$call('shell', ['command' => 'a']), new ToolResult('')],
+            [$call('shell', ['command' => 'b']), new ToolResult('')],
+            [$call('edit', ['path' => 'a.php']), new ToolResult('', true, ['diff' => ['@1', '-x', '+y', '+z']])],
+            [$call('write_file', ['path' => 'b.php']), new ToolResult('', true, ['diff' => ['@1', '+q']])],
+            [$call('read_file', ['path' => 'a.php']), new ToolResult('')],
+            [$call('read_file', ['path' => 'a.php']), new ToolResult('')],
+            [$call('mcp__github__search', []), new ToolResult('')],
+        ]);
+        self::assertSame('• Ran 2 commands, edited 2 files (+3 −1), read 1 file, called 1 tool', $line);
     }
 
     public function testAToolCallShowsTheChangeItMade(): void

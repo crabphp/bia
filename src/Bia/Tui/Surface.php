@@ -34,9 +34,24 @@ interface Surface
     public function fold(string $closed, string $open): void;
 
     /**
-     * Opens every line that opens, or closes them all.
+     * Opens every line that opens, or closes them all; runs collapsed open
+     * with them, and collapse again when they close.
      */
     public function folds(bool $open): void;
+
+    /**
+     * Where the next finished line goes, to collapse from later. Where the
+     * output is the terminal's own, 0.
+     */
+    public function here(): int;
+
+    /**
+     * Shows finished lines, from one mark up to another, as one line, as a
+     * finished turn's run of tool calls: they come back with a click on it
+     * or with folds(true). Where the output is the terminal's own, what
+     * was printed stays as it is.
+     */
+    public function collapse(int $from, int $to, string $summary): void;
 
     /**
      * Characters that just appeared at the end of the streaming line, for

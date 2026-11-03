@@ -458,6 +458,8 @@ final class Chat
         // A session is made by its first message, so starting Bia leaves no empty ones.
         $sessionId = $this->sessionId ??= $this->sessions->create($this->workspace, $this->config->modelLabel());
         $this->used = true;
+        // A turn stopped or failed is left as it was until the next one starts: then it collapses too.
+        $this->renderer->collapse();
         $this->echo($text);
         $images = $this->imagesIn($text);
         $this->work('Thinking', fn (Cancellation $cancellation) => $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images));
@@ -473,6 +475,10 @@ final class Chat
     {
         $messages = $this->steering;
         $this->steering = [];
+        if ($messages !== []) {
+            // A message starts the turn afresh: what was done before it collapses, and it is not hidden with it.
+            $this->renderer->collapse();
+        }
         foreach ($messages as $message) {
             $this->echo($message);
         }
@@ -723,12 +729,27 @@ final class Chat
                 $gathered = new Gathered();
             }
         };
+        // Each run of tool calls, collapsed into its one line, as a finished turn's is.
+        $run = null;
+        $closeRun = function () use (&$run, $settle): void {
+            $settle();
+            if ($run !== null && $run['calls'] !== []) {
+                $this->region->collapse($run['from'], $this->region->here(), Summary::line($run['calls']));
+            }
+            $run = null;
+        };
         // As it was shown live: a blank line between the answer's text and a run of tool calls.
         $kind = null;
-        $begin = function (string $next) use (&$kind): void {
+        $begin = function (string $next) use (&$kind, &$run, $closeRun): void {
             if ($kind !== $next) {
+                if ($kind === 'work') {
+                    $closeRun();
+                }
                 $this->region->gap();
                 $kind = $next;
+                if ($next === 'work') {
+                    $run = ['from' => $this->region->here(), 'calls' => []];
+                }
             }
         };
         foreach ($shown as $entry) {
@@ -745,6 +766,9 @@ final class Chat
                 continue;
             }
             if ($payload->role === 'user') {
+                if ($kind === 'work') {
+                    $closeRun();
+                }
                 $this->echo($payload->text);
                 $kind = 'user';
             } elseif ($payload->role === 'assistant') {
@@ -771,6 +795,7 @@ final class Chat
                     }
                     $data = is_array($result->meta['data'] ?? null) ? $result->meta['data'] : [];
                     $toolResult = new ToolResult($result->text, $result->ok, $data);
+                    $run['calls'][] = [$call, $toolResult];
                     if (Gathered::takes($call, $toolResult)) {
                         $gathered->add($call, $toolResult);
                         continue;
@@ -787,6 +812,9 @@ final class Chat
                     $this->contextTokens = $total > 0 ? $total : (int) ($usage['input'] ?? 0) + (int) ($usage['output'] ?? 0);
                 }
             }
+        }
+        if ($kind === 'work') {
+            $closeRun();
         }
         $settle();
         $this->lineStart();

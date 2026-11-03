@@ -56,6 +56,9 @@ final class TuiRenderer implements Renderer
     private ?string $ticker = null;
     private float $ticked = 0.0;
 
+    /** @var list<array{from: int, to: ?int, calls: list<array{0: ToolCall, 1: ToolResult}>}> This turn's runs of tool calls, to collapse once it is done. */
+    private array $runs = [];
+
     /** The block being drawn: the answer's text, or tool calls and notes; null between turns. */
     private ?string $block = null;
     /** Whether the answer has shown nothing yet. */
@@ -156,6 +159,9 @@ final class TuiRenderer implements Renderer
     {
         $this->live();
         unset($this->running[$call->id]);
+        if ($this->runs !== []) {
+            $this->runs[array_key_last($this->runs)]['calls'][] = [$call, $result];
+        }
         if (Gathered::takes($call, $result)) {
             $this->gathered->add($call, $result);
         } else {
@@ -218,7 +224,36 @@ final class TuiRenderer implements Renderer
     {
         $this->end();
         $this->lineStart();
+        $this->collapse();
+    }
+
+    /**
+     * Collapses each of the turn's runs of tool calls into its one line, as
+     * a turn is left once done, or stopped and a new one asked.
+     */
+    public function collapse(): void
+    {
+        $this->catchUp();
+        $this->settle();
+        $this->closeRun();
+        foreach ($this->runs as $run) {
+            if ($run['calls'] !== [] && $run['to'] !== null) {
+                $this->region->collapse($run['from'], $run['to'], Summary::line($run['calls']));
+            }
+        }
+        $this->runs = [];
         $this->block = null;
+    }
+
+    /**
+     * Ends the run of tool calls being drawn, where the output is now.
+     */
+    private function closeRun(): void
+    {
+        $last = array_key_last($this->runs);
+        if ($last !== null && $this->runs[$last]['to'] === null) {
+            $this->runs[$last]['to'] = $this->region->here();
+        }
     }
 
     /**
@@ -228,8 +263,14 @@ final class TuiRenderer implements Renderer
     private function begin(string $kind): void
     {
         if ($this->block !== $kind) {
+            if ($this->block === 'work') {
+                $this->closeRun();
+            }
             $this->region->gap();
             $this->block = $kind;
+            if ($kind === 'work') {
+                $this->runs[] = ['from' => $this->region->here(), 'to' => null, 'calls' => []];
+            }
             return;
         }
         $this->lineStart();

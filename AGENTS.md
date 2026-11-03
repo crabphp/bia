@@ -80,7 +80,13 @@ the rule here first, with the user's agreement.
   (`Exploring` while one runs), a line under it for each kind: the files
   read, the places listed, each search.
 - Running: `• Running …` with its last three lines, live.
-- Every row opens in place with a click, and all of them with Ctrl-O.
+- Once a turn is done, or the next message starts, each of its runs of
+  tool calls collapses into one line of counts, `• Ran 2 commands, edited
+  1 file (+2 −1), read 2 files · 1 failed`, its dot red if any failed.
+  A resumed session shows its runs so too. Inline, where printed rows are
+  the terminal's, they stay as they were drawn.
+- Every row opens in place with a click, and all of them with Ctrl-O: a
+  collapsed run opens under its line, and closes by a click on that line.
 
 **Render modes**
 - `normal` shows text as it arrives; `smooth` paces it through `Tui\Pacer`;

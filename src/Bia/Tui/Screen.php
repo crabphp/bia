@@ -26,6 +26,10 @@ final class Screen implements Surface
     private array $done = [];
     /** @var array<int, array{0: string, 1: string}> Lines that open, by number: as shown closed, and open. */
     private array $folds = [];
+    /** @var array<int, array{to: int, summary: string, open: bool}> Runs of lines collapsed into one, by their first line. */
+    private array $runs = [];
+    /** @var array<int, int> Lines inside a run, after its first, to the run's first line. */
+    private array $inRun = [];
     /** @var array<int, list<string>> Finished lines wrapped at $width, by number. */
     private array $wrapped = [];
     /** Number of the oldest line kept, and of the next to finish. */
@@ -122,8 +126,58 @@ final class Screen implements Surface
             $this->done[$line] = $fold[$open ? 1 : 0];
             unset($this->wrapped[$line]);
         }
+        foreach ($this->runs as $line => $run) {
+            $this->runs[$line]['open'] = $open;
+            $this->forgetRun($line);
+        }
         $this->keepPlace();
         $this->schedule();
+    }
+
+    public function here(): int
+    {
+        return $this->next + ($this->partial . $this->draft !== '' ? 1 : 0);
+    }
+
+    public function collapse(int $from, int $to, string $summary): void
+    {
+        $from = max($from, $this->start);
+        $to = min($to, $this->next);
+        if ($to <= $from || isset($this->inRun[$from])) {
+            return;
+        }
+        // A run inside this one is taken into it.
+        foreach ($this->runs as $line => $run) {
+            if ($line >= $from && $line < $to) {
+                unset($this->runs[$line]);
+            }
+        }
+        $this->runs[$from] = ['to' => $to, 'summary' => $summary, 'open' => false];
+        for ($line = $from + 1; $line < $to; $line++) {
+            $this->inRun[$line] = $from;
+        }
+        $this->forgetRun($from);
+        $this->keepPlace();
+        $this->schedule();
+    }
+
+    /**
+     * Forgets how a run's lines were wrapped, as it opens or closes.
+     */
+    private function forgetRun(int $from): void
+    {
+        for ($line = $from; $line < $this->runs[$from]['to']; $line++) {
+            unset($this->wrapped[$line]);
+        }
+    }
+
+    /**
+     * Whether a line is hidden inside a collapsed run.
+     */
+    private function hidden(int $line): bool
+    {
+        $from = $this->inRun[$line] ?? null;
+        return $from !== null && isset($this->runs[$from]) && !$this->runs[$from]['open'];
     }
 
     /**
@@ -155,7 +209,15 @@ final class Screen implements Surface
     private function trim(): void
     {
         while ($this->next - $this->start > $this->keep) {
-            unset($this->done[$this->start], $this->wrapped[$this->start], $this->folds[$this->start]);
+            unset($this->done[$this->start], $this->wrapped[$this->start], $this->folds[$this->start], $this->inRun[$this->start]);
+            if (isset($this->runs[$this->start])) {
+                // A run whose first line is gone: what is left of it shows as it is.
+                $run = $this->runs[$this->start];
+                unset($this->runs[$this->start]);
+                for ($line = $this->start + 1; $line < $run['to']; $line++) {
+                    unset($this->inRun[$line], $this->wrapped[$line]);
+                }
+            }
             $this->start++;
         }
         if ($this->top !== null && $this->top[0] < $this->start) {
@@ -202,7 +264,18 @@ final class Screen implements Surface
         $this->terminal->alternate(false);
         $this->entered = false;
         $out = '';
-        foreach ($this->done as $line) {
+        foreach ($this->done as $number => $line) {
+            // As it was shown: a collapsed run as its one line.
+            if ($this->hidden($number)) {
+                continue;
+            }
+            $run = $this->runs[$number] ?? null;
+            if ($run !== null) {
+                $out .= $run['summary'] . "\r\n";
+                if (!$run['open']) {
+                    continue;
+                }
+            }
             $out .= str_replace("\n", "\r\n", $line) . "\r\n";
         }
         if ($this->partial . $this->draft !== '') {
@@ -223,6 +296,8 @@ final class Screen implements Surface
         $this->done = [];
         $this->wrapped = [];
         $this->folds = [];
+        $this->runs = [];
+        $this->inRun = [];
         $this->start = $this->next;
         $this->top = null;
         $this->selection = null;
@@ -298,6 +373,17 @@ final class Screen implements Surface
             $closed = isset($this->folds[$line]) && $this->done[$line] === $this->folds[$line][0];
             $space = str_repeat(' ', self::MARGIN);
             $rows = [];
+            if ($this->hidden($line)) {
+                return $this->wrapped[$line] = [];
+            }
+            $run = $this->runs[$line] ?? null;
+            if ($run !== null) {
+                // A collapsed run: its one line, and above its lines when opened, to close it by.
+                $rows[] = $space . Style::cut($run['summary'], max(1, $this->width - 2 * self::MARGIN));
+                if (!$run['open']) {
+                    return $this->wrapped[$line] = $rows;
+                }
+            }
             foreach (explode("\n", $this->done[$line]) as $part) {
                 if ($closed) {
                     $rows[] = $part === '' ? '' : $space . Style::cut($part, max(1, $this->width - 2 * self::MARGIN));
@@ -471,7 +557,13 @@ final class Screen implements Surface
         if ($anchor === $focus) {
             // A click: on a line that opens, it opens or closes.
             $this->selection = null;
-            if (isset($this->folds[$anchor[0]])) {
+            $run = $this->runs[$anchor[0]] ?? null;
+            if ($run !== null && (!$run['open'] || $anchor[1] === 0)) {
+                // A collapsed run opens; its first row, opened, closes it again.
+                $this->runs[$anchor[0]]['open'] = !$run['open'];
+                $this->forgetRun($anchor[0]);
+                $this->keepPlace();
+            } elseif (isset($this->folds[$anchor[0]])) {
                 $this->toggle($anchor[0]);
             }
             $this->schedule();
@@ -503,6 +595,9 @@ final class Screen implements Surface
         [$start, $end] = $this->ordered();
         $lines = [];
         for ($line = $start[0]; $line <= $end[0]; $line++) {
+            if ($this->hidden($line)) {
+                continue;
+            }
             $text = '';
             [$rows, $joins, $margin] = $this->plain($line);
             $first = $line === $start[0] ? $start[1] : 0;
