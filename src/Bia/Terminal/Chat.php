@@ -642,14 +642,20 @@ final class Chat
         return $this->config->modelLabel() . ($effort !== null ? " · {$effort}" : '');
     }
 
+    /**
+     * Starts afresh: the screen and its scrollback cleared, the banner, and
+     * how to come back to the session left.
+     */
     private function newSession(string $_): void
     {
-        $this->leaving();
+        $left = $this->used ? $this->sessionId : null;
+        $this->renderer->collapse();
         $this->sessionId = null;
         $this->used = false;
         $this->contextTokens = null;
-        $this->region->gap();
-        $this->region->print(Style::dim('· new session') . "\n");
+        $this->region->clear(scrollback: true);
+        $this->region->print($this->banner(max(20, $this->terminal->columns())));
+        $this->region->print(Style::dim('· new session' . ($left !== null ? " · /resume {$left} to go back" : '')) . "\n");
     }
 
     private function resume(string $id): void
@@ -1098,15 +1104,20 @@ final class Chat
     }
 
     /**
-     * The greeting: Bia the cat beside the version, model and place.
+     * The greeting: Bia the cat beside its version and the model, and the
+     * project's folder under them. Each line is cut to the room beside the
+     * cat, so none wraps under it on a narrow screen.
      */
     private function banner(int $width): string
     {
-        $room = max(0, $width - 10);
-        $top = Style::bold('bia') . ' ' . Style::dim(Style::truncate("{$this->version} · {$this->modelShown()}", max(0, $room - 4)));
-        $bottom = Style::dim(Style::truncate($this->place, $room));
+        // The screen's width, less its margins, the cat and the space after it.
+        $indent = Style::width(self::MASCOT[0]) + 3;
+        $room = max(0, $width - 2 * Screen::MARGIN - $indent);
+        $version = Style::bold('bia') . ' ' . Style::dim(Style::truncate($this->version, max(0, $room - 4)));
+        $model = Style::dim(Style::truncate($this->modelShown(), $room));
+        $place = Style::dim(Style::truncate($this->place, $room));
         [$first, $second] = self::mascot();
-        return $first . '   ' . $top . "\n" . $second . '   ' . $bottom . "\n\n";
+        return $first . '   ' . $version . "\n" . $second . '   ' . $model . "\n" . str_repeat(' ', $indent) . $place . "\n\n";
     }
 
     /**
