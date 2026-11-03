@@ -294,6 +294,11 @@ final class Screen implements Surface
         $this->terminal->write($out . "\e[?25h");
     }
 
+    public function width(): int
+    {
+        return max(1, $this->terminal->columns() - 2 * self::MARGIN);
+    }
+
     public function redraw(): void
     {
         $this->shown = [];

@@ -29,6 +29,11 @@ final class Markdown
     private ?array $table = null;
 
     /**
+     * @param int $width Columns a line has: a table wider than this is drawn as a list.
+     */
+    public function __construct(private readonly int $width = PHP_INT_MAX) {}
+
+    /**
      * Renders one finished line, and moves past it.
      *
      * @return list<string> The lines finished now: none while a table is still coming, several when one ends.
@@ -66,7 +71,7 @@ final class Markdown
                 $widths = self::widen($widths, $arriving);
                 $line = '';
             }
-            $lines = $this->table['align'] === null ? [self::inline($this->table['raw'])] : self::drawTable($rows, $widths, $this->table['align']);
+            $lines = $this->table['align'] === null ? [self::inline($this->table['raw'])] : $this->drawTable($rows, $widths, $this->table['align']);
         }
         if ($line !== '') {
             if (preg_match('/^\s*(`{3,}|~{3,})/', $line) !== 1) { // a fence is never shown
@@ -126,7 +131,7 @@ final class Markdown
         }
         $table = $this->table;
         $this->table = null;
-        return $table['align'] === null ? [self::inline($table['raw'])] : self::drawTable($table['rows'], $table['widths'], $table['align']);
+        return $table['align'] === null ? [self::inline($table['raw'])] : $this->drawTable($table['rows'], $table['widths'], $table['align']);
     }
 
     /**
@@ -182,10 +187,13 @@ final class Markdown
      * @param list<string> $align
      * @return list<string>
      */
-    private static function drawTable(array $rows, array $widths, array $align): array
+    private function drawTable(array $rows, array $widths, array $align): array
     {
         $count = max(count($align), count($widths));
         $widths = array_pad($widths, $count, 0);
+        if (array_sum($widths) + 3 * ($count - 1) > $this->width) {
+            return self::drawList($rows);
+        }
         $bar = Style::dim(' │ ');
         $lines = [];
         foreach ($rows as $index => $row) {
@@ -201,6 +209,31 @@ final class Markdown
             $lines[] = rtrim(implode($bar, $padded));
             if ($index === 0) {
                 $lines[] = Style::dim(implode('─┼─', array_map(static fn (int $w): string => str_repeat('─', $w), $widths)));
+            }
+        }
+        return $lines;
+    }
+
+    /**
+     * A table too wide for the screen, as Claude Code draws one: a bullet for
+     * each row, titled by its first cell, and under it each other cell after
+     * its column's header, dim; an empty cell is left out.
+     *
+     * @param list<list<array{string, int}>> $rows
+     * @return list<string>
+     */
+    private static function drawList(array $rows): array
+    {
+        $headers = array_map(static fn (array $cell): string => Style::strip($cell[0]), $rows[0] ?? []);
+        $lines = [];
+        foreach (array_slice($rows, 1) as $row) {
+            $lines[] = '• ' . Style::bold($row[0][0] ?? '');
+            foreach (array_slice($row, 1, null, true) as $column => [$cell, $width]) {
+                if ($width === 0) {
+                    continue;
+                }
+                $header = $headers[$column] ?? '';
+                $lines[] = '  ' . ($header !== '' ? Style::dim("{$header}: ") : '') . $cell;
             }
         }
         return $lines;

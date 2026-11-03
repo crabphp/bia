@@ -104,6 +104,11 @@ interface Surface
     public function redraw(): void;
 
     /**
+     * The columns a line of output has, between the margins, now.
+     */
+    public function width(): int;
+
+    /**
      * Clears the screen, and its scrollback when asked, and forgets the output so far.
      */
     public function clear(bool $scrollback = false): void;

@@ -829,7 +829,7 @@ final class Chat
             } elseif ($payload->role === 'assistant') {
                 if (trim($payload->text) !== '') {
                     $begin('text');
-                    $markdown = new Markdown();
+                    $markdown = new Markdown($this->region->width());
                     foreach (explode("\n", trim($payload->text, "\n")) as $line) {
                         foreach ($markdown->line($line) as $done) {
                             $this->region->print($done . "\n");

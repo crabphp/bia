@@ -173,6 +173,11 @@ final class Region implements Surface
      * the old region, each terminal its own way, into rows that cannot be
      * found again to erase.
      */
+    public function width(): int
+    {
+        return max(1, $this->terminal->columns() - 2 * Screen::MARGIN);
+    }
+
     public function redraw(): void
     {
         $this->last = '';

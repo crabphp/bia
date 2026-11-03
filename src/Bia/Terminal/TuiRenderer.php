@@ -72,7 +72,7 @@ final class TuiRenderer implements Renderer
     {
         $this->activity = static function (string $label): void {};
         $this->usage = static function (array $usage): void {};
-        $this->markdown = new Markdown();
+        $this->markdown = new Markdown($this->region->width());
         $this->gathered = new Gathered();
         $this->pacer = new Pacer();
     }
@@ -567,7 +567,7 @@ final class TuiRenderer implements Renderer
         if ($this->drafting && $this->region->atLineStart()) {
             // The draft was kept by something printed after it, as a stopped turn's note.
             $this->line = '';
-            $this->markdown = new Markdown();
+            $this->markdown = new Markdown($this->region->width());
         }
         $this->line .= $delta;
         while (($end = strpos($this->line, "\n")) !== false) {
@@ -597,7 +597,7 @@ final class TuiRenderer implements Renderer
             $this->region->print(implode("\n", $done));
         }
         $this->line = '';
-        $this->markdown = new Markdown();
+        $this->markdown = new Markdown($this->region->width());
         $this->drafting = false;
     }
 

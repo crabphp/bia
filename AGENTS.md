@@ -53,6 +53,9 @@ the rule here first, with the user's agreement.
   diff's lines, a running command's output, a group opened, a code block.
 - Code has no background: inline code is the accent, a code block is set in
   and highlighted.
+- A table is lined up in columns; one wider than the screen is a list
+  instead: a bullet for each row, titled by its first cell, and under it
+  each other cell as `Header: value`, the header dim.
 - A marker is one character and one space: `›` the user, `•` a tool call
   (its colour says how it went), `·` a note, `•` a bullet in an answer. Rows a line wraps into hang
   under the text after its marker; a closed tool call's lines do not wrap:

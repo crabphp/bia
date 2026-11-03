@@ -485,6 +485,26 @@ final class TuiTest extends TestCase
         self::assertSame(['a │ b', '──┼──'], $open->finish(), 'A table still open at the end of the answer is finished as it is.');
     }
 
+    public function testATableTooWideForTheScreenIsDrawnAsAList(): void
+    {
+        $lines = ['| Agent | Ready | Memory |', '|---|--:|--:|', '| Bia | 82 ms | 42 MB |', '| Codex |  | 377 MB |'];
+        $fits = new Markdown(26);
+        foreach ($lines as $line) {
+            $fits->line($line);
+        }
+        self::assertSame('Agent │ Ready │ Memory', $fits->finish()[0], 'A table that fits keeps its columns.');
+
+        $narrow = new Markdown(20);
+        foreach ($lines as $line) {
+            $narrow->line($line);
+        }
+        self::assertSame(
+            ['• Bia', '  Ready: 82 ms', '  Memory: 42 MB', '• Codex', '  Memory: 377 MB'],
+            $narrow->finish(),
+            'Too wide: a bullet a row, titled by its first cell, each other cell under it after its header; an empty one left out.',
+        );
+    }
+
     public function testCodeIsHighlightedInOnePassALineAtATime(): void
     {
         Style::enable(true);
