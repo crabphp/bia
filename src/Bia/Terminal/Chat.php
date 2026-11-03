@@ -191,12 +191,14 @@ final class Chat
             ['value' => 'no', 'label' => 'No'],
         ], filters: false));
         $this->draw();
+        $this->report('blocked', 'permission');
         try {
             return (bool) $suspension->suspend();
         } finally {
             $this->confirming = null;
             $this->closeMenu();
             $this->draw();
+            $this->report('working');
         }
     }
 
@@ -227,6 +229,7 @@ final class Chat
             }
         }
         $this->draw();
+        $this->report('idle');
         // After the first screen: no server keeps Bia from being ready.
         Task::spawn(EventLoop::current(), $this->startMcp(...));
         try {
@@ -547,11 +550,14 @@ final class Chat
         $this->spinner = new Spinner($label);
         $this->stats->turnStarted();
         $this->startTicker();
+        $this->report('working');
         Task::spawn(EventLoop::current(), function () use ($work, $cancellation): void {
             $finished = false;
+            $state = 'idle';
             try {
                 $work($cancellation);
                 $finished = true;
+                $state = 'done';
             } catch (CancelledException) {
                 $this->renderer->catchUp();
                 $this->region->gap();
@@ -561,6 +567,7 @@ final class Chat
                 $this->renderer->catchUp();
                 $this->region->gap();
                 $this->region->print(Style::error('bia: ' . $error->getMessage()) . "\n");
+                $state = 'error';
             } finally {
                 $this->turn = null;
                 $this->spinner = null;
@@ -577,8 +584,19 @@ final class Chat
                     }
                 }
                 $this->draw();
+                if ($this->turn === null) {
+                    $this->report($state); // unless what was left started another turn
+                }
             }
         });
+    }
+
+    /**
+     * What Bia is doing, for a terminal or multiplexer that shows it (OSC 7501).
+     */
+    private function report(string $state, ?string $kind = null): void
+    {
+        $this->terminal->status($state, ['app' => 'bia'] + ($kind === null ? [] : ['kind' => $kind]));
     }
 
     private function echo(string $text): void

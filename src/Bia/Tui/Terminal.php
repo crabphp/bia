@@ -116,6 +116,23 @@ final class Terminal
         $this->write("\e]52;c;" . base64_encode($text) . "\e\\");
     }
 
+    /**
+     * Tells the terminal what the program is doing (OSC 7501, the Program
+     * Status Protocol): idle, working, done, blocked or error. Terminals that
+     * do not know it ignore it.
+     *
+     * @param array<string, string> $fields More, as app or kind.
+     */
+    public function status(string $state, array $fields = []): void
+    {
+        $record = 'state=' . $state;
+        foreach ($fields as $key => $value) {
+            // A field ends at a colon; nothing in it may end the sequence.
+            $record .= ':' . $key . '=' . preg_replace('/[\x00-\x1f\x7f:]/', ' ', $value);
+        }
+        $this->write("\e]7501;{$record}\e\\");
+    }
+
     public function leave(): void
     {
         if ($this->saved === null) {
