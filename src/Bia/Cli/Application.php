@@ -19,8 +19,10 @@ use Bia\Mcp\AuthStore;
 use Bia\Mcp\Manager;
 use Bia\Mcp\Server;
 use Bia\Mcp\Trust;
+use Bia\Contracts\Model;
 use Bia\Model\Fallback;
 use Bia\Model\Lenient;
+use Bia\Model\Metered;
 use Bia\Model\ModelCatalog;
 use Bia\Model\OpenAiCompatibleModel;
 use Bia\Session\SqliteStore;
@@ -33,6 +35,7 @@ use Bia\Terminal\History;
 use Bia\Terminal\Loop;
 use Bia\Terminal\Prompt;
 use Bia\Terminal\TuiRenderer;
+use Bia\Terminal\UsageReport;
 use Bia\Tool\ApplyPatchTool;
 use Bia\Tool\EditTool;
 use Bia\Tool\GitDiffTool;
@@ -85,6 +88,9 @@ final class Application
             if ($command === 'sessions' || $command === 'session:list') {
                 return self::sessions($options);
             }
+            if ($command === 'usage') {
+                return self::usage($options);
+            }
             if ($command === 'export') {
                 array_shift($words);
                 return self::exportSession($words);
@@ -122,6 +128,7 @@ final class Application
               bia doctor
               bia config [--json]
               bia sessions
+              bia usage [--json]
               bia fork <session-id>
               bia export <session-id>
               bia init [--global]
@@ -260,6 +267,25 @@ final class Application
     /**
      * @param array<string, string|bool> $options
      */
+    /**
+     * @param array<string, string|bool> $options
+     */
+    private static function usage(array $options): int
+    {
+        $store = new SqliteStore(Config::load()->databasePath());
+        if (($options['json'] ?? false) === true) {
+            $since = microtime(true) - UsageReport::SPAN;
+            fwrite(STDOUT, json_encode(['days' => $store->usage($since, 'day'), 'models' => $store->usage($since, 'model'), 'providers' => $store->usage($since, 'provider')], JSON_UNESCAPED_SLASHES) . PHP_EOL);
+            return 0;
+        }
+        Style::enable(self::isTty(STDOUT) && getenv('NO_COLOR') === false);
+        fwrite(STDOUT, implode(PHP_EOL, UsageReport::lines($store)) . PHP_EOL);
+        return 0;
+    }
+
+    /**
+     * @param array<string, string|bool> $options
+     */
     private static function sessions(array $options): int
     {
         $config = Config::load();
@@ -369,6 +395,8 @@ final class Application
         $http = new Client();
         $loop = new Loop();
         $mcp = self::mcp($config, $runner, $http, $workspace->root());
+        // Each request to a model, counted for /usage: counts and times only.
+        $record = static fn (array $request) => $store->record($request);
 
         // Set by /reload for the Bia it starts, and for no one after it.
         $reloaded = getenv('BIA_RELOADED') === '1';
@@ -394,7 +422,7 @@ final class Application
                 ->add(new SearchTool($workspace, $runner))
                 ->add(new GitDiffTool($workspace, $runner));
             $subagents = new Subagents(
-                static function (string $name, \Closure $doing, \Closure $called) use (&$chat, $config, $terminal, $region, $http, $reads, $workspace, $outputs): array {
+                static function (string $name, \Closure $doing, \Closure $called) use (&$chat, $config, $terminal, $region, $http, $reads, $workspace, $outputs, $record): array {
                     // Fullscreen, a page of its own, hidden until viewed; inline, its run kept to print.
                     $surface = $region instanceof Screen ? new Screen($terminal) : new Transcript($terminal);
                     if ($surface instanceof Screen) {
@@ -404,7 +432,7 @@ final class Application
                     $store = new MemoryStore();
                     $current = $chat instanceof Chat ? $chat->config() : $config;
                     $session = $store->create($workspace->root(), $current->modelLabel());
-                    $agent = self::agent($current, $http, $reads, $store, new Watched($view, $doing, $called), $workspace, $outputs);
+                    $agent = self::agent($current, $http, $reads, $store, new Watched($view, $doing, $called), $workspace, $outputs, record: $record);
                     return [$agent, $session, ['surface' => $surface, 'renderer' => $view]];
                 },
                 static function () use (&$chat): void {
@@ -420,7 +448,7 @@ final class Application
                 },
             );
             $tools->add(new AgentTool($subagents));
-            $makeAgent = static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection);
+            $makeAgent = static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection, $record);
             $chat = new Chat(
                 $terminal,
                 $region,
@@ -466,7 +494,7 @@ final class Application
             return in_array(strtolower(trim((string) $prompt->ask($question . ' [y/N] '))), ['y', 'yes'], true);
         };
         $tools = self::tools($config, $options, $ask, $canPrompt, $workspace, $runner, $outputs);
-        $agent = self::agent($config, $http, $tools, $store, new AnsiRenderer($json), $workspace, $outputs);
+        $agent = self::agent($config, $http, $tools, $store, new AnsiRenderer($json), $workspace, $outputs, record: $record);
         $manager = $mcp['manager'];
         if ($manager !== null) {
             $tools->from($manager->tools(...));
@@ -622,16 +650,17 @@ final class Application
     /**
      * The agent for the configured model; /model builds another.
      */
-    private static function agent(Config $config, Client $http, Registry $tools, \Bia\Contracts\SessionStore $store, Renderer $renderer, Workspace $workspace, string $outputs, ?Inspection $inspection = null): Agent
+    private static function agent(Config $config, Client $http, Registry $tools, \Bia\Contracts\SessionStore $store, Renderer $renderer, Workspace $workspace, string $outputs, ?Inspection $inspection = null, ?\Closure $record = null): Agent
     {
+        $metered = static fn (Config $config): Model => self::model($config, $http, $record);
         // Shown as it happens, and kept for /inspect.
         $notice = static function (string $message) use ($renderer, $inspection): void {
             $inspection?->event($message);
             $renderer->notice($message);
         };
         $modelName = (string) $config->get('model.name');
-        $model = self::model($config, $http);
-        $fallbacks = self::fallbacks($config, $http);
+        $model = $metered($config);
+        $fallbacks = self::fallbacks($config, $metered);
         if ($fallbacks !== []) {
             $model = new Fallback(
                 [['name' => $modelName, 'label' => $config->modelLabel(), 'model' => $model], ...$fallbacks],
@@ -670,9 +699,9 @@ final class Application
         );
     }
 
-    private static function model(Config $config, Client $http): OpenAiCompatibleModel
+    private static function model(Config $config, Client $http, ?\Closure $record = null): Model
     {
-        return new OpenAiCompatibleModel(
+        $model = new OpenAiCompatibleModel(
             $http,
             (string) $config->get('model.base_url'),
             (string) $config->get('model.api_key'),
@@ -681,15 +710,17 @@ final class Application
             (float) $config->get('model.timeout'),
             (float) $config->get('model.idle_timeout'),
         );
+        return $record === null ? $model : new Metered($model, $config->modelLabel(), $record);
     }
 
     /**
      * The models to fall back on, each with its provider's server and key,
      * leaving out the chosen one and any without a key.
      *
-     * @return list<array{name: string, label: string, model: OpenAiCompatibleModel}>
+     * @param \Closure(Config): Model $model Makes a provider's model.
+     * @return list<array{name: string, label: string, model: Model}>
      */
-    private static function fallbacks(Config $config, Client $http): array
+    private static function fallbacks(Config $config, \Closure $model): array
     {
         $models = [];
         $seen = [$config->modelLabel() => true];
@@ -700,7 +731,7 @@ final class Application
                 if (isset($seen[$label])) {
                     continue;
                 }
-                $models[] = ['name' => (string) $other->get('model.name'), 'label' => $label, 'model' => self::model($other, $http)];
+                $models[] = ['name' => (string) $other->get('model.name'), 'label' => $label, 'model' => $model($other)];
                 $seen[$label] = true;
             } catch (\InvalidArgumentException) {
                 // No key for it, or no such provider: left out, as `bia doctor` shows.

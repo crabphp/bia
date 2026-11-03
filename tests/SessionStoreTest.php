@@ -97,4 +97,43 @@ final class SessionStoreTest extends TestCase
     {
         return sys_get_temp_dir() . '/bia-session-' . bin2hex(random_bytes(4)) . '.sqlite';
     }
+
+    public function testUsageIsCountedByPeriodModelAndProviderWithItsSpeed(): void
+    {
+        $store = new SqliteStore(sys_get_temp_dir() . '/bia-usage-' . bin2hex(random_bytes(4)) . '.sqlite');
+        $now = (float) strtotime('2026-11-04 10:30:00');
+        $store->record(['at' => $now, 'model' => 'a/fast', 'input' => 1000, 'cached' => 800, 'output' => 200, 'first_ms' => 500, 'total_ms' => 1500]);
+        $store->record(['at' => $now + 60, 'model' => 'a/fast', 'input' => 1000, 'cached' => 0, 'output' => 100, 'first_ms' => 300, 'total_ms' => 1300]);
+        $store->record(['at' => $now + 3600, 'model' => 'b/slow', 'input' => 500, 'cached' => 0, 'output' => 50, 'first_ms' => null, 'total_ms' => 900]);
+        $store->record(['at' => $now - 200 * 86400, 'model' => 'a/fast', 'input' => 9, 'cached' => 0, 'output' => 9, 'first_ms' => 1, 'total_ms' => 2]);
+
+        $models = array_column($store->usage($now - 86400, 'model'), null, 'key');
+        self::assertSame(2, $models['a/fast']['requests'], 'Only those since the time asked.');
+        self::assertSame(2000, $models['a/fast']['input']);
+        self::assertSame(800, $models['a/fast']['cached']);
+        self::assertSame(400, $models['a/fast']['first_ms']);
+        self::assertEqualsWithDelta(150.0, $models['a/fast']['tps'], 0.01, '300 tokens over 2 seconds of streaming.');
+        self::assertNull($models['b/slow']['tps'], 'No first token, no speed.');
+
+        self::assertSame(['a', 'b'], array_column($store->usage($now - 86400, 'provider'), 'key'));
+        self::assertSame([3], array_column($store->usage($now - 86400, 'day'), 'requests'), 'One day.');
+    }
+
+    public function testTheHeatMapShadesEachDayByHowBusyItWas(): void
+    {
+        $store = new SqliteStore(sys_get_temp_dir() . '/bia-heat-' . bin2hex(random_bytes(4)) . '.sqlite');
+        $now = microtime(true);
+        $row = static fn (float $at): array => ['at' => $at, 'model' => 'a/m', 'input' => 1, 'cached' => 0, 'output' => 1, 'first_ms' => null, 'total_ms' => 1];
+        for ($i = 0; $i < 8; $i++) {
+            $store->record($row($now - 86400));
+        }
+        $store->record($row($now));
+
+        $map = array_map(\Bia\Tui\Style::strip(...), \Bia\Terminal\UsageReport::heatmap($store, $now));
+
+        self::assertCount(9, $map, 'Months, seven weekdays, the key.');
+        $days = implode('', array_slice($map, 1, 7));
+        self::assertSame(1, substr_count($days, '█'), 'The busiest day, darkest.');
+        self::assertSame(1, substr_count($days, '░'), 'One request against eight, lightest.');
+    }
 }

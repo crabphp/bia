@@ -97,6 +97,14 @@ final class Chat
     /** Counts as things happen, shown or not, so turning /stats on shows the whole session. */
     private readonly Stats $stats;
     private bool $showStats = false;
+    /** The usage panel open in the input's place, on this tab; null when closed. */
+    private ?string $usageBy = null;
+    /** @var array{lines: list<string>, total: bool} The tab's table, read as it opened. */
+    private array $usageTab = ['lines' => [], 'total' => false];
+    /** @var list<string> The heat map over the days' table, read as it opened. */
+    private array $usageHeat = [];
+    /** Rows scrolled up from the newest, in a table taller than the panel. */
+    private int $usageScroll = 0;
     /** The subagent whose run is on screen, by name; null for the conversation. */
     private ?string $viewing = null;
     /** The row chosen in the list of agents, 0 for main; null while the input has the keys. */
@@ -178,6 +186,7 @@ final class Chat
                 }
             })
             ->add('inspect', 'What the last request sent and got', $this->inspect(...))
+            ->add('usage', 'Tokens and speed by day, model and provider', $this->usage(...), '[day|models|providers]')
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout <server>]')
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
@@ -198,6 +207,7 @@ final class Chat
     {
         $suspension = EventLoop::current()->getSuspension();
         $this->confirming = $suspension;
+        $this->usageBy = null; // a question waits for an answer: it takes the panel's place
         $this->openMenu('confirm', $question, new SelectList([
             ['value' => 'yes', 'label' => 'Yes'],
             ['value' => 'no', 'label' => 'No'],
@@ -313,6 +323,18 @@ final class Chat
             return;
         }
         if ($key->is('mouse')) {
+            return;
+        }
+        if ($this->usageBy !== null) {
+            $tabs = array_keys(UsageReport::TABS);
+            $at = (int) array_search($this->usageBy, $tabs, true);
+            if ($key->is('left', 'right', 'tab', 'shift-tab')) {
+                $this->usage($tabs[($at + ($key->is('left', 'shift-tab') ? -1 : 1) + count($tabs)) % count($tabs)]);
+            } elseif ($key->is('up', 'down')) {
+                $this->usageScroll = max(0, $this->usageScroll + ($key->is('up') ? 1 : -1));
+            } elseif ($key->is('escape', 'enter', 'ctrl-c') || ($key->is('char') && strtolower($key->text) === 'q')) {
+                $this->usageBy = null;
+            }
             return;
         }
         if ($key->is('pageup', 'pagedown') && $this->menu === null && $this->shown()->page() > 0) {
@@ -448,7 +470,9 @@ final class Chat
         if ($key->is('char') && strtolower($key->text) === 'x' && $names[$row] !== null) {
             // Working, it is stopped; finished, it is closed and the row below is chosen.
             $this->subagents?->close($names[$row]);
-            $this->agentRow = $this->agentRows > 2 ? min($row, $this->agentRows - 2) : null;
+            // Stopped, it stays chosen; closed, the row that took its place is, or the input once none is left.
+            $left = count($this->agentNames());
+            $this->agentRow = $left > 1 ? min($row, $left - 1) : null;
             return true;
         }
         $this->agentRow = null;
@@ -1171,6 +1195,65 @@ final class Chat
         $this->region->print(implode("\n", $lines) . "\n");
     }
 
+    /**
+     * Opens the usage panel in the input's place: nothing of it joins the
+     * conversation, and Esc closes it.
+     */
+    private function usage(string $by): void
+    {
+        $by = strtolower(trim($by)) ?: 'day';
+        $by = ['days' => 'day', 'models' => 'model', 'providers' => 'provider'][$by] ?? $by;
+        if (!$this->sessions instanceof \Bia\Session\SqliteStore || !isset(UsageReport::TABS[$by])) {
+            $this->say('Usage: /usage [' . implode('|', array_keys(UsageReport::TABS)) . ']');
+            return;
+        }
+        $this->usageBy = $by;
+        $this->usageScroll = 0;
+        // Read once as it opens, or as the tab changes: not at every frame.
+        $this->usageTab = UsageReport::tab($this->sessions, $by);
+        $this->usageHeat = $by === 'day' ? UsageReport::heatmap($this->sessions) : [];
+    }
+
+    /**
+     * The usage panel: its tabs, the current one in the accent, then its
+     * table, the newest rows shown and the rest a scroll away, its header
+     * and total kept in place.
+     *
+     * @return list<string>
+     */
+    private function usagePanel(int $width): array
+    {
+        $tabs = [];
+        foreach (UsageReport::TABS as $tab => $title) {
+            $tabs[] = $tab === $this->usageBy ? Style::accent($title) : Style::dim($title);
+        }
+        $lines = [implode('  ', $tabs) . '  ' . Style::dim('· last 14 days')];
+        $table = $this->usageTab['lines'];
+        if ($this->usageBy === 'day' && $table !== [] && $this->sessions instanceof \Bia\Session\SqliteStore) {
+            array_push($lines, ...[...$this->usageHeat, '']);
+        }
+        if ($table === []) {
+            $lines[] = Style::dim('No requests');
+        } else {
+            $header = array_shift($table);
+            $total = $this->usageTab['total'] ? array_pop($table) : null;
+            // Room left for rows: the screen less the output kept above, the panel's own lines, the footer.
+            $room = max(3, $this->terminal->rows() - 14 - $this->agentRows - ($this->usageBy === 'day' ? count($this->usageHeat) + 1 : 0));
+            $this->usageScroll = min($this->usageScroll, max(0, count($table) - $room));
+            $end = count($table) - $this->usageScroll;
+            $shown = array_slice($table, max(0, $end - $room), min($room, $end));
+            $lines[] = $header;
+            array_push($lines, ...$shown);
+            if ($total !== null) {
+                $lines[] = $total;
+            }
+        }
+        $more = count($table) > count($shown ?? $table) ? ' · ↑/↓ scroll' : '';
+        $lines[] = '';
+        $lines[] = Style::dim('←/→ switch' . $more . ' · Esc close');
+        return array_map(static fn (string $line): string => Style::cut($line, $width), $lines);
+    }
+
     private function showMcp(string $arguments): void
     {
         $manager = $this->mcp['manager'] ?? null;
@@ -1373,7 +1456,9 @@ final class Chat
         }
         $rule = Style::dim(str_repeat('─', $columns));
         $cursor = null;
-        if (in_array($this->menuKind, ['confirm', 'model', 'session', 'effort'], true)) {
+        if ($this->usageBy !== null) {
+            array_push($lines, $rule, ...$this->usagePanel($width));
+        } elseif (in_array($this->menuKind, ['confirm', 'model', 'session', 'effort'], true)) {
             $lines[] = $rule;
             if ($this->menuKind === 'confirm') {
                 $lines[] = Style::warn(Style::truncate($this->menuTitle, $width));
