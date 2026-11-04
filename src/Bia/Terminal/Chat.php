@@ -181,16 +181,13 @@ final class Chat
             ->add('model', 'Switch model', $this->model(...), '[provider/model]')
             ->add('effort', 'Reasoning effort', $this->effort(...), '[' . implode('|', Config::EFFORTS) . ']')
             ->add('resume', 'Resume a session', $this->resume(...), '[session-id]')
-            ->add('new', 'Start a new session', $this->newSession(...))
+            ->add('new', 'Start a new session', $this->newSession(...), aliases: ['clear'])
             ->add('compact', 'Summarize the conversation', function (string $_): void {
                 if ($this->sessionId === null) {
                     $this->say('Nothing to compact');
                     return;
                 }
                 $this->work('Compacting', fn (Cancellation $c) => $this->agent?->compact((string) $this->sessionId, $c));
-            })
-            ->add('clear', 'Clear the screen', function (string $_): void {
-                $this->region->clear(scrollback: true);
             })
             ->add('stats', 'Show or hide live stats', function (string $_): void {
                 $this->showStats = !$this->showStats;
@@ -825,7 +822,7 @@ final class Chat
                 $this->turn !== null ? $this->steering[] = $text : $this->ask($text);
                 return;
             }
-            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'clear', 'stats', 'mcp'], true)) {
+            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp'], true)) {
                 $this->say("Busy · Esc to stop");
                 return;
             }
@@ -1844,7 +1841,7 @@ final class Chat
                 $lines[] = Style::dim(Style::truncate(implode(' · ', $stats), $width)); // inline: no corner stays
             }
         }
-        $lines[] = $this->status($width);
+        $lines[] = $this->status(max(1, $columns - 2 * $margin)); // the real room: a row too long would wrap
         $agents = $this->agentLines($width);
         $this->agentRows = count($agents);
         array_push($lines, ...$agents);
@@ -1930,20 +1927,24 @@ final class Chat
         return [$paint(self::MASCOT[0]), $paint($blink ? self::MASCOT_BLINK : self::MASCOT[1])];
     }
 
+    /**
+     * The status line: the workspace on the left, the model and how full
+     * its context is on the right; read from the start, and cut with … at
+     * the end where the screen is too narrow for it all.
+     */
     private function status(int $width): string
     {
+        if ($this->notice !== '' && microtime(true) < $this->noticeUntil) {
+            return Style::warn(Style::truncate($this->notice, $width));
+        }
         $right = $this->modelShown();
         $window = (int) $this->config->get('model.context_window');
         if ($this->contextTokens !== null && $window > 0) {
             $right .= ' · ' . self::thousands($this->contextTokens) . '/' . self::thousands($window)
                 . ' (' . (int) round($this->contextTokens * 100 / $window) . '%)';
         }
-        if ($this->notice !== '' && microtime(true) < $this->noticeUntil) {
-            return Style::warn(Style::truncate($this->notice, $width));
-        }
-        $left = Style::truncate($this->place, max(0, $width - mb_strwidth($right, 'UTF-8') - 2));
-        $gap = max(1, $width - mb_strwidth($left, 'UTF-8') - mb_strwidth($right, 'UTF-8'));
-        return Style::dim(Style::truncate($left . str_repeat(' ', $gap) . $right, $width));
+        $gap = max(2, $width - mb_strwidth($this->place, 'UTF-8') - mb_strwidth($right, 'UTF-8'));
+        return Style::dim(Style::truncate($this->place . str_repeat(' ', $gap) . $right, $width));
     }
 
     private function startTicker(): void
