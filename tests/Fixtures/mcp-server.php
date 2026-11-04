@@ -3,13 +3,15 @@
 declare(strict_types=1);
 
 // A small MCP server over standard input and output, for the tests: two
-// pages of tools, one that echoes, one that fails, one that takes its time.
+// pages of tools, one that echoes, one that fails, one that takes its time,
+// one that adds a tool and says so, and one that brings the server down.
 
 $reply = static function (array $message): void {
     fwrite(STDOUT, json_encode($message, JSON_UNESCAPED_SLASHES) . "\n");
 };
 fwrite(STDERR, "fixture server starting\n");
 fwrite(STDOUT, "this line is not JSON and is to be ignored\n");
+$grown = false;
 
 while (($line = fgets(STDIN)) !== false) {
     $message = json_decode($line, true);
@@ -34,6 +36,9 @@ while (($line = fgets(STDIN)) !== false) {
                 ? ['tools' => [
                     ['name' => 'fail', 'description' => 'Always fails.', 'inputSchema' => ['type' => 'object']],
                     ['name' => 'slow', 'description' => 'Takes a minute.', 'inputSchema' => ['type' => 'object']],
+                    ['name' => 'grow', 'description' => 'Adds a tool.', 'inputSchema' => ['type' => 'object']],
+                    ['name' => 'crash', 'description' => 'Brings the server down.', 'inputSchema' => ['type' => 'object']],
+                    ...($grown ? [['name' => 'extra', 'description' => 'Added.', 'inputSchema' => ['type' => 'object']]] : []),
                 ]]
                 : ['tools' => [
                     ['name' => 'echo', 'description' => 'Says it back.', 'inputSchema' => ['type' => 'object', 'properties' => ['text' => ['type' => 'string']], 'required' => ['text']]],
@@ -48,6 +53,13 @@ while (($line = fgets(STDIN)) !== false) {
                 ]]]);
             } elseif ($name === 'fail') {
                 $reply(['jsonrpc' => '2.0', 'id' => $id, 'result' => ['content' => [['type' => 'text', 'text' => 'it went wrong']], 'isError' => true]]);
+            } elseif ($name === 'grow') {
+                $grown = true;
+                $reply(['jsonrpc' => '2.0', 'method' => 'notifications/tools/list_changed']);
+                $reply(['jsonrpc' => '2.0', 'id' => $id, 'result' => ['content' => [['type' => 'text', 'text' => 'grown']]]]);
+            } elseif ($name === 'crash') {
+                fwrite(STDERR, "fixture server crashed\n");
+                exit(3);
             } elseif ($name === 'slow') {
                 sleep(60);
             } else {

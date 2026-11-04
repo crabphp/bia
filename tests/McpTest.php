@@ -56,11 +56,11 @@ final class McpTest extends TestCase
         $manager->ready(5.0);
 
         self::assertSame(['fixture:connecting', 'fixture:connected'], $changes, 'Connected in the background, past its noise and its ping.');
-        self::assertSame([['name' => 'fixture', 'status' => 'connected', 'error' => '', 'tools' => 3, 'project' => false]], $manager->status(), 'Both pages of its tools.');
+        self::assertSame([['name' => 'fixture', 'status' => 'connected', 'error' => '', 'tools' => 5, 'project' => false]], $manager->status(), 'Both pages of its tools.');
 
         $registry = (new Registry())->from($manager->tools(...));
         $names = array_map(static fn ($d): string => $d->name, $registry->definitions());
-        self::assertSame(['mcp__fixture__echo', 'mcp__fixture__fail', 'mcp__fixture__slow'], $names);
+        self::assertSame(['mcp__fixture__echo', 'mcp__fixture__fail', 'mcp__fixture__slow', 'mcp__fixture__grow', 'mcp__fixture__crash'], $names);
         self::assertSame('mcp', $registry->permission('mcp__fixture__echo'));
 
         $context = new ToolContext(sys_get_temp_dir(), 'session');
@@ -89,6 +89,53 @@ final class McpTest extends TestCase
         self::assertSame([], $manager->tools(), 'Closed, its tools are gone.');
         usleep(100_000);
         self::assertSame('', trim((string) shell_exec('pgrep -f ' . escapeshellarg('Fixtures/mcp-server.ph[p]'))), 'No server outlives it, even one busy with a slow call.');
+    }
+
+    public function testAServersNewToolsAreOfferedAsItSaysTheyChanged(): void
+    {
+        $manager = $this->fixture();
+        $context = new ToolContext(sys_get_temp_dir(), 'session');
+        $registry = (new Registry())->from($manager->tools(...));
+        self::assertTrue($registry->execute('mcp__fixture__grow', [], $context)->ok);
+        $this->wait(static fn (): bool => count($manager->tools()) === 6);
+        self::assertContains('mcp__fixture__extra', array_map(static fn ($d): string => $d->name, $registry->definitions()), 'Listed again as it said its tools changed.');
+        $manager->close();
+    }
+
+    public function testAServerLostIsConnectedAgainAndRestartedOnRequest(): void
+    {
+        $manager = $this->fixture($changes);
+        $context = new ToolContext(sys_get_temp_dir(), 'session');
+        $registry = (new Registry())->from($manager->tools(...));
+        $crashed = $registry->execute('mcp__fixture__crash', [], $context);
+        self::assertFalse($crashed->ok);
+        self::assertStringContainsString('fixture server crashed', $crashed->text, 'The call in flight fails, saying why.');
+        self::assertSame('connecting', $manager->status()[0]['status']);
+        self::assertSame([], $manager->tools(), 'Its tools are gone while it is.');
+
+        $this->wait(static fn (): bool => $manager->status()[0]['status'] === 'connected');
+        self::assertSame(['fixture:connecting', 'fixture:connected', 'fixture:connecting', 'fixture:connected'], $changes, 'Connected again on its own.');
+        self::assertTrue($registry->execute('mcp__fixture__echo', ['text' => 'back'], $context)->ok, 'Its tools work again.');
+
+        $manager->restart('fixture');
+        $this->wait(static fn (): bool => $manager->status()[0]['status'] === 'connected');
+        self::assertSame(['fixture:off', 'fixture:connecting', 'fixture:connected'], array_slice($changes, 4), 'Restarted on request, and not taken for one lost.');
+        self::assertSame(1, (int) trim((string) shell_exec('pgrep -fc ' . escapeshellarg('Fixtures/mcp-server.ph[p]'))), 'The one restarted is stopped.');
+        $manager->close();
+    }
+
+    public function testAServerThatKeepsFallingOverFails(): void
+    {
+        $manager = new Manager(new ProcessRunner(), new Client(), sys_get_temp_dir(), 'test', timeout: 2.0, startup: 2.0, retries: [0.1, 0.1, 0.1]);
+        // Up long enough to connect, then gone, every time.
+        $manager->add(new Server('flaky', 'stdio', PHP_BINARY, ['-r', '$l = fgets(STDIN); $m = json_decode($l, true); echo json_encode(["jsonrpc" => "2.0", "id" => $m["id"], "result" => []]), "\n"; fgets(STDIN); $l = fgets(STDIN); $m = json_decode($l, true); echo json_encode(["jsonrpc" => "2.0", "id" => $m["id"], "result" => ["tools" => []]]), "\n"; usleep(50000); fwrite(STDERR, "down again\n"); exit(1);']));
+        $changes = [];
+        $manager->start(static function (string $name, string $status) use (&$changes): void {
+            $changes[] = $status;
+        });
+        $this->wait(static fn (): bool => $manager->status()[0]['status'] === 'failed');
+        self::assertSame([...array_merge(...array_fill(0, 1 + 3, ['connecting', 'connected'])), 'failed'], $changes, 'Tried again ' . 3 . ' times, then failed.');
+        self::assertStringContainsString('down again', $manager->status()[0]['error']);
     }
 
     public function testAServerThatCannotStartFailsAloneAndSaysWhy(): void
@@ -172,6 +219,40 @@ final class McpTest extends TestCase
         self::assertTrue($trust->trusted($file));
         file_put_contents($file, '{"mcpServers": {"evil": {"command": "rm"}}}');
         self::assertFalse($trust->trusted($file), 'A changed file is asked about again.');
+    }
+
+    /**
+     * The fixture server, connected.
+     *
+     * @param list<string>|null $changes
+     */
+    private function fixture(?array &$changes = null): Manager
+    {
+        $changes = [];
+        $manager = new Manager(new ProcessRunner(), new Client(), sys_get_temp_dir(), 'test', timeout: 2.0, startup: 5.0);
+        $manager->add(new Server('fixture', 'stdio', PHP_BINARY, [__DIR__ . '/Fixtures/mcp-server.php']));
+        $manager->start(static function (string $name, string $status) use (&$changes): void {
+            $changes[] = "{$name}:{$status}";
+        });
+        $manager->ready(5.0);
+        return $manager;
+    }
+
+    /**
+     * Runs the loop until the condition holds, or the time is up.
+     *
+     * @param \Closure(): bool $condition
+     */
+    private function wait(\Closure $condition, float $seconds = 5.0): void
+    {
+        $loop = EventLoop::current();
+        $until = microtime(true) + $seconds;
+        while (!$condition() && microtime(true) < $until) {
+            $suspension = $loop->getSuspension();
+            $loop->delay(0.02, static fn () => $suspension->resume());
+            $suspension->suspend();
+        }
+        self::assertTrue($condition(), 'In time.');
     }
 
     private function file(string $content): string

@@ -194,7 +194,7 @@ final class Chat
             })
             ->add('inspect', 'What the last request sent and got', $this->inspect(...))
             ->add('usage', 'Tokens and speed by day, model and provider', $this->usage(...), '[day|models|providers]')
-            ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout <server>]')
+            ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout|restart <server>]')
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
             ->add('reload', 'Restart Bia, keeping the session', function (string $_): void {
@@ -1256,9 +1256,17 @@ final class Chat
                 }
             }
         }
-        $manager->start(function (string $name, string $status) use ($manager): void {
-            if ($status === 'failed') {
-                $error = array_column($manager->status(), 'error', 'name')[$name] ?? '';
+        $lost = [];
+        $manager->start(function (string $name, string $status) use ($manager, &$lost): void {
+            $error = array_column($manager->status(), 'error', 'name')[$name] ?? '';
+            if ($status === 'connecting' && $error !== '') {
+                $lost[$name] = true;
+                $this->note("mcp {$name} lost: {$error} · reconnecting");
+            } elseif ($status === 'connected' && isset($lost[$name])) {
+                unset($lost[$name]);
+                $this->note("mcp {$name} reconnected");
+            } elseif ($status === 'failed') {
+                unset($lost[$name]);
                 $this->note("mcp {$name} failed: {$error}");
             } elseif ($status === 'login') {
                 $this->note("mcp {$name} needs login · /mcp login {$name}");
@@ -1267,10 +1275,6 @@ final class Chat
         });
     }
 
-    /**
-     * `/mcp` shows each server; `/mcp login <server>` and `/mcp logout <server>`
-     * log in to a remote one, or forget its login.
-     */
     /**
      * The last request to the model, in full: what it carried, what came
      * back, how long it took, and what happened on the way.
@@ -1353,10 +1357,35 @@ final class Chat
         return array_map(static fn (string $line): string => Style::cut($line, $width), $lines);
     }
 
+    /**
+     * `/mcp` shows each server; `/mcp login <server>` and `/mcp logout <server>`
+     * log in to a remote one, or forget its login; `/mcp restart <server>`
+     * stops one and connects it afresh.
+     */
     private function showMcp(string $arguments): void
     {
         $manager = $this->mcp['manager'] ?? null;
         [$action, $name] = array_pad(preg_split('/\s+/', trim($arguments), 2) ?: [], 2, '');
+        if ($action === 'restart') {
+            if ($manager === null || $name === '') {
+                $this->say('Usage: /mcp restart <server>');
+                return;
+            }
+            Task::spawn(EventLoop::current(), function () use ($manager, $name): void {
+                try {
+                    $manager->restart($name);
+                    $manager->ready((float) $this->config->get('mcp.startup_timeout'));
+                    $server = array_column($manager->status(), null, 'name')[$name];
+                    if ($server['status'] === 'connected') {
+                        $this->note("mcp {$name} restarted · {$server['tools']} " . ($server['tools'] === 1 ? 'tool' : 'tools'));
+                    }
+                } catch (\Throwable $error) {
+                    $this->note($error->getMessage());
+                }
+                $this->draw();
+            });
+            return;
+        }
         if ($action === 'login' || $action === 'logout') {
             if ($manager === null || $name === '') {
                 $this->say("Usage: /mcp {$action} <server>");
@@ -1398,7 +1427,7 @@ final class Chat
             $this->region->print(match ($server['status']) {
                 'connected' => Style::ok('●') . " {$name}  " . Style::dim($server['tools'] . ($server['tools'] === 1 ? ' tool' : ' tools')),
                 'failed' => Style::error('✗') . " {$name}  " . Style::dim(Style::truncate($server['error'], 100)),
-                'connecting' => Style::dim("… {$name}  connecting"),
+                'connecting' => Style::dim("… {$name}  " . ($server['error'] !== '' ? 'reconnecting · ' . Style::truncate($server['error'], 80) : 'connecting')),
                 'login' => Style::warn('○') . " {$name}  " . Style::dim("needs login · /mcp login {$server['name']}"),
                 default => Style::dim("· {$name}  off"),
             } . ($server['project'] ? Style::dim('  · project') : '') . "\n");
@@ -1406,10 +1435,15 @@ final class Chat
     }
 
     /**
-     * A dim line in the output, on a line of its own.
+     * A dim line in the output, on a line of its own: during a turn, among
+     * its tool calls, as the turn's own notices are.
      */
     private function note(string $text): void
     {
+        if ($this->turn !== null) {
+            $this->renderer->notice($text);
+            return;
+        }
         $this->region->gap();
         $this->region->print(Style::dim("· {$text}") . "\n");
     }

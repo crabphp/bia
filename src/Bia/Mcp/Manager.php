@@ -14,12 +14,19 @@ use Crab\Engine\EventLoop;
 /**
  * Bia's MCP servers: each connected in the background, so that Bia never
  * waits on one to start; their tools offered as they come, and taken away
- * when a server goes. Closing stops every server Bia started.
+ * when a server goes. One lost after it was up is connected again, a few
+ * times, each after a longer wait; one that keeps falling over fails.
+ * Closing stops every server Bia started.
  */
 final class Manager
 {
+    /** The waits before each attempt to connect a server lost again, in seconds. */
+    public const RETRIES = [1.0, 2.0, 4.0];
+    /** A server up this long, in seconds, has its attempts counted afresh when it is lost. */
+    private const STEADY = 60.0;
+
     /**
-     * @var array<string, array{server: Server, status: string, error: string, tools: list<McpTool>, connection: ?Connection}>
+     * @var array<string, array{server: Server, status: string, error: string, tools: list<McpTool>, connection: ?Connection, retries: int, since: float, timer: ?string}>
      */
     private array $servers = [];
     /** @var \Closure(string, string): void|null */
@@ -36,11 +43,13 @@ final class Manager
         private readonly float $timeout = 120.0,
         private readonly float $startup = 30.0,
         private readonly ?AuthStore $authStore = null,
+        /** @var list<float> */
+        private readonly array $retries = self::RETRIES,
     ) {}
 
     public function add(Server $server): void
     {
-        $this->servers[$server->name] ??= ['server' => $server, 'status' => 'off', 'error' => '', 'tools' => [], 'connection' => null];
+        $this->servers[$server->name] ??= ['server' => $server, 'status' => 'off', 'error' => '', 'tools' => [], 'connection' => null, 'retries' => 0, 'since' => 0.0, 'timer' => null];
     }
 
     /**
@@ -53,6 +62,7 @@ final class Manager
         $this->changed = $changed ?? $this->changed;
         foreach ($this->servers as $name => $entry) {
             if ($entry['status'] === 'off' || $entry['status'] === 'failed') {
+                $this->servers[$name]['retries'] = 0;
                 $this->set($name, 'connecting');
                 Task::spawn(EventLoop::current(), fn () => $this->connect($name));
             }
@@ -109,10 +119,8 @@ final class Manager
     {
         $this->closed = true;
         $closing = [];
-        foreach ($this->servers as $name => $entry) {
-            $connection = $entry['connection'];
-            $this->servers[$name]['connection'] = null;
-            $this->servers[$name]['tools'] = [];
+        foreach (array_keys($this->servers) as $name) {
+            $connection = $this->drop($name);
             if ($connection !== null) {
                 $closing[] = Task::spawn(EventLoop::current(), static fn () => $connection->close());
             }
@@ -135,8 +143,18 @@ final class Manager
     {
         $auth = $this->auth($name) ?? throw new \RuntimeException("{$name} is not a remote server; only those log in");
         $auth->login($open, $cancellation);
-        $this->servers[$name]['connection']?->close();
-        $this->servers[$name]['connection'] = null;
+        $this->restart($name);
+    }
+
+    /**
+     * Stops a server and connects it afresh, its attempts counted anew.
+     */
+    public function restart(string $name): void
+    {
+        if (!isset($this->servers[$name])) {
+            throw new \RuntimeException("no MCP server {$name}");
+        }
+        $this->drop($name)?->close();
         $this->set($name, 'off');
         $this->start();
     }
@@ -148,9 +166,7 @@ final class Manager
     {
         $auth = $this->auth($name) ?? throw new \RuntimeException("{$name} is not a remote server; only those log in");
         $auth->forget();
-        $this->servers[$name]['connection']?->close();
-        $this->servers[$name]['connection'] = null;
-        $this->servers[$name]['tools'] = [];
+        $this->drop($name)?->close();
         $this->set($name, 'login', 'logged out');
     }
 
@@ -204,22 +220,75 @@ final class Manager
                 $this->version,
                 fn () => Task::spawn(EventLoop::current(), fn () => $this->list($name, $connection)),
                 function (string $why) use ($name, $connection, $refused): void {
-                    if (!$this->closed && $this->servers[$name]['connection'] === $connection) {
+                    // Lost while starting, the failure to start says so; lost once up, it is connected again.
+                    if (!$this->closed && $this->servers[$name]['connection'] === $connection && $this->servers[$name]['status'] === 'connected') {
                         $this->servers[$name]['tools'] = [];
-                        $refused() ? $this->set($name, 'login', 'needs login') : $this->set($name, 'failed', $why);
+                        if ($refused()) {
+                            $this->set($name, 'login', 'needs login');
+                            return;
+                        }
+                        if (microtime(true) - $this->servers[$name]['since'] >= self::STEADY) {
+                            $this->servers[$name]['retries'] = 0;
+                        }
+                        $this->retry($name, $why);
                     }
                 },
                 $this->startup,
             );
             $this->list($name, $connection);
+            $this->servers[$name]['since'] = microtime(true);
             $this->set($name, 'connected');
         } catch (\Throwable $error) {
-            if (!$this->closed) {
+            if (!$this->closed && $this->servers[$name]['connection'] === $connection) {
                 $connection->close();
                 $this->servers[$name]['tools'] = [];
-                $refused() ? $this->set($name, 'login', 'needs login') : $this->set($name, 'failed', $error->getMessage());
+                if ($refused()) {
+                    $this->set($name, 'login', 'needs login');
+                } elseif ($this->servers[$name]['retries'] > 0) {
+                    $this->retry($name, $error->getMessage()); // an attempt to connect one lost again
+                } else {
+                    $this->set($name, 'failed', $error->getMessage()); // one that never started is not tried again unasked
+                }
             }
         }
+    }
+
+    /**
+     * Connects a lost server again after a wait, or, its attempts used up, fails it.
+     */
+    private function retry(string $name, string $why): void
+    {
+        $attempt = $this->servers[$name]['retries'];
+        if ($attempt >= count($this->retries)) {
+            $this->set($name, 'failed', $why);
+            return;
+        }
+        $this->servers[$name]['retries']++;
+        if ($this->servers[$name]['status'] !== 'connecting') {
+            $this->set($name, 'connecting', $why); // why it was lost, told once however many attempts it takes
+        }
+        $this->servers[$name]['timer'] = EventLoop::current()->delay($this->retries[$attempt], function () use ($name): void {
+            $this->servers[$name]['timer'] = null;
+            if (!$this->closed && $this->servers[$name]['status'] === 'connecting') {
+                Task::spawn(EventLoop::current(), fn () => $this->connect($name));
+            }
+        });
+    }
+
+    /**
+     * Lets a server go: no attempt to connect it waits, its tools are taken
+     * away, and its connection, no longer its, is handed back to be closed.
+     */
+    private function drop(string $name): ?Connection
+    {
+        if (($timer = $this->servers[$name]['timer']) !== null) {
+            EventLoop::current()->cancel($timer);
+            $this->servers[$name]['timer'] = null;
+        }
+        $connection = $this->servers[$name]['connection'];
+        $this->servers[$name]['connection'] = null;
+        $this->servers[$name]['tools'] = [];
+        return $connection;
     }
 
     private function list(string $name, Connection $connection): void
