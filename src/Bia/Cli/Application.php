@@ -38,6 +38,7 @@ use Bia\Terminal\TuiRenderer;
 use Bia\Terminal\UsageReport;
 use Bia\Tool\ApplyPatchTool;
 use Bia\Tool\EditTool;
+use Bia\Tool\AskTool;
 use Bia\Tool\GitDiffTool;
 use Bia\Tool\ListFilesTool;
 use Bia\Tool\ProcessRunner;
@@ -410,7 +411,10 @@ final class Application
             $ask = static function (string $question) use (&$chat): bool {
                 return $chat instanceof Chat && $chat->confirm($question);
             };
-            $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs, $shells = new Shells($runner));
+            $choose = static function (string $question, array $choices) use (&$chat): string|false|null {
+                return $chat instanceof Chat ? $chat->choose($question, $choices) : null;
+            };
+            $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs, $shells = new Shells($runner), $choose);
             if ($mcp['manager'] !== null) {
                 $tools->from($mcp['manager']->tools(...));
             }
@@ -493,7 +497,31 @@ final class Application
         $ask = static function (string $question) use ($prompt): bool {
             return in_array(strtolower(trim((string) $prompt->ask($question . ' [y/N] '))), ['y', 'yes'], true);
         };
-        $tools = self::tools($config, $options, $ask, $canPrompt, $workspace, $runner, $outputs);
+        // In a plain terminal, the model's question is asked as a numbered list; piped, no one is there.
+        $choose = static function (string $question, array $choices) use ($prompt, $canPrompt, $json, $config): string|false|null {
+            if (!$canPrompt || $json) {
+                return null;
+            }
+            $list = $question;
+            foreach ($choices as $index => $choice) {
+                $list .= "\n  " . ($index + 1) . '. ' . $choice['label'] . ($choice['detail'] !== '' ? ' · ' . $choice['detail'] : '');
+            }
+            $timeout = (float) $config->get('tools.ask_timeout', 120);
+            if ($timeout > 0) {
+                // Waited for, but not past the timeout: a long run goes on without the user.
+                fwrite(STDOUT, $list . "\n(skipped in " . (int) $timeout . "s without an answer)\n");
+                $read = [STDIN];
+                $none = [];
+                if (@stream_select($read, $none, $none, (int) $timeout) === 0) {
+                    fwrite(STDOUT, "No answer: going on.\n");
+                    return false;
+                }
+                $list = '';
+            }
+            $answer = trim((string) $prompt->ask(($list !== '' ? $list . "\n" : '') . 'Number, your own answer, or Enter to skip: '));
+            return ctype_digit($answer) ? ($choices[(int) $answer - 1]['label'] ?? null) : ($answer === '' ? null : $answer);
+        };
+        $tools = self::tools($config, $options, $ask, $canPrompt, $workspace, $runner, $outputs, choose: $choose);
         $agent = self::agent($config, $http, $tools, $store, new AnsiRenderer($json), $workspace, $outputs, record: $record);
         $manager = $mcp['manager'];
         if ($manager !== null) {
@@ -600,9 +628,10 @@ final class Application
      * @param array<string, string|bool> $options
      * @param \Closure(string): bool $ask Asks the user a yes/no question.
      */
-    private static function tools(Config $config, array $options, \Closure $ask, bool $canPrompt, Workspace $workspace, ProcessRunner $runner, string $outputs, ?Shells $shells = null): Registry
+    private static function tools(Config $config, array $options, \Closure $ask, bool $canPrompt, Workspace $workspace, ProcessRunner $runner, string $outputs, ?Shells $shells = null, ?\Closure $choose = null): Registry
     {
         return (new Registry(self::approval($config, $options, $ask, $canPrompt)))
+            ->add(new AskTool($choose ?? static fn (): ?string => null))
             ->add(new ReadFileTool($workspace, outputs: $outputs))
             ->add(new ListFilesTool($workspace, $runner))
             ->add(new SearchTool($workspace, $runner))

@@ -179,4 +179,30 @@ final class ToolTest extends TestCase
         mkdir($directory, 0700, true);
         return realpath($directory);
     }
+
+    public function testAQuestionIsAnsweredPickedOrSkipped(): void
+    {
+        $context = new \Bia\Contracts\ToolContext('/workspace', 's');
+        $options = ['question' => 'Which database?', 'options' => [['label' => 'SQLite', 'detail' => 'fast'], ['label' => 'Postgres']]];
+        $asked = null;
+        $tool = new \Bia\Tool\AskTool(static function (string $question, array $choices) use (&$asked): ?string {
+            $asked = [$question, $choices];
+            return 'SQLite';
+        });
+
+        self::assertSame('Chose: SQLite', $tool->execute($options, $context)->text);
+        self::assertSame(['Which database?', [['label' => 'SQLite', 'detail' => 'fast'], ['label' => 'Postgres', 'detail' => '']]], $asked);
+        self::assertSame('question', $tool->definition()->permission, 'Asked on its own, never alongside another.');
+
+        $own = new \Bia\Tool\AskTool(static fn (): ?string => 'MySQL, as in production');
+        self::assertSame('Answered: MySQL, as in production', $own->execute($options, $context)->text);
+
+        $nobody = new \Bia\Tool\AskTool(static fn (): ?string => null);
+        self::assertStringStartsWith('Skipped', $nobody->execute($options, $context)->text, 'With no answer, the model decides.');
+
+        self::assertFalse($nobody->execute(['question' => 'One?', 'options' => [['label' => 'only']]], $context)->ok);
+
+        $away = new \Bia\Tool\AskTool(static fn (): false => false);
+        self::assertStringContainsString('may be away', $away->execute($options, $context)->text, 'No answer in time: the run goes on.');
+    }
 }

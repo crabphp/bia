@@ -347,6 +347,7 @@ final class TuiRenderer implements Renderer
             $call->name === 'apply_patch' => ($running ? 'Patching' : 'Patched') . self::patched($data),
             $call->name === 'git_diff' => $running ? 'Reading the diff' : 'Read the diff',
             $call->name === 'skill' => 'Used the skill ' . ($arguments['name'] ?? ''),
+            $call->name === 'ask' => ($running ? 'Asking ' : 'Asked ') . (strtok((string) ($arguments['question'] ?? ''), "\n") ?: ''),
             $call->name === 'agent' => ($running ? 'Asking ' : 'Asked ') . \Bia\Agent\Subagents::name((string) ($arguments['name'] ?? ''))
                 . ' · ' . (strtok((string) ($arguments['task'] ?? ''), "\n") ?: ''),
             preg_match('/^mcp__(.+?)__(.+)$/', $call->name, $m) === 1 => "Called {$m[1]} · {$m[2]}" . self::subjectOf($arguments),

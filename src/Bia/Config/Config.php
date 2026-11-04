@@ -256,6 +256,8 @@ final readonly class Config
             ],
             'tools' => [
                 'shell_timeout' => 120.0,
+                // Seconds a question from the model waits for an answer, so a long run goes on without you; 0 waits.
+                'ask_timeout' => 120,
                 // Tool output past either limit is cut, and saved in full under cache.path.
                 'output_bytes' => 51_200,
                 'output_lines' => 2000,
@@ -445,6 +447,8 @@ final readonly class Config
                 |--------------------------------------------------------------------------
                 |
                 | The shell timeout is the default number of seconds a command may run.
+                | A question from the model is skipped after ask_timeout seconds without
+                | an answer (0 waits), and the model decides itself.
                 | Tool output past output_bytes or output_lines is cut to its first and
                 | last lines for the model, and saved in full under the cache path.
                 |
@@ -452,6 +456,7 @@ final readonly class Config
 
                 // 'tools' => [
                 //     'shell_timeout' => 120.0,
+                //     'ask_timeout' => 120,
                 //     'output_bytes' => 51200,
                 //     'output_lines' => 2000,
                 // ],
@@ -728,6 +733,9 @@ final readonly class Config
         $tools = $values['tools'] ?? [];
         if (!is_array($tools)) {
             throw new \InvalidArgumentException('tools must be an object in Bia configuration.');
+        }
+        if (isset($tools['ask_timeout']) && (!is_int($tools['ask_timeout']) && !is_float($tools['ask_timeout']) || $tools['ask_timeout'] < 0)) {
+            throw new \InvalidArgumentException('tools.ask_timeout must be a number of seconds, zero or more.');
         }
         foreach (['shell_timeout', 'output_bytes', 'output_lines'] as $key) {
             if (isset($tools[$key]) && (!is_int($tools[$key]) && !is_float($tools[$key]) || $tools[$key] <= 0)) {

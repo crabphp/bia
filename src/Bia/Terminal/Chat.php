@@ -105,6 +105,13 @@ final class Chat
     private array $usageHeat = [];
     /** Rows scrolled up from the newest, in a table taller than the panel. */
     private int $usageScroll = 0;
+    /** The model's question waiting for its answer, and the user's own words for it. */
+    private ?Suspension $choosing = null;
+    private ?Editor $answer = null;
+    /** When the question is skipped for no answer; null once a key was pressed, or with no timeout. */
+    private ?float $choiceDeadline = null;
+    /** @var list<string> The answers offered, in order, for a number to pick. */
+    private array $choices = [];
     /** The subagent whose run is on screen, by name; null for the conversation. */
     private ?string $viewing = null;
     /** The row chosen in the list of agents, 0 for main; null while the input has the keys. */
@@ -197,6 +204,84 @@ final class Chat
             ->add('exit', 'Leave Bia', function (string $_): void {
                 $this->running = false;
             }, aliases: ['quit']);
+    }
+
+    /**
+     * Asks the model's question in the input's place: a number or Enter
+     * picks an answer, words typed are the user's own, Esc skips it. The
+     * answer, null when skipped, or false when none came in time: after
+     * tools.ask_timeout seconds with no key pressed, so a long run goes on
+     * without the user. A key pressed means they are there: it waits.
+     *
+     * @param list<array{label: string, detail: string}> $options
+     */
+    public function choose(string $question, array $options): string|false|null
+    {
+        $timeout = (float) $this->config->get('tools.ask_timeout', 120);
+        $loop = EventLoop::current();
+        $this->choiceDeadline = $timeout > 0 ? microtime(true) + $timeout : null;
+        $timers = $timeout > 0 ? [
+            $loop->delay($timeout, fn () => $this->choiceDeadline !== null ? $this->choosing?->resume(false) : null),
+            $loop->repeat(1.0, fn () => $this->draw()), // the countdown
+        ] : [];
+        $suspension = EventLoop::current()->getSuspension();
+        $this->choosing = $suspension;
+        $this->answer = new Editor([], '  '); // under the answers, with no marker of its own: the chosen one has it
+        $this->usageBy = null;
+        $this->agentRow = null;
+        $items = [];
+        foreach ($options as $index => $option) {
+            $items[] = ['value' => $option['label'], 'label' => ($index + 1) . ' ' . $option['label'], 'hint' => $option['detail']];
+        }
+        $this->choices = array_column($options, 'label');
+        $this->openMenu('choice', $question, new SelectList($items, filters: false));
+        $this->draw();
+        $this->report('blocked', 'question');
+        try {
+            $answer = $suspension->suspend();
+            return is_string($answer) || $answer === false ? $answer : null;
+        } finally {
+            foreach ($timers as $timer) {
+                $loop->cancel($timer);
+            }
+            $this->choiceDeadline = null;
+            $this->choosing = null;
+            $this->answer = null;
+            $this->closeMenu();
+            $this->draw();
+            $this->report('working');
+        }
+    }
+
+    /**
+     * A key while the model's question is open.
+     */
+    private function chooseKey(Key $key): void
+    {
+        $this->choiceDeadline = null; // someone is there: no more countdown
+        $typed = $this->answer !== null && !$this->answer->empty();
+        if ($key->is('escape')) {
+            $this->choosing?->resume(null);
+            return;
+        }
+        if ($key->is('enter')) {
+            $this->choosing?->resume($typed ? trim((string) $this->answer?->text()) : ($this->menu?->selected()['value'] ?? null));
+            return;
+        }
+        if (!$typed && $key->is('char') && ctype_digit($key->text)) {
+            // A number picks that answer at once.
+            $chosen = $this->choices[(int) $key->text - 1] ?? null;
+            if ($chosen !== null) {
+                $this->choosing?->resume($chosen);
+            }
+            return;
+        }
+        if ($key->is('up', 'down') && !$typed) {
+            $this->menu?->key($key);
+            return;
+        }
+        // Anything else is the user's own answer, typed.
+        $this->answer?->key($key);
     }
 
     /**
@@ -349,6 +434,15 @@ final class Chat
             $names = $this->agentNames();
             $at = (int) array_search($this->viewing, $names, true);
             $this->view($names[($at + ($key->is('ctrl-left') ? -1 : 1) + count($names)) % count($names)]);
+            return;
+        }
+        if ($this->menuKind === 'choice') {
+            if ($key->is('ctrl-c')) {
+                $this->choosing?->resume(null);
+                $this->interrupt();
+                return;
+            }
+            $this->chooseKey($key);
             return;
         }
         if ($this->menuKind === 'confirm') {
@@ -593,6 +687,11 @@ final class Chat
                 . ($viewed ? $label : Style::dim($label)) . '  ' . Style::dim(Style::truncate($doing, max(1, $width - $names - 6)));
         }
         return $lines;
+    }
+
+    private static function clock(int $seconds): string
+    {
+        return intdiv($seconds, 60) . ':' . str_pad((string) ($seconds % 60), 2, '0', STR_PAD_LEFT);
     }
 
     private static function duration(float $seconds): string
@@ -1458,6 +1557,19 @@ final class Chat
         $cursor = null;
         if ($this->usageBy !== null) {
             array_push($lines, $rule, ...$this->usagePanel($width));
+        } elseif ($this->menuKind === 'choice') {
+            // The model's question, its answers numbered, then a line for the user's own.
+            $lines[] = $rule;
+            foreach (Style::wrap($this->menuTitle, $width) as $part) {
+                $lines[] = $part;
+            }
+            $typed = $this->answer !== null && !$this->answer->empty();
+            array_push($lines, ...array_map(static fn (string $row): string => $typed ? Style::dim(Style::strip($row)) : $row, $this->menu?->render($width) ?? []));
+            [$rows, [$row, $column]] = ($this->answer ?? new Editor())->render($width, 'Or type your own answer');
+            $cursor = [count($lines) + $row, $column];
+            array_push($lines, ...$rows);
+            $left = $this->choiceDeadline === null ? '' : ' · Skips in ' . self::clock((int) ceil(max(0, $this->choiceDeadline - microtime(true))));
+            $lines[] = Style::dim(($typed ? 'Enter answer · Esc skip' : '1–' . ($this->menu?->count() ?? 0) . ' or Enter pick · type your own · Esc skip') . $left);
         } elseif (in_array($this->menuKind, ['confirm', 'model', 'session', 'effort'], true)) {
             $lines[] = $rule;
             if ($this->menuKind === 'confirm') {
