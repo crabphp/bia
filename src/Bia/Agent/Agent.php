@@ -67,6 +67,7 @@ final readonly class Agent
         private array $retryDelays = self::RETRY_DELAYS,
         private array $options = [],
         private ?Inspection $inspection = null,
+        private ?Recap $recap = null,
     ) {
         if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
@@ -274,6 +275,16 @@ final readonly class Agent
         $entry = $this->compactEntries($sessionId, $context, $this->compactor->tokens($context, '', $this->tools->definitions()), $cancellation);
         $payload = $entry?->payload;
         return $payload instanceof Compaction ? $payload : null;
+    }
+
+    /**
+     * A short catch-up on the session, for a user coming back to it.
+     *
+     * @return array{summary: string, next: ?string}|null Null when there is nothing to recap.
+     */
+    public function recap(string $sessionId, ?Cancellation $cancellation = null): ?array
+    {
+        return $this->recap?->write($this->sessions->path($sessionId), $cancellation);
     }
 
     /**

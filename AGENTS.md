@@ -63,7 +63,7 @@ the rule here first, with the user's agreement.
 
 **Space down**
 - Blocks are: the banner, the user's message, the answer's text, a run of
-  tool calls and notes, and the live lines at the bottom. Exactly one blank
+  tool calls and notes, a recap, and the live lines at the bottom. Exactly one blank
   line separates two blocks: start each with `Surface::gap()`, which never
   makes a second one and none at the top.
 - Nothing inside a block is blank, except the answer's own paragraph breaks;
@@ -113,6 +113,15 @@ the rule here first, with the user's agreement.
   these same rules, its task shaded as a user's message; the input steers
   it while it works, and Esc returns to the conversation. Inline, viewing
   one prints its run so far under `· agent · readme`.
+
+**Recap**
+- `· Recap` dim, and under it, set in two columns, a few sentences of where
+  things stand and a dim `Next:` line when something is. Written by
+  `/recap`, or on its own after `recap.idle` away (the terminal unfocused,
+  or no key where it does not tell focus) once three turns are done and
+  two since the last. It is one small request of its own, counted in
+  `/usage`, never part of the conversation the model sees; a session
+  keeps it, shown again on resume while nothing has happened since.
 
 **Render modes**
 - `normal` shows text as it arrives; `smooth` paces it through `Tui\Pacer`;

@@ -120,6 +120,18 @@ final class Chat
     private int $agentRows = 0;
     private ?string $statsTicker = null;
 
+    /** When a recap is due while the user is away. */
+    private readonly RecapSchedule $away;
+    /** @var array{summary: string, next: ?string}|null The session's last recap, shown again while nothing happened since. */
+    private ?array $lastRecap = null;
+    private ?string $recapTimer = null;
+    /** A recap written while the user is away; whatever they do stops it. */
+    private ?Cancellation $recapping = null;
+    /** Bumped as the conversation moves: a recap written before is out of date. */
+    private int $revision = 0;
+    /** The revision a failed recap was tried again at, to try it only once. */
+    private ?int $recapRetried = null;
+
     /**
      * @param \Closure(Config): Agent $makeAgent Builds the agent for a model, as /model switches.
      */
@@ -148,6 +160,7 @@ final class Chat
         private readonly ?Subagents $subagents = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
+        $this->away = new RecapSchedule(microtime(true));
         $this->stats = new Stats();
         $this->editor = new Editor($this->history->load());
         $this->place = self::place($this->workspace);
@@ -192,6 +205,7 @@ final class Chat
                     $this->region->overlay([]);
                 }
             })
+            ->add('recap', 'Where things stand', $this->recap(...))
             ->add('inspect', 'What the last request sent and got', $this->inspect(...))
             ->add('usage', 'Tokens and speed by day, model and provider', $this->usage(...), '[day|models|providers]')
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout|restart <server>]')
@@ -324,6 +338,9 @@ final class Chat
         if ($this->reloaded && $this->region instanceof Region) {
             // Inline, the banner and the conversation are still on the terminal, as the old Bia left them.
             $this->note('Reloaded');
+            if ($this->sessionId !== null) {
+                $this->seedRecap($this->sessionId, $this->sessions->path($this->sessionId), show: false);
+            }
         } else {
             $this->greet();
             if ($this->sessionId !== null) {
@@ -387,6 +404,13 @@ final class Chat
 
     private function handle(Key $key): void
     {
+        if ($key->is('focus-in', 'focus-out')) {
+            $this->focus($key->is('focus-in'));
+            return;
+        }
+        // Back: a recap being written for while away is not needed now.
+        $this->away->active(microtime(true));
+        $this->recapping?->cancel();
         if ($key->is('wheel-up', 'wheel-down')) {
             $this->shown()->scroll($key->is('wheel-up') ? -3 : 3);
             return;
@@ -841,7 +865,10 @@ final class Chat
         $this->renderer->collapse();
         $this->echo($text);
         $images = $this->imagesIn($text);
-        $this->work('Thinking', fn (Cancellation $cancellation) => $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images));
+        $this->work('Thinking', function (Cancellation $cancellation) use ($sessionId, $text, $images): void {
+            $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images);
+            $this->away->turnDone();
+        });
     }
 
     /**
@@ -878,6 +905,8 @@ final class Chat
     {
         $cancellation = new Cancellation();
         $this->turn = $cancellation;
+        $this->revision++;
+        $this->recapping?->cancel();
         $this->spinner = new Spinner($label);
         $this->stats->turnStarted();
         $this->startTicker();
@@ -902,6 +931,8 @@ final class Chat
             } finally {
                 $this->turn = null;
                 $this->spinner = null;
+                $this->revision++;
+                $this->away->active(microtime(true));
                 $this->files->changed();
                 $this->stopTicker();
                 $this->lineStart();
@@ -918,6 +949,7 @@ final class Chat
                 $this->draw();
                 if ($this->turn === null) {
                     $this->report($state); // unless what was left started another turn
+                    $this->scheduleRecap();
                 }
             }
         });
@@ -1060,6 +1092,7 @@ final class Chat
         $this->sessionId = null;
         $this->used = false;
         $this->contextTokens = null;
+        $this->seedRecap(null);
         $this->region->clear(scrollback: true);
         $this->greet();
         $this->region->print(Style::dim('· new session' . ($left !== null ? " · /resume {$left} to go back" : '')) . "\n");
@@ -1231,6 +1264,7 @@ final class Chat
         }
         $settle();
         $this->lineStart();
+        $this->seedRecap($id, $entries);
     }
 
     /**
@@ -1273,6 +1307,177 @@ final class Chat
             }
             $this->draw();
         });
+    }
+
+    /**
+     * `/recap`: where things stand, written now, or the last one again while
+     * nothing has happened since.
+     */
+    private function recap(string $_): void
+    {
+        $sessionId = $this->sessionId;
+        if ($sessionId === null || $this->away->turns === 0) {
+            $this->say('Nothing to recap');
+            return;
+        }
+        if ($this->lastRecap !== null && $this->away->current()) {
+            $this->showRecap($this->lastRecap);
+            return;
+        }
+        $this->recapping?->cancel();
+        $turns = $this->away->turns;
+        $this->work('Recapping', function (Cancellation $cancellation) use ($sessionId, $turns): void {
+            $recap = $this->agent?->recap($sessionId, $cancellation);
+            if ($recap !== null) {
+                $this->keepRecap($sessionId, $recap, $turns);
+            }
+        });
+    }
+
+    /**
+     * Picks up a session's recap count: its turns, and its last recap, shown
+     * again if nothing has happened since it was written. Null starts afresh.
+     *
+     * @param list<\Bia\Contracts\Entry> $entries
+     */
+    private function seedRecap(?string $id, array $entries = [], bool $show = true): void
+    {
+        $this->cancelRecap();
+        $this->revision++;
+        $this->lastRecap = null;
+        $this->recapRetried = null;
+        $saved = $id !== null && $this->sessions instanceof \Bia\Session\SqliteStore ? $this->sessions->recap($id) : null;
+        $current = $saved !== null && $saved['head'] !== null && $id !== null && $saved['head'] === $this->sessions->head($id);
+        $this->away->seed(\Bia\Agent\Recap::turns($entries), $current);
+        if ($saved !== null && $current) {
+            $this->lastRecap = ['summary' => $saved['summary'], 'next' => $saved['next']];
+            if ($show) {
+                $this->showRecap($this->lastRecap);
+            }
+        }
+        $this->scheduleRecap();
+    }
+
+    /**
+     * The terminal's window gained or lost focus: away starts as it is lost.
+     */
+    private function focus(bool $in): void
+    {
+        $this->away->focus($in, microtime(true));
+        $in ? $this->cancelRecap() : $this->scheduleRecap();
+    }
+
+    private function recapDue(): ?float
+    {
+        if ($this->config->get('recap.auto') === false || $this->turn !== null || $this->sessionId === null) {
+            return null;
+        }
+        return $this->away->due((float) $this->config->get('recap.idle', 1800));
+    }
+
+    private function scheduleRecap(float $wait = 0.0): void
+    {
+        if ($this->recapTimer !== null) {
+            EventLoop::current()->cancel($this->recapTimer);
+            $this->recapTimer = null;
+        }
+        $due = $this->recapDue();
+        if ($due === null || !$this->running) {
+            return;
+        }
+        $this->recapTimer = EventLoop::current()->delay(max($wait, $due - microtime(true), 0.0), function (): void {
+            $this->recapTimer = null;
+            $due = $this->recapDue();
+            if ($due === null) {
+                return;
+            }
+            if (microtime(true) < $due) {
+                $this->scheduleRecap(); // a key since: due later
+                return;
+            }
+            $this->recapAway();
+        });
+    }
+
+    private function cancelRecap(): void
+    {
+        if ($this->recapTimer !== null) {
+            EventLoop::current()->cancel($this->recapTimer);
+            $this->recapTimer = null;
+        }
+        $this->recapping?->cancel();
+    }
+
+    /**
+     * Writes a recap while the user is away, shown at once, for when they
+     * are back; dropped if anything happened meanwhile. One that failed is
+     * tried once more, half a minute later.
+     */
+    private function recapAway(): void
+    {
+        $sessionId = $this->sessionId;
+        if ($sessionId === null || $this->recapping !== null) {
+            return;
+        }
+        $cancellation = new Cancellation();
+        $this->recapping = $cancellation;
+        [$revision, $turns] = [$this->revision, $this->away->turns];
+        Task::spawn(EventLoop::current(), function () use ($cancellation, $sessionId, $revision, $turns): void {
+            try {
+                $recap = $this->agent?->recap($sessionId, $cancellation);
+                if ($recap !== null && $this->revision === $revision && $this->sessionId === $sessionId && $this->turn === null) {
+                    $this->keepRecap($sessionId, $recap, $turns);
+                    $this->draw();
+                }
+            } catch (CancelledException) {
+            } catch (\Throwable) {
+                if ($this->revision === $revision && $this->recapRetried !== $revision) {
+                    $this->recapRetried = $revision;
+                    $this->recapping = null;
+                    $this->scheduleRecap(30.0);
+                }
+            } finally {
+                if ($this->recapping === $cancellation) {
+                    $this->recapping = null;
+                }
+            }
+        });
+    }
+
+    /**
+     * @param array{summary: string, next: ?string} $recap
+     */
+    private function keepRecap(string $sessionId, array $recap, int $turns): void
+    {
+        $this->lastRecap = $recap;
+        $this->away->recapped($turns);
+        if ($this->sessions instanceof \Bia\Session\SqliteStore) {
+            $this->sessions->saveRecap($sessionId, $recap);
+        }
+        $this->showRecap($recap);
+    }
+
+    /**
+     * A recap, as a block of its own: a dim title, and under it the recap
+     * and what is next.
+     *
+     * @param array{summary: string, next: ?string} $recap
+     */
+    private function showRecap(array $recap): void
+    {
+        $room = max(20, $this->region->width() - 2);
+        $lines = [Style::dim('· Recap')];
+        $text = [$recap['summary'], ...($recap['next'] !== null ? [Style::dim('Next:') . ' ' . $recap['next']] : [])];
+        foreach ($text as $paragraph) {
+            foreach (Style::wrapAnsi($paragraph, $room) as $line) {
+                $lines[] = '  ' . $line;
+            }
+        }
+        $this->renderer->catchUp();
+        $this->region->gap();
+        $this->region->print(implode("
+", $lines) . "
+");
     }
 
     /**

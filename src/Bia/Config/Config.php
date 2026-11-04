@@ -272,6 +272,12 @@ final readonly class Config
                 'idle_seconds' => 3600,
                 'idle_tokens' => 64_000,
             ],
+            'recap' => [
+                // A recap of where things stand, written while you are away: false only on /recap.
+                'auto' => true,
+                // Seconds away (the terminal unfocused, or no key pressed) before one is written.
+                'idle' => 1800,
+            ],
             'mcp' => [
                 // Seconds an MCP tool call may take, and a server to start and list its tools.
                 // The servers themselves are in mcp.json beside this file, and a project's .mcp.json.
@@ -487,6 +493,24 @@ final readonly class Config
                 //     'at_tokens' => 400000,
                 //     'idle_seconds' => 3600,
                 //     'idle_tokens' => 64000,
+                // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Recap
+                |--------------------------------------------------------------------------
+                |
+                | Away from a conversation for idle seconds, after a few turns, Bia writes
+                | a short recap of where it stands and what is next, for when you come
+                | back. Away is the terminal unfocused, or, where the terminal does not
+                | say, no key pressed. /recap writes one whenever you ask. Each is one
+                | small request, counted in /usage.
+                |
+                */
+
+                // 'recap' => [
+                //     'auto' => true,
+                //     'idle' => 1800,
                 // ],
 
                 /*
@@ -764,6 +788,13 @@ final readonly class Config
             if (isset($compaction[$key]) && (!is_int($compaction[$key]) || $compaction[$key] < 1)) {
                 throw new \InvalidArgumentException("compaction.{$key} must be a positive whole number, or null.");
             }
+        }
+        $recap = $values['recap'] ?? [];
+        if (!is_array($recap) || (isset($recap['auto']) && !is_bool($recap['auto']))) {
+            throw new \InvalidArgumentException('recap.auto must be true or false.');
+        }
+        if (isset($recap['idle']) && (!is_int($recap['idle']) && !is_float($recap['idle']) || $recap['idle'] <= 0)) {
+            throw new \InvalidArgumentException('recap.idle must be a positive number of seconds.');
         }
         $permissions = $values['permissions'] ?? [];
         if (!is_array($permissions)) {

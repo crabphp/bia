@@ -12,6 +12,7 @@ use Bia\Session\MemoryStore;
 use Bia\Terminal\Watched;
 use Bia\Tui\Transcript;
 use Bia\Agent\Compactor;
+use Bia\Agent\Recap;
 use Bia\Agent\SystemPrompt;
 use Bia\Config\Config;
 use Bia\Contracts\Renderer;
@@ -700,14 +701,15 @@ final class Application
         $effort = $config->effort();
         // Whatever the provider refuses (an effort, reasoning sent back, or none of it) is mended once.
         $model = new Lenient($model, $notice);
+        // A summary needs no deep thought: at most low, and quicker for it.
+        $light = $effort === null ? [] : ['reasoning_effort' => in_array($effort, ['none', 'minimal'], true) ? $effort : 'low'];
         $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
             $model,
             $modelName,
             (int) $config->get('model.context_window'),
             (int) $config->get('compaction.reserve_tokens'),
             (int) $config->get('compaction.keep_tokens'),
-            // A summary needs no deep thought: at most low, and quicker for it.
-            $effort === null ? [] : ['reasoning_effort' => in_array($effort, ['none', 'minimal'], true) ? $effort : 'low'],
+            $light,
             ($at = $config->get('compaction.at_tokens')) === null ? null : (int) $at,
             ($idle = $config->get('compaction.idle_seconds')) === null ? null : (int) $idle,
             (int) $config->get('compaction.idle_tokens', 64_000),
@@ -725,6 +727,7 @@ final class Application
             outputs: $outputs,
             options: $effort !== null ? ['reasoning_effort' => $effort] : [],
             inspection: $inspection,
+            recap: new Recap($model, $modelName, $light),
         );
     }
 

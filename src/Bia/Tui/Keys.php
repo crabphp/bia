@@ -20,6 +20,7 @@ final class Keys
         "\e[3~" => 'delete', "\e[5~" => 'pageup', "\e[6~" => 'pagedown', "\e[Z" => 'shift-tab',
         "\e[1;5C" => 'ctrl-right', "\e[1;5D" => 'ctrl-left', "\e[1;3C" => 'ctrl-right', "\e[1;3D" => 'ctrl-left',
         "\e[1;5A" => 'up', "\e[1;5B" => 'down',
+        "\e[I" => 'focus-in', "\e[O" => 'focus-out', // the terminal's window gained or lost focus
         "\e[13;2u" => 'alt-enter', "\e[27;2;13~" => 'alt-enter', // shift-enter, where the terminal tells it apart
     ];
 

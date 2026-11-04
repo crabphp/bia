@@ -88,7 +88,8 @@ final class Terminal
         $this->saved = $saved;
         shell_exec('stty -icanon -echo -isig -iexten -icrnl -ixon min 1 time 0 < /dev/tty 2>/dev/null');
         stream_set_blocking($this->input, false);
-        $this->write("\e[?2004h");
+        // Pasting bracketed; the window's focus told, as focus-in and focus-out keys.
+        $this->write("\e[?2004h\e[?1004h");
         register_shutdown_function($this->leave(...));
     }
 
@@ -139,7 +140,7 @@ final class Terminal
             return;
         }
         $this->alternate(false);
-        $this->write("\e[?2004l\e[?25h");
+        $this->write("\e[?1004l\e[?2004l\e[?25h");
         shell_exec('stty ' . escapeshellarg($this->saved) . ' < /dev/tty 2>/dev/null');
         stream_set_blocking($this->input, true);
         $this->saved = null;

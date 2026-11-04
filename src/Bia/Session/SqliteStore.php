@@ -113,6 +113,36 @@ final class SqliteStore implements SessionStore
         return $head === false || $head === null ? null : (int) $head;
     }
 
+    /**
+     * The session's last recap, and the head it was written at.
+     *
+     * @return array{summary: string, next: ?string, head: ?int}|null
+     */
+    public function recap(string $sessionId): ?array
+    {
+        $statement = $this->open()->prepare('SELECT recap, recap_head FROM sessions WHERE id = ?');
+        $statement->execute([$sessionId]);
+        $row = $statement->fetch();
+        $recap = is_array($row) && is_string($row['recap']) ? json_decode($row['recap'], true) : null;
+        if (!is_array($recap) || !is_string($recap['summary'] ?? null)) {
+            return null;
+        }
+        return ['summary' => $recap['summary'], 'next' => is_string($recap['next'] ?? null) ? $recap['next'] : null, 'head' => $row['recap_head'] === null ? null : (int) $row['recap_head']];
+    }
+
+    /**
+     * Keeps a recap with its session, as of the session's head now.
+     *
+     * @param array{summary: string, next: ?string} $recap
+     */
+    public function saveRecap(string $sessionId, array $recap): void
+    {
+        $this->open()->prepare('UPDATE sessions SET recap = ?, recap_head = head WHERE id = ?')->execute([
+            json_encode(['summary' => $recap['summary'], 'next' => $recap['next']], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE),
+            $sessionId,
+        ]);
+    }
+
     public function exists(string $sessionId): bool
     {
         $statement = $this->open()->prepare('SELECT 1 FROM sessions WHERE id = ? LIMIT 1');
@@ -190,8 +220,30 @@ final class SqliteStore implements SessionStore
         $pdo->exec('PRAGMA busy_timeout = 2500');
         $this->migrate($pdo);
         $this->migrateRequests($pdo);
+        $this->migrateRecap($pdo);
         $pdo->prepare('DELETE FROM requests WHERE at < ?')->execute([time() - self::USAGE_DAYS * 86400]);
         return $this->pdo = $pdo;
+    }
+
+    /**
+     * Version 4: a session keeps its last recap, and the head it was written
+     * at, to show it again on resume while nothing has happened since.
+     */
+    private function migrateRecap(\PDO $pdo): void
+    {
+        if ((int) $pdo->query('PRAGMA user_version')->fetchColumn() >= 4) {
+            return;
+        }
+        $pdo->beginTransaction();
+        try {
+            $pdo->exec('ALTER TABLE sessions ADD COLUMN recap TEXT');
+            $pdo->exec('ALTER TABLE sessions ADD COLUMN recap_head INTEGER');
+            $pdo->exec('PRAGMA user_version = 4');
+            $pdo->commit();
+        } catch (\Throwable $error) {
+            $pdo->rollBack();
+            throw $error;
+        }
     }
 
     /** Days of usage kept; older rows go as the store opens. */
