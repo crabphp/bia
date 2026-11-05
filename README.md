@@ -97,7 +97,7 @@ export BIA_MODEL=gpt-6-astra
 bia
 ```
 
-and in `~/.config/bia/config.php`, `'model' => ['context_window' => 272000]`.
+and in `~/.bia/config.php`, `'model' => ['context_window' => 272000]`.
 
 Any other OpenAI-compatible server:
 
@@ -120,7 +120,7 @@ bia export <session-id>             Write a session as JSONL
 bia config [--json]                 Show the merged configuration, secrets redacted
 bia doctor                          Check PHP, tools, the model and MCP servers
 bia init                            Create .agents/bia.json in this directory
-bia init --global                   Create ~/.config/bia/config.php with every setting
+bia init --global                   Create ~/.bia/config.php with every setting
 ```
 
 | Option | Effect |
@@ -220,7 +220,7 @@ the input; delete it and the image goes too. The model needs to read images.
 A terminal passes only text, so Ctrl-V reads the clipboard of the machine
 Bia runs on, with `wl-paste`, `xclip` or macOS's own. Over SSH there is none:
 paste the path of an image on that machine instead. Images are kept under
-`~/.local/state/bia/images`, and the session refers to them there.
+`~/.bia/images`, and the session refers to them there.
 
 ### What you see
 
@@ -286,13 +286,13 @@ in; `..` and absolute paths are refused. Commands get your environment minus
 `BIA_*` and any variable holding the model's API key, so `gh`, `npm` and
 cloud CLIs keep working while the key stays out of the model's sight. Tool
 output past 2000 lines or 50 KB is cut to its first and last lines for the
-model; the full output is saved under `~/.cache/bia/outputs/` and the note
+model; the full output is saved under `~/.bia/cache/outputs/` and the note
 tells the model where, so `read_file` can page through it.
 
 ## MCP servers
 
 MCP servers give Bia more tools: GitHub, databases, browsers, your own. List
-them in `~/.config/bia/mcp.json`, in the `mcpServers` format other agents use,
+them in `~/.bia/mcp.json`, in the `mcpServers` format other agents use,
 so a config written for one works in the other:
 
 ```json
@@ -334,7 +334,7 @@ and paste the address it sends you back to into Bia.
 
 - Bia finds the server's authorization server, registers itself with it
   when it may, and logs in with PKCE; the token is bound to that server
-  alone, and kept in `~/.local/state/bia/mcp-auth.json`, readable by you
+  alone, and kept in `~/.bia/mcp-auth.json`, readable by you
   only. It is renewed before it runs out; when it cannot be, the server
   needs a login again.
 - `/mcp logout <server>` forgets the login.
@@ -380,14 +380,14 @@ Run `git log` since the last tag, group the changes, and follow template.md.
 Later sources override earlier ones:
 
 1. Built-in defaults
-2. `~/.config/bia/config.php`: yours, trusted, any setting
+2. `~/.bia/config.php`: yours, trusted, any setting
 3. `.agents/bia.json` in the project: limited to the keys below
 4. Environment variables
 5. Command-line options
 
 ### Your config
 
-`~/.config/bia/config.php` (or `$XDG_CONFIG_HOME/bia/config.php`) returns an
+`~/.bia/config.php` (or `$BIA_HOME/config.php`) returns an
 array. `bia init --global` writes one listing every setting at its default,
 commented out, so you uncomment what you change; it fills a missing or blank
 file and leaves one with content alone. A minimal one:
@@ -426,7 +426,7 @@ return [
         'idle_tokens' => 64000,     // ...when over this; idle_seconds null never does
     ],
     'storage' => [
-        'path' => '~/.local/state/bia/bia.sqlite',
+        'path' => '~/.bia/bia.sqlite',
     ],
 ];
 ```
@@ -531,7 +531,7 @@ with the offending keys named. `bia init` creates one.
 | `BIA_BASE_URL` | `model.base_url` |
 | `BIA_MODEL` | `model.name`, e.g. `cliproxyapi/claude-sonnet-4-6` |
 | `BIA_PROVIDER` | `model.provider` |
-| `XDG_CONFIG_HOME`, `XDG_STATE_HOME` | Where config and sessions live |
+| `BIA_HOME` | Where Bia keeps its files, `~/.bia` by default |
 | `NO_COLOR` | Plain tool lines |
 
 ### Permissions
@@ -545,7 +545,7 @@ Set a permission to `ask` to be asked first (`Allow shell ({"command":"..."})?
 
 Bia puts instruction files in its system prompt, general first:
 
-1. `~/.config/bia/AGENTS.md`: yours, for every project.
+1. `~/.bia/AGENTS.md`: yours, for every project.
 2. From the repository root (the nearest parent with `.git`) down to the
    working directory, one file per directory: `AGENTS.md`, or `CLAUDE.md`
    where there is none.
@@ -556,7 +556,7 @@ and how to use its tools. Your `prompt.system` leads it.
 
 ## Sessions and compaction
 
-Sessions live in `~/.local/state/bia/bia.sqlite` as an append-only log: each
+Sessions live in `~/.bia/bia.sqlite` as an append-only log: each
 entry (a message, a tool result, a compaction) points at the one before it,
 and a session is the path from its newest entry back. Bia stores completed
 messages and tool results, not each streamed token. Messages are kept in no

@@ -7,7 +7,7 @@ namespace Bia\Config;
 /**
  * Loads Bia's small, layered configuration without booting a Crab app.
  *
- * The user's own `~/.config/bia/config.php` is trusted PHP. A project's
+ * The user's own `~/.bia/config.php` is trusted PHP. A project's
  * `.agents/bia.json` comes with whatever repository Bia is run in, so it is
  * read as data and may only set what cannot send a key or a prompt
  * somewhere else: the model name, the system prompt, permissions and tool
@@ -204,9 +204,7 @@ final readonly class Config
      */
     public static function defaults(): array
     {
-        $home = self::home();
-        $stateHome = self::directory('XDG_STATE_HOME', $home . '/.local/state');
-        $cacheHome = self::directory('XDG_CACHE_HOME', $home . '/.cache');
+        $home = self::biaHome();
         return [
             // Named model servers, picked as provider/model; users add their own.
             'providers' => [
@@ -291,10 +289,10 @@ final readonly class Config
                 'render' => 'normal',
             ],
             'storage' => [
-                'path' => $stateHome . '/bia/bia.sqlite',
+                'path' => $home . '/bia.sqlite',
             ],
             'cache' => [
-                'path' => $cacheHome . '/bia',
+                'path' => $home . '/cache',
             ],
         ];
     }
@@ -304,7 +302,7 @@ final readonly class Config
      */
     public static function globalPath(): string
     {
-        return self::directory('XDG_CONFIG_HOME', self::home() . '/.config') . '/bia/config.php';
+        return self::biaHome() . '/config.php';
     }
 
     /**
@@ -561,11 +559,11 @@ final readonly class Config
                 */
 
                 // 'storage' => [
-                //     'path' => '~/.local/state/bia/bia.sqlite',
+                //     'path' => '~/.bia/bia.sqlite',
                 // ],
 
                 // 'cache' => [
-                //     'path' => '~/.cache/bia',
+                //     'path' => '~/.bia/cache',
                 // ],
 
             ];
@@ -607,7 +605,7 @@ final readonly class Config
      */
     public function configDirectory(): string
     {
-        return self::directory('XDG_CONFIG_HOME', self::home() . '/.config') . '/bia';
+        return self::biaHome();
     }
 
     /**
@@ -852,7 +850,7 @@ final readonly class Config
         );
         if ($refused !== []) {
             throw new \InvalidArgumentException(
-                "{$path} may not set " . implode(', ', $refused) . '; set them in ~/.config/bia/config.php or the environment.',
+                "{$path} may not set " . implode(', ', $refused) . '; set them in ~/.bia/config.php or the environment.',
             );
         }
         return $values;
@@ -911,10 +909,13 @@ final readonly class Config
         return is_string($home) && $home !== '' ? rtrim($home, '/') : getcwd();
     }
 
-    private static function directory(string $name, string $fallback): string
+    /**
+     * Where all of Bia's own files live: `$BIA_HOME`, or `~/.bia`.
+     */
+    private static function biaHome(): string
     {
-        $value = getenv($name);
-        return is_string($value) && $value !== '' ? rtrim($value, '/') : $fallback;
+        $value = getenv('BIA_HOME');
+        return is_string($value) && $value !== '' ? rtrim(self::expand($value), '/') : self::home() . '/.bia';
     }
 
     private static function expand(string $path): string

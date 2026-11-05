@@ -147,19 +147,20 @@ final class Application
               --help             Show this help
 
             Tools run without asking by default. Set permissions to "ask" or
-            "deny" in ~/.config/bia/config.php or .agents/bia.json to change it.
+            "deny" in ~/.bia/config.php or .agents/bia.json to change it.
 
             Configuration:
-              ~/.config/bia/config.php   (yours: any setting)
+              ~/.bia/config.php          (yours: any setting)
               .agents/bia.json           (the project's: model.name, prompt.system,
                                           permissions, tools, compaction)
 
             Providers: --model anthropic/NAME, openai/NAME or cliproxyapi/NAME
             uses a built-in provider; add your own under "providers" in
-            ~/.config/bia/config.php (bia init --global shows how).
+            ~/.bia/config.php (bia init --global shows how).
 
-            State:
-              ~/.local/state/bia/bia.sqlite
+            Files:
+              ~/.bia, or $BIA_HOME     (config.php, AGENTS.md, mcp.json,
+                                        bia.sqlite, cache/)
             TEXT . PHP_EOL);
     }
 
@@ -205,7 +206,7 @@ final class Application
     }
 
     /**
-     * Writes ~/.config/bia/config.php with every setting commented out at its
+     * Writes ~/.bia/config.php with every setting commented out at its
      * default. A file with settings in it is left alone; a blank one is filled.
      */
     private static function initGlobal(): int

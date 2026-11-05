@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bia keeps all its files in `~/.bia` (or `$BIA_HOME`): config.php,
+  AGENTS.md, mcp.json, the sessions' database and the cache, not across
+  `~/.config`, `~/.local/state` and `~/.cache`.
 - While the model thinks, the spinner says so in beer words, as Claude Code
   has its verbs: Drinking, Brewing, Fermenting… a new one every ten seconds.
 - `/stats` shows live drawing, model speed, token and memory figures at the

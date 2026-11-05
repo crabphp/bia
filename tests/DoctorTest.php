@@ -20,18 +20,16 @@ final class DoctorTest extends TestCase
 
     protected function setUp(): void
     {
-        // Never the real ~/.config/bia, which holds the developer's keys, nor their database.
+        // Never the real ~/.bia, which holds the developer's keys, nor their database.
         $this->directory = sys_get_temp_dir() . '/bia-doctor-' . bin2hex(random_bytes(4));
         mkdir($this->directory . '/bia', 0777, true);
-        putenv('XDG_CONFIG_HOME=' . $this->directory);
-        putenv('XDG_STATE_HOME=' . $this->directory . '/state');
+        putenv('BIA_HOME=' . $this->directory . '/bia');
         Style::enable(false);
     }
 
     protected function tearDown(): void
     {
-        putenv('XDG_CONFIG_HOME');
-        putenv('XDG_STATE_HOME');
+        putenv('BIA_HOME');
         putenv('BIA_API_KEY');
         putenv('BIA_MODEL');
         putenv('BIA_PROVIDER');

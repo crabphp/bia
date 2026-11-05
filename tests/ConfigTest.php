@@ -11,13 +11,13 @@ final class ConfigTest extends TestCase
 {
     protected function setUp(): void
     {
-        // Never read the real ~/.config/bia: it holds the developer's keys.
-        putenv('XDG_CONFIG_HOME=' . $this->directory());
+        // Never read the real ~/.bia: it holds the developer's keys.
+        putenv('BIA_HOME=' . $this->directory() . '/bia');
     }
 
     protected function tearDown(): void
     {
-        putenv('XDG_CONFIG_HOME');
+        putenv('BIA_HOME');
     }
 
     public function testProjectSettingsAndOverridesAreMerged(): void
@@ -66,7 +66,7 @@ final class ConfigTest extends TestCase
     public function testAChoiceMadeInAConversationIsKeptInTheConfigFileAsWritten(): void
     {
         $config = $this->directory();
-        putenv("XDG_CONFIG_HOME={$config}");
+        putenv("BIA_HOME={$config}/bia");
         try {
             mkdir($config . '/bia', 0777, true);
             $file = $config . '/bia/config.php';
@@ -85,7 +85,7 @@ final class ConfigTest extends TestCase
             $this->expectException(\InvalidArgumentException::class);
             Config::remember('model.base_url', 'https://elsewhere.example');
         } finally {
-            putenv('XDG_CONFIG_HOME');
+            putenv('BIA_HOME');
         }
     }
 
@@ -179,7 +179,7 @@ final class ConfigTest extends TestCase
     {
         $home = $this->directory();
         $run = static fn (): string => (string) shell_exec(
-            'XDG_CONFIG_HOME=' . escapeshellarg($home) . ' ' . escapeshellarg(PHP_BINARY) . ' '
+            'BIA_HOME=' . escapeshellarg($home . '/bia') . ' ' . escapeshellarg(PHP_BINARY) . ' '
             . escapeshellarg(dirname(__DIR__) . '/bin/bia') . ' init --global 2>&1',
         );
         $path = $home . '/bia/config.php';
@@ -201,11 +201,11 @@ final class ConfigTest extends TestCase
         $home = $this->directory();
         mkdir($home . '/bia');
         file_put_contents($home . '/bia/config.php', '');
-        putenv('XDG_CONFIG_HOME=' . $home);
+        putenv('BIA_HOME=' . $home . '/bia');
         try {
             self::assertSame('gpt-5', Config::load($this->directory())->get('model.name'));
         } finally {
-            putenv('XDG_CONFIG_HOME');
+            putenv('BIA_HOME');
         }
     }
 
@@ -247,7 +247,7 @@ final class ConfigTest extends TestCase
         } finally {
             putenv('BIA_TEST_CLIPROXY_KEY');
             putenv('OPENROUTER_API_KEY');
-            putenv('XDG_CONFIG_HOME');
+            putenv('BIA_HOME');
         }
         self::assertDirectoryExists($home);
     }
@@ -263,13 +263,13 @@ final class ConfigTest extends TestCase
         } finally {
             putenv('CLIPROXYAPI_API_KEY');
             putenv('BIA_API_KEY');
-            putenv('XDG_CONFIG_HOME');
+            putenv('BIA_HOME');
         }
     }
 
     public function testAMissingKeySaysWhichModelAndWhereToSetIt(): void
     {
-        putenv('XDG_CONFIG_HOME=' . $this->directory());
+        putenv('BIA_HOME=' . $this->directory() . '/bia');
         try {
             $help = Config::load($this->directory(), ['model' => ['name' => 'cliproxyapi/x']])->keyHelp();
             self::assertStringContainsString('cliproxyapi model x', $help);
@@ -277,7 +277,7 @@ final class ConfigTest extends TestCase
             self::assertStringContainsString('CLIPROXYAPI_API_KEY', $help);
             self::assertStringContainsString('openai-compatible model gpt-5', Config::load($this->directory())->keyHelp());
         } finally {
-            putenv('XDG_CONFIG_HOME');
+            putenv('BIA_HOME');
         }
     }
 
@@ -304,7 +304,7 @@ final class ConfigTest extends TestCase
 
     public function testAnthropicOpenAiAndCliProxyApiAreBuiltIn(): void
     {
-        putenv('XDG_CONFIG_HOME=' . $this->directory());
+        putenv('BIA_HOME=' . $this->directory() . '/bia');
         putenv('ANTHROPIC_API_KEY=anthropic-key');
         try {
             $claude = Config::load($this->directory(), ['model' => ['name' => 'anthropic/claude-sonnet-4-5']]);
@@ -316,7 +316,7 @@ final class ConfigTest extends TestCase
             self::assertSame('https://api.openai.com/v1', Config::load($this->directory())->get('model.base_url'), 'A plain model name is unchanged.');
         } finally {
             putenv('ANTHROPIC_API_KEY');
-            putenv('XDG_CONFIG_HOME');
+            putenv('BIA_HOME');
         }
     }
 
@@ -331,14 +331,14 @@ final class ConfigTest extends TestCase
             $this->expectExceptionMessage('providers.evil.base_url');
             Config::load($this->project(['providers' => ['evil' => ['base_url' => 'https://attacker.example']]]));
         } finally {
-            putenv('XDG_CONFIG_HOME');
+            putenv('BIA_HOME');
         }
     }
 
     public function testConfigShowsTokenLimitsAndHidesKeys(): void
     {
         $output = (string) shell_exec(
-            'OPENAI_API_KEY=sk-hidden XDG_CONFIG_HOME=' . escapeshellarg($this->directory()) . ' '
+            'OPENAI_API_KEY=sk-hidden BIA_HOME=' . escapeshellarg($this->directory() . '/bia') . ' '
             . escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(dirname(__DIR__) . '/bin/bia') . ' config --json 2>&1',
         );
         $shown = json_decode($output, true);
@@ -349,7 +349,7 @@ final class ConfigTest extends TestCase
     }
 
     /**
-     * Points XDG_CONFIG_HOME at a new directory holding this global config.php;
+     * Points BIA_HOME at a new directory holding this global config.php;
      * the caller unsets it.
      */
     private function global(string $php): string
@@ -357,7 +357,7 @@ final class ConfigTest extends TestCase
         $home = $this->directory();
         mkdir($home . '/bia');
         file_put_contents($home . '/bia/config.php', $php);
-        putenv('XDG_CONFIG_HOME=' . $home);
+        putenv('BIA_HOME=' . $home . '/bia');
         return $home;
     }
 
