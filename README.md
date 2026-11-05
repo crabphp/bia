@@ -48,6 +48,8 @@ bia "find why the login test fails and fix it"
 
 ## Requirements
 
+- Linux or macOS. On Windows, run Bia in
+  [WSL](https://learn.microsoft.com/windows/wsl/install).
 - PHP 8.4 with `pdo_sqlite` and `mbstring`; `pcntl` and `posix` are
   recommended (Ctrl-C handling and process groups), and `readline` gives line
   editing and history.
@@ -635,6 +637,7 @@ Bia is at 0.1.0-beta.2. Not yet built:
 - **Only the Chat Completions API.** Native Anthropic Messages, Gemini and
   OpenAI Responses adapters are planned.
 - **No MCP servers.**
+- **No native Windows.** Bia runs in WSL there.
 - **No sandbox.** The agent has your permissions in the workspace and beyond
   it through `shell`.
 - **Commands have no terminal.** They run without a controlling terminal, so

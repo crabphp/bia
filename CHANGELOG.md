@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- On Windows Bia says to run it in WSL rather than failing on its way in.
 - Bia keeps all its files in `~/.bia` (or `$BIA_HOME`): config.php,
   AGENTS.md, mcp.json, the sessions' database and the cache, not across
   `~/.config`, `~/.local/state` and `~/.cache`.

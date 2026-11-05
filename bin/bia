@@ -3,6 +3,11 @@
 
 declare(strict_types=1);
 
+if (PHP_OS_FAMILY === 'Windows') {
+    fwrite(STDERR, "Bia runs on Linux and macOS · on Windows, run it in WSL: https://learn.microsoft.com/windows/wsl/install\n");
+    exit(1);
+}
+
 require dirname(__DIR__) . '/vendor/autoload.php';
 
 exit(Bia\Cli\Application::run(array_slice($argv, 1)));
