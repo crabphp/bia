@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- On macOS a command stopped or timed out takes what it started with it, as
+  on Linux: its process group is made with perl, as there is no `setsid`.
 - On Windows Bia says to run it in WSL rather than failing on its way in.
 - Bia keeps all its files in `~/.bia` (or `$BIA_HOME`): config.php,
   AGENTS.md, mcp.json, the sessions' database and the cache, not across

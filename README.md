@@ -56,8 +56,9 @@ bia "find why the login test fails and fix it"
 - `git` for `apply_patch` and `git_diff`.
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for `search`;
   `list_files` falls back to PHP without it.
-- `setsid` (util-linux, standard on Linux) for process groups. Without it
-  Bia still works, but a background child of a command may outlive it.
+- `setsid` (standard on Linux) or perl (standard on macOS) for process
+  groups. Without either Bia still works, but a background child of a
+  command may outlive it.
 - An API key for an OpenAI-compatible endpoint.
 
 `bia doctor` checks all of these.
@@ -636,7 +637,6 @@ provider.
 Bia is at 0.1.0-beta.2. Not yet built:
 - **Only the Chat Completions API.** Native Anthropic Messages, Gemini and
   OpenAI Responses adapters are planned.
-- **No MCP servers.**
 - **No native Windows.** Bia runs in WSL there.
 - **No sandbox.** The agent has your permissions in the workspace and beyond
   it through `shell`.

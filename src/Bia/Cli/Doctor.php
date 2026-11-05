@@ -81,7 +81,7 @@ final class Doctor
         $optional = [
             'git' => [self::which('git'), 'apply_patch and git_diff need it · install git'],
             'ripgrep' => [self::which('rg'), 'search needs it · install ripgrep'],
-            'process groups' => [function_exists('posix_kill') && self::which('setsid'), "a command's children may outlive it · install php's posix extension"],
+            'process groups' => [\Crab\Engine\Process\ProcessGroup::wrap(['true']) !== null, "a command's children may outlive it · install php's posix extension, and setsid or perl"],
             'pcntl' => [function_exists('pcntl_exec'), "/reload and Ctrl-C need it · install php's pcntl extension"],
             'readline' => [extension_loaded('readline'), "line editing is plainer · install php's readline extension"],
         ];
