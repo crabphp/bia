@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `/reload` reads the config, instructions and MCP servers again in place,
+  rather than restarting Bia: the screen stays, background commands go on,
+  and it no longer needs `pcntl`. A config with an error leaves everything as
+  it was. New Bia code takes quitting and `bia resume`.
 - On macOS a command stopped or timed out takes what it started with it, as
   on Linux: its process group is made with perl, as there is no `setsid`.
 - On Windows Bia says to run it in WSL rather than failing on its way in.

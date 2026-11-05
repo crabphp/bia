@@ -48,9 +48,17 @@ final class Subagents
     public function __construct(
         private readonly \Closure $make,
         private readonly \Closure $changed,
-        private readonly string $system = '',
+        private string $system = '',
         private readonly ?\Closure $asked = null,
     ) {}
+
+    /**
+     * The system prompt each task is given from now on, as `/reload` reads it again.
+     */
+    public function system(string $system): void
+    {
+        $this->system = $system;
+    }
 
     /**
      * Gives a subagent a task, or a follow-up when one has this name, and

@@ -361,16 +361,11 @@ final class Application
         $workspace = new Workspace($root);
         $runner = new ProcessRunner($config->secrets());
         $outputs = $config->cachePath() . '/outputs';
-        $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
         $http = new Client();
         $loop = new Loop();
-        $mcp = self::mcp($config, $runner, $http, $workspace->root());
         // Each request to a model, counted for /usage: counts and times only.
         $record = static fn (array $request) => $store->record($request);
 
-        // Set by /reload for the Bia it starts, and for no one after it.
-        $reloaded = getenv('BIA_RELOADED') === '1';
-        putenv('BIA_RELOADED');
         if ($repl && !$json && Terminal::interactive()) {
             $terminal = new Terminal();
             $region = $config->get('tui.fullscreen') === false ? new Region($terminal) : new Screen($terminal);
@@ -383,19 +378,11 @@ final class Application
             $choose = static function (string $question, array $choices) use (&$chat): string|false|null {
                 return $chat instanceof Chat ? $chat->choose($question, $choices) : null;
             };
-            $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs, $shells = new Shells($runner), $choose);
-            if ($mcp['manager'] !== null) {
-                $tools->from($mcp['manager']->tools(...));
-            }
+            $shells = new Shells($runner);
             $inspection = new Inspection();
-            // Subagents only read: what they find goes back to the main agent, which does the work.
-            $reads = (new Registry())
-                ->add(new ReadFileTool($workspace, outputs: $outputs))
-                ->add(new ListFilesTool($workspace, $runner))
-                ->add(new SearchTool($workspace, $runner))
-                ->add(new GitDiffTool($workspace, $runner));
+            $reads = null;
             $subagents = new Subagents(
-                static function (string $name, \Closure $doing, \Closure $called) use (&$chat, $config, $terminal, $region, $http, $reads, $workspace, $outputs, $record): array {
+                static function (string $name, \Closure $doing, \Closure $called) use (&$chat, &$reads, $config, $terminal, $region, $http, $workspace, $outputs, $record): array {
                     // Fullscreen, a page of its own, hidden until viewed; inline, its run kept to print.
                     $surface = $region instanceof Screen ? new Screen($terminal) : new Transcript($terminal);
                     if ($surface instanceof Screen) {
@@ -413,45 +400,76 @@ final class Application
                         $chat->agentsChanged();
                     }
                 },
-                $system,
+                '',
                 static function (mixed $view, string $task): void {
                     if (is_array($view)) {
                         Chat::echoOn($view['surface'], $task);
                     }
                 },
             );
-            $tools->add(new AgentTool($subagents));
-            $makeAgent = static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection, $record);
+            // What the config and instructions make: built at the start, and again by /reload,
+            // which keeps the process, the session, the screen and the background commands.
+            $setup = static function (Config $config) use (&$reads, $options, $ask, $choose, $workspace, $outputs, $shells, $subagents, $http, $store, $renderer, $inspection, $record): array {
+                $runner = new ProcessRunner($config->secrets());
+                $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
+                $mcp = self::mcp($config, $runner, $http, $workspace->root());
+                $shells->use($runner);
+                $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs, $shells, $choose);
+                if ($mcp['manager'] !== null) {
+                    $tools->from($mcp['manager']->tools(...));
+                }
+                $tools->add(new AgentTool($subagents));
+                // Subagents only read: what they find goes back to the main agent, which does the work.
+                $reads = (new Registry())
+                    ->add(new ReadFileTool($workspace, outputs: $outputs))
+                    ->add(new ListFilesTool($workspace, $runner))
+                    ->add(new SearchTool($workspace, $runner))
+                    ->add(new GitDiffTool($workspace, $runner));
+                $subagents->system($system);
+                return [
+                    'system' => $system,
+                    'mcp' => $mcp,
+                    'agent' => static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection, $record),
+                ];
+            };
+            $built = $setup($config);
             $chat = new Chat(
                 $terminal,
                 $region,
                 $renderer,
                 $config,
-                $makeAgent,
+                $built['agent'],
                 $store,
                 $sessionId,
-                $system,
+                $built['system'],
                 $workspace->root(),
                 new Files($runner, $workspace->root()),
                 new ModelCatalog($http),
                 new History(dirname($config->databasePath()) . '/history'),
                 self::VERSION,
                 pickSession: $resume === '',
-                mcp: $mcp,
+                mcp: $built['mcp'],
                 skills: Catalog::for((string) getenv('HOME'), $workspace->root()),
                 images: new \Bia\Terminal\Images($runner, dirname($config->databasePath()) . '/images', $workspace->root()),
-                reloaded: $reloaded,
                 inspection: $inspection,
                 subagents: $subagents,
+                reload: static function (Config $current) use ($overrides, $setup): array {
+                    // Read again as at the start, on the model and effort chosen since.
+                    $config = Config::load(overrides: $overrides);
+                    try {
+                        $config = $config->withModel($current->modelLabel());
+                    } catch (\Throwable) {
+                        // That model is no longer configured: the config's own is used.
+                    }
+                    $config = $config->withEffort((string) $current->get('model.reasoning_effort', 'default'));
+                    return ['config' => $config, ...$setup($config)];
+                },
             );
             $loop->execute($chat->run(...));
-            if (($again = $chat->reloading()) !== null) {
-                // What Bia started ends now: the same process goes on as the new Bia, so nothing else would end it.
-                $shells->stopAll();
-                self::reload($options, $again);
-            }
             return 0;
         }
+        $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
+        $mcp = self::mcp($config, $runner, $http, $workspace->root());
         if ($resume === '') {
             throw new \RuntimeException('Give bia resume a session id; bia sessions lists them.');
         }
@@ -615,34 +633,6 @@ final class Application
                 $skills = Catalog::for((string) getenv('HOME'), $workspace->root())->all();
                 return $skills === [] ? [] : [new SkillTool($skills)];
             });
-    }
-
-    /**
-     * Replaces this process with a new Bia on the same session, model and
-     * effort, as /reload asks: its code, config and instructions read again.
-     * Returns only when that could not be done, having said so.
-     *
-     * @param array<string, string|bool> $options
-     * @param array{session: ?string, model: string, effort: string} $again
-     */
-    private static function reload(array $options, array $again): void
-    {
-        $arguments = [];
-        foreach (array_diff_key($options, ['model' => 0, 'effort' => 0, 'resume' => 0]) as $name => $value) {
-            array_push($arguments, "--{$name}", ...($value === true ? [] : [(string) $value]));
-        }
-        array_push($arguments, '--model', $again['model'], '--effort', $again['effort']);
-        if ($again['session'] !== null) {
-            array_push($arguments, '--resume', $again['session']);
-        }
-        $script = (string) ($_SERVER['SCRIPT_FILENAME'] ?? 'bia');
-        if (function_exists('pcntl_exec')) {
-            putenv('BIA_RELOADED=1');
-            @pcntl_exec(PHP_BINARY, [$script, ...$arguments]);
-            putenv('BIA_RELOADED');
-        }
-        fwrite(STDERR, 'bia: could not restart' . (function_exists('pcntl_exec') ? '' : ' (/reload needs the pcntl extension)')
-            . ($again['session'] !== null ? "; bia resume {$again['session']}" : '') . PHP_EOL);
     }
 
     /**

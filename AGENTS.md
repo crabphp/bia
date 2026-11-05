@@ -15,10 +15,11 @@ or load a terminal UI framework just to print help or stream a model reply.
 - Run subprocesses through `Bia\Tool\ProcessRunner` (Crab's `Subprocess`, or its
   `Process` for one that keeps running, as an MCP server), never `proc_open` or
   `shell_exec` directly: that is what makes them cancellable, concurrent and
-  free of Bia's credentials, and what stops them when Bia ends. The exceptions are
-  `Tui\Terminal`'s `stty` calls on /dev/tty, which need the terminal itself, and
-  `/reload`'s `pcntl_exec`, which replaces Bia with itself: it stops the
-  background commands first, as nothing else would.
+  free of Bia's credentials, and what stops them when Bia ends. The exception is
+  `Tui\Terminal`'s `stty` calls on /dev/tty, which need the terminal itself.
+- `/reload` reads the config, instructions and MCP servers again in the same
+  process; it never replaces Bia (no `pcntl_exec`), so it works the same from a
+  checkout, a PHAR or a static build. New code needs a new `bia`.
 - `Bia\Tui` names nothing of Bia outside it: only the Crab engine. Its
   components take keys and return lines and never write to the terminal;
   only the two `Surface`s, `Screen` and `Region`, and `Terminal` do. Keep the

@@ -26,7 +26,16 @@ final class Shells
     private array $shells = [];
     private int $last = 0;
 
-    public function __construct(private readonly ProcessRunner $runner) {}
+    public function __construct(private ProcessRunner $runner) {}
+
+    /**
+     * Starts the commands from now on through this runner, as `/reload` makes
+     * one for the keys it read: those running go on.
+     */
+    public function use(ProcessRunner $runner): void
+    {
+        $this->runner = $runner;
+    }
 
     /**
      * @param list<string> $argv The shell and its arguments, the command among them.
@@ -96,16 +105,6 @@ final class Shells
         }
         $this->shells[$id]['process']->stop(0.5);
         return true;
-    }
-
-    /**
-     * Stops every background command, as before Bia replaces itself on /reload.
-     */
-    public function stopAll(): void
-    {
-        foreach ($this->running() as $id) {
-            $this->stop($id);
-        }
     }
 
     /**

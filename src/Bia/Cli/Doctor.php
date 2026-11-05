@@ -82,7 +82,7 @@ final class Doctor
             'git' => [self::which('git'), 'apply_patch and git_diff need it · install git'],
             'ripgrep' => [self::which('rg'), 'search needs it · install ripgrep'],
             'process groups' => [\Crab\Engine\Process\ProcessGroup::wrap(['true']) !== null, "a command's children may outlive it · install php's posix extension, and setsid or perl"],
-            'pcntl' => [function_exists('pcntl_exec'), "/reload and Ctrl-C need it · install php's pcntl extension"],
+            'pcntl' => [function_exists('pcntl_exec'), "Ctrl-C needs it · install php's pcntl extension"],
             'readline' => [extension_loaded('readline'), "line editing is plainer · install php's readline extension"],
         ];
         $have = array_keys(array_filter($optional, static fn (array $check): bool => $check[0]));

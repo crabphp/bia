@@ -175,7 +175,7 @@ completes.
 | `/resume <id>` | Continue that session; the start of its id is enough |
 | `/new`, `/clear` | Start a new session |
 | `/compact` | Summarize the conversation so far now |
-| `/reload` | Restart Bia in place on the same session, model and effort: Bia's code, config, instructions and MCP servers read again. Background commands are stopped first |
+| `/reload` | Read the config, instructions (`AGENTS.md`) and MCP servers again, on the same session, model and effort, without restarting. Background commands go on. A config with an error leaves everything as it was. For new Bia code, quit and `bia resume` |
 | `/stats` | Show or hide live stats at the top right: drawing (fps, ms a frame), first token and tokens a second, tokens in and out, memory |
 | `/render [normal\|smooth\|power]` | How answers appear: `normal` as the text arrives; `smooth` evened out to a steady flow of characters; `power` each character dropping into place and landing with a flash (fullscreen). `tui.render` in your config sets the default |
 | `/help` | List commands and keys |

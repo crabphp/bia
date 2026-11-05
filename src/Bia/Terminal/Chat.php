@@ -87,7 +87,6 @@ final class Chat
     private string $notice = '';
     private float $noticeUntil = 0.0;
     private float $exitArmed = 0.0;
-    private bool $reload = false;
     private bool $running = true;
     private ?string $ticker = null;
     private ?int $contextTokens = null;
@@ -134,16 +133,18 @@ final class Chat
 
     /**
      * @param \Closure(Config): Agent $makeAgent Builds the agent for a model, as /model switches.
+     * @param (\Closure(Config): array{config: Config, system: string, mcp: array<string, mixed>, agent: \Closure(Config): Agent})|null $reload
+     *        Reads the config and instructions again, on the model and effort of the config given, as /reload asks.
      */
     public function __construct(
         private readonly Terminal $terminal,
         private readonly Surface $region,
         private readonly TuiRenderer $renderer,
         private Config $config,
-        private readonly \Closure $makeAgent,
+        private \Closure $makeAgent,
         private readonly SessionStore $sessions,
         private ?string $sessionId,
-        private readonly string $system,
+        private string $system,
         private readonly string $workspace,
         private readonly Files $files,
         private readonly ModelCatalog $catalog,
@@ -152,12 +153,12 @@ final class Chat
         private ?Agent $agent = null,
         private readonly bool $pickSession = false,
         /** @var array{manager: ?\Bia\Mcp\Manager, untrusted: ?string, project: list<\Bia\Mcp\Server>, errors: list<string>, trust: \Bia\Mcp\Trust, open: \Closure(string): void}|null */
-        private readonly ?array $mcp = null,
+        private ?array $mcp = null,
         private readonly ?\Bia\Skill\Catalog $skills = null,
         private readonly ?Images $images = null,
-        private readonly bool $reloaded = false,
         private readonly ?Inspection $inspection = null,
         private readonly ?Subagents $subagents = null,
+        private readonly ?\Closure $reload = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->away = new RecapSchedule(microtime(true));
@@ -208,10 +209,7 @@ final class Chat
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout|restart <server>]')
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
-            ->add('reload', 'Restart Bia, keeping the session', function (string $_): void {
-                $this->reload = true;
-                $this->running = false;
-            })
+            ->add('reload', 'Read config, instructions and MCP servers again', $this->reloadConfig(...))
             ->add('exit', 'Leave Bia', function (string $_): void {
                 $this->running = false;
             }, aliases: ['quit']);
@@ -332,22 +330,11 @@ final class Chat
                 $this->draw();
             })
             : null;
-        if ($this->reloaded && $this->region instanceof Region) {
-            // Inline, the banner and the conversation are still on the terminal, as the old Bia left them.
-            $this->note('Reloaded');
-            if ($this->sessionId !== null) {
-                $this->seedRecap($this->sessionId, $this->sessions->path($this->sessionId), show: false);
-            }
-        } else {
-            $this->greet();
-            if ($this->sessionId !== null) {
-                $this->replay($this->sessionId);
-            } elseif ($this->pickSession) {
-                $this->resume('');
-            }
-            if ($this->reloaded) {
-                $this->note('Reloaded');
-            }
+        $this->greet();
+        if ($this->sessionId !== null) {
+            $this->replay($this->sessionId);
+        } elseif ($this->pickSession) {
+            $this->resume('');
         }
         $this->draw();
         $this->report('idle');
@@ -378,25 +365,44 @@ final class Chat
             $this->mcp['manager']?->close(); // the servers Bia started end with it
             $this->region->close();
             $this->terminal->leave();
-            if ($this->used && $this->sessionId !== null && !$this->reload) {
+            if ($this->used && $this->sessionId !== null) {
                 $this->terminal->write("\n" . Style::accent("bia resume {$this->sessionId}") . "\n");
             }
         }
     }
 
     /**
-     * What to start again with when the conversation ended for /reload: its
-     * session, model and effort; null when it ended for good.
-     *
-     * @return array{session: ?string, model: string, effort: string}|null
+     * `/reload`: the config, instructions and MCP servers read again, in this
+     * process, on the same session, model and effort. A config that no longer
+     * loads leaves everything as it was. Background commands go on.
      */
-    public function reloading(): ?array
+    private function reloadConfig(string $_): void
     {
-        return $this->reload ? [
-            'session' => $this->sessionId,
-            'model' => $this->config->modelLabel(),
-            'effort' => (string) $this->config->get('model.reasoning_effort', 'default'),
-        ] : null;
+        if ($this->reload === null) {
+            $this->say('Nothing to reload');
+            return;
+        }
+        try {
+            $built = ($this->reload)($this->config);
+            $agent = ($built['agent'])($built['config']);
+        } catch (\Throwable $error) {
+            $this->region->gap();
+            $this->region->print(Style::error('bia: reload: ' . $error->getMessage()) . "\n");
+            return;
+        }
+        $old = $this->mcp['manager'] ?? null;
+        $this->config = $built['config'];
+        $this->makeAgent = $built['agent'];
+        $this->agent = $agent;
+        $this->system = $built['system'];
+        $this->mcp = $built['mcp'];
+        $this->contextTokens = null;
+        $this->note('Reloaded · ' . $this->modelShown());
+        // The old servers end, all at once, then the new ones start, in the background as at the start.
+        Task::spawn(EventLoop::current(), function () use ($old): void {
+            $old?->close();
+            $this->startMcp();
+        });
     }
 
     private function handle(Key $key): void
