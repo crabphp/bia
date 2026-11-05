@@ -118,7 +118,7 @@ bia fork <session-id>               Start a new session from another's latest po
 bia sessions [--json]               List recent sessions
 bia export <session-id>             Write a session as JSONL
 bia config [--json]                 Show the merged configuration, secrets redacted
-bia doctor                          Check PHP, tools and configuration
+bia doctor                          Check PHP, tools, the model and MCP servers
 bia init                            Create .agents/bia.json in this directory
 bia init --global                   Create ~/.config/bia/config.php with every setting
 ```

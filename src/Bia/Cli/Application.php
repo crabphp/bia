@@ -165,46 +165,13 @@ final class Application
 
     private static function doctor(): int
     {
-        $config = Config::load();
-        $required = [
-            'PHP 8.4+' => version_compare(PHP_VERSION, '8.4.0', '>='),
-            'pdo_sqlite' => extension_loaded('pdo_sqlite'),
-            'mbstring' => extension_loaded('mbstring'),
-        ];
-        foreach ($required as $name => $ok) {
-            fwrite(STDOUT, sprintf("%-18s %s\n", $name, $ok ? 'ok' : 'missing'));
-        }
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'readline', extension_loaded('readline') ? 'ok' : 'fallback'));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'git', self::which('git') ? 'ok' : 'missing (apply_patch, git_diff)'));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'ripgrep', self::which('rg') ? 'ok' : 'missing (search; list_files falls back to PHP)'));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'process groups', function_exists('posix_kill') && self::which('setsid') ? 'ok' : 'off (background children may outlive a command)'));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'permissions', json_encode($config->get('permissions'))));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'providers', implode(', ', array_keys((array) $config->get('providers', [])))));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'model', (string) $config->get('model.name')));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'reasoning effort', (string) $config->get('model.reasoning_effort')));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'model provider', (string) $config->get('model.provider')));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'model base URL', (string) $config->get('model.base_url')));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'API key', self::hasKey($config) ? 'configured' : 'missing'));
-        $fallbacks = [];
-        foreach ((array) $config->get('fallback.models', []) as $name) {
-            try {
-                $fallbacks[] = $name . (self::hasKey($config->withModel((string) $name)) ? '' : ' (no key)');
-            } catch (\InvalidArgumentException) {
-                $fallbacks[] = $name . ' (unknown)';
-            }
-        }
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'fallback', $fallbacks === [] ? 'none' : implode(', ', $fallbacks)));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'database', $config->databasePath()));
-        $instructions = SystemPrompt::files(realpath(getcwd()) ?: getcwd(), $config->configDirectory());
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'instructions', $instructions === [] ? 'none' : implode(', ', $instructions)));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'context window', $config->get('model.context_window') . ' tokens' . ($config->get('compaction.enabled') ? ', compaction on' : ', compaction off')));
-        fwrite(STDOUT, sprintf("%-18s %s\n", 'config sources', $config->sources() === [] ? 'defaults' : implode(', ', $config->sources())) . PHP_EOL);
-        foreach ($required as $ok) {
-            if (!$ok) {
-                return 1;
-            }
-        }
-        return 0;
+        Style::enable(self::isTty(STDOUT) && getenv('NO_COLOR') === false);
+        $http = new Client();
+        $root = realpath((string) getcwd()) ?: (string) getcwd();
+        return (new Doctor(
+            static fn (Config $config): Model => self::model($config, $http),
+            static fn (Config $config): array => self::mcp($config, new ProcessRunner($config->secrets()), $http, $root),
+        ))->run();
     }
 
     /**
@@ -859,21 +826,6 @@ final class Application
             $options[$name] = $value;
         }
         return [$options, $words];
-    }
-
-    private static function which(string $program): bool
-    {
-        foreach (explode(PATH_SEPARATOR, (string) getenv('PATH')) as $directory) {
-            if ($directory !== '' && is_executable($directory . '/' . $program)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static function hasKey(Config $config): bool
-    {
-        return (string) ($config->get('model.api_key') ?? '') !== '';
     }
 
     private static function isTty(mixed $stream): bool
