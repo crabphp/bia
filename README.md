@@ -190,7 +190,7 @@ completes.
 | Command | Effect |
 |---|---|
 | `/model` | Pick a model from every provider you have a key for, fuzzy-filtered as you type |
-| `/model provider/name` | Switch straight to that model; the session goes on |
+| `/model provider/name` | Switch straight to that model; the session goes on. While Bia works, `/model` and `/effort` take effect from the next message |
 | `/effort [level]` | How hard a reasoning model thinks: `none` to `max`, or `default` to leave it to the provider. Kept across `/model`; a model that refuses it is sent none, with a note. A summary for compaction asks for at most `low` |
 | `/resume` | Pick one of this folder's sessions, by its first prompt, and continue it |
 | `/resume <id>` | Continue that session; the start of its id is enough |

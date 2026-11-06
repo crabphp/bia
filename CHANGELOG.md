@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`/model` and `/effort` while Bia works,** no longer refused as busy:
+  the turn running ends on the model it started with, and the choice
+  takes effect from the next message, as its note says.
 - **`bia update`** installs the latest release, for the binary and
   `bia.phar`: downloaded, checked against its `SHA256SUMS` and run once
   before it replaces the old one. A conversation says when one is out,

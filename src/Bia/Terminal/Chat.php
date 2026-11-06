@@ -832,7 +832,8 @@ final class Chat
                 $this->turn !== null ? $this->steering[] = $text : $this->ask($text);
                 return;
             }
-            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp'], true)) {
+            // A model or effort chosen while Bia works is for the next message: the turn running ends on its own.
+            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp', 'model', 'effort'], true)) {
                 $this->say("Busy · Esc to stop");
                 return;
             }
@@ -1038,12 +1039,24 @@ final class Chat
             $this->contextTokens = null;
             // The next conversation starts with it too.
             Config::remember('model.name', $config->modelLabel());
-            $this->region->gap();
-            $this->region->print(Style::dim('· model: ' . $config->modelLabel()) . "\n");
+            $this->note('model: ' . $config->modelLabel() . $this->fromNext());
         } catch (\Throwable $error) {
+            if ($this->turn !== null) {
+                $this->renderer->notice('model: ' . $error->getMessage());
+                return;
+            }
             $this->region->gap();
             $this->region->print(Style::error('bia: ' . $error->getMessage()) . "\n");
         }
+    }
+
+    /**
+     * Said of a model or effort chosen while a turn runs: the turn ends on
+     * the agent it started with.
+     */
+    private function fromNext(): string
+    {
+        return $this->turn !== null ? ' · from the next message' : '';
     }
 
     private function effort(string $effort): void
@@ -1073,9 +1086,9 @@ final class Chat
         $this->config = $config;
         try {
             Config::remember('model.reasoning_effort', $effort);
-            $this->note("effort: {$effort}");
+            $this->note("effort: {$effort}" . $this->fromNext());
         } catch (\RuntimeException $error) {
-            $this->note("effort: {$effort}, for now · " . $error->getMessage());
+            $this->note("effort: {$effort}, for now" . $this->fromNext() . ' · ' . $error->getMessage());
         }
     }
 
