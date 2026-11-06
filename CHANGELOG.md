@@ -1,7 +1,16 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 (2026-11-06)
 
+- **Bia as one file, with PHP inside,** for Linux and macOS on x86_64 and
+  arm64: each release has it, built by static-php-cli with only the
+  extensions Bia calls. 14 MB, it starts in about 17 ms and needs no PHP
+  installed. `bia.phar` is there too, for a PHP 8.4 of your own. A release
+  is a tag; the release workflow tests, builds and publishes it.
+- Reasoning effort goes up to `max`, in `--effort`, `/effort` and the config.
+- `crabphp/framework` is required at `^0.6`, from Packagist, rather than any
+  development checkout.
+- On PHP 8.5, text other than ASCII no longer prints a deprecation notice.
 - `/reload` reads the config, instructions and MCP servers again in place,
   rather than restarting Bia: the screen stays, background commands go on,
   and it no longer needs `pcntl`. A config with an error leaves everything as
