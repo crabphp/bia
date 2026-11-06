@@ -1,0 +1,22 @@
+# The PHP Bia's binary runs on, built by static-php-cli (`spc craft`): only
+# the extensions Bia and the parts of Crab it loads call, found by
+# .build/extensions.php. Change it with them.
+#
+#   ctype, filter, mbstring, pcntl, posix, readline, tokenizer, zlib: called
+#   pdo, pdo_sqlite: sessions
+#   openssl: HTTPS to model and MCP servers
+#   phar: the binary carries Bia as one
+php-version: 8.4
+extensions: ctype,filter,mbstring,openssl,pcntl,pdo,pdo_sqlite,phar,posix,readline,tokenizer,zlib
+sapi: micro
+build-options:
+  # Not UPX: a packed binary unpacks itself on every start, ~150 ms.
+  with-upx-pack: false
+  # The extensions are tested by Bia's own tests against the binary.
+  without-micro-ext-test: true
+  with-hardcoded-ini:
+    - memory_limit=512M
+    - display_errors=stderr
+    - error_reporting=E_ALL & ~E_DEPRECATED
+download-options:
+  prefer-pre-built: true

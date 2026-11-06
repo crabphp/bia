@@ -1,0 +1,169 @@
+name: Release
+
+# Push a tag v1.2.3 (or v1.2.3-beta.1) and this builds Bia as one executable
+# for each platform, with PHP inside, and publishes them as a GitHub release,
+# its notes the CHANGELOG's section for that version.
+# Run it by hand (Actions → Release → Run workflow) to build without releasing.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # static-php-cli, which compiles the PHP inside the binary from .build/craft.yml.
+  SPC_VERSION: '2.8.5'
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: The tag names the version Bia reports, and the CHANGELOG has it
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n "s/.*public const VERSION = '\(.*\)';/\1/p" src/Bia/Cli/Application.php)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME but Application::VERSION is $version"
+            exit 1
+          fi
+          if ! grep -q "^## $version " CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section '## $version (date)'"
+            exit 1
+          fi
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pcntl, posix, pdo_sqlite
+          coverage: none
+      - name: Install ripgrep, which the search tool runs
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Install, with the framework from Packagist
+        run: |
+          # composer.json also points at a local ../framework checkout, which CI has not got.
+          composer config --unset repositories
+          composer update crabphp/framework --no-interaction --no-progress
+          composer show crabphp/framework | grep -E '^versions'
+      - run: composer test
+
+  phar:
+    name: PHAR
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+      - run: .build/build.sh phar
+      - uses: actions/upload-artifact@v7
+        with:
+          name: phar
+          path: dist/bia.phar
+
+  binary:
+    name: ${{ matrix.target }}
+    needs: phar
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x86_64, runner: ubuntu-24.04, spc: spc-linux-x86_64 }
+          - { target: linux-aarch64, runner: ubuntu-24.04-arm, spc: spc-linux-aarch64 }
+          - { target: macos-x86_64, runner: macos-15-intel, spc: spc-macos-x86_64 }
+          - { target: macos-aarch64, runner: macos-15, spc: spc-macos-aarch64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: phar
+          path: dist
+      - name: Download static-php-cli
+        run: |
+          curl -fsSL -o spc.tar.gz "https://github.com/crazywhalecc/static-php-cli/releases/download/${SPC_VERSION}/${{ matrix.spc }}.tar.gz"
+          tar xzf spc.tar.gz
+          chmod +x spc
+          ./spc --version
+      # PHP is compiled once for each craft.yml and spc version, then kept.
+      - uses: actions/cache@v6
+        with:
+          path: .build/spc/buildroot/bin/micro.sfx
+          key: micro-${{ matrix.target }}-${{ env.SPC_VERSION }}-${{ hashFiles('.build/craft.yml') }}
+      - name: Build PHP and join Bia to it
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SPC: ${{ github.workspace }}/spc
+        run: |
+          # The cache keeps micro.sfx alone; the craft.yml beside it says which it is.
+          if [ -f .build/spc/buildroot/bin/micro.sfx ]; then cp .build/craft.yml .build/spc/craft.yml; fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            # In Alpine, against musl, so the binary runs on any Linux. Not a job container:
+            # GitHub's actions do not run in Alpine on arm64.
+            docker run --rm -v "$PWD:$PWD" -w "$PWD" -e GITHUB_TOKEN -e SPC -e HOST="$(id -u):$(id -g)" alpine:3.22 \
+              sh -c 'apk add --no-cache curl > /dev/null && .build/build.sh binary; status=$?; chown -R "$HOST" dist .build/spc; exit $status'
+          else
+            .build/build.sh binary
+          fi
+      - name: Smoke test
+        run: |
+          version=$(sed -n "s/.*public const VERSION = '\(.*\)';/\1/p" src/Bia/Cli/Application.php)
+          test "$(dist/bia --version)" = "$version"
+          dist/bia --help > /dev/null
+          # HTTPS with the system's certificates: any answer from GitHub's API to a model
+          # request means the connection was verified; a certificate failure says "could not be reached".
+          export BIA_HOME="$RUNNER_TEMP/bia" BIA_API_KEY=none BIA_BASE_URL=https://api.github.com BIA_MODEL=check
+          out=$(dist/bia doctor 2>&1 || true)
+          echo "$out"
+          echo "$out" | grep -q 'answered [0-9]'
+          ls -l dist/bia
+      - name: Pack
+        run: |
+          # Named without the version, so releases/latest/download/bia-<target>.tar.gz always works.
+          tar czf "dist/bia-${{ matrix.target }}.tar.gz" -C dist bia
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bia-${{ matrix.target }}
+          path: dist/bia-${{ matrix.target }}.tar.gz
+
+  release:
+    name: Publish
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          sha256sum bia-*.tar.gz bia.phar > SHA256SUMS
+          cat SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # The CHANGELOG's section for this version, without its heading.
+          awk -v head="## $version " 'index($0, head) == 1 { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
+          prerelease=''
+          case "$version" in *-*) prerelease='--prerelease' ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Bia $version" \
+            --notes-file notes.md \
+            $prerelease

@@ -50,9 +50,9 @@ bia "find why the login test fails and fix it"
 
 - Linux or macOS. On Windows, run Bia in
   [WSL](https://learn.microsoft.com/windows/wsl/install).
-- PHP 8.4 with `pdo_sqlite` and `mbstring`; `pcntl` and `posix` are
-  recommended (Ctrl-C handling and process groups), and `readline` gives line
-  editing and history.
+- From source or the PHAR, PHP 8.4 with `pdo_sqlite` and `mbstring`; `pcntl`
+  and `posix` are recommended (Ctrl-C handling and process groups), and
+  `readline` gives line editing and history. The binary has its own PHP.
 - `git` for `apply_patch` and `git_diff`.
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for `search`;
   `list_files` falls back to PHP without it.
@@ -65,8 +65,21 @@ bia "find why the login test fails and fix it"
 
 ## Install
 
-Bia is not on Packagist yet. It installs from a checkout that sits beside the
-framework, which its `composer.json` loads by path.
+Each [release](https://github.com/crabphp/bia/releases/latest) has Bia as
+one file with PHP inside, for `linux-x86_64`, `linux-aarch64`,
+`macos-x86_64` and `macos-aarch64`:
+
+```sh
+curl -fsSL https://github.com/crabphp/bia/releases/latest/download/bia-linux-x86_64.tar.gz | tar xz -C ~/.local/bin
+bia doctor
+```
+
+It also has `bia.phar`, for a PHP 8.4 of your own: `php bia.phar`.
+
+### From source
+
+A checkout sits beside the framework, which its `composer.json` loads by
+path.
 
 ```sh
 mkdir crabphp && cd crabphp
@@ -596,7 +609,13 @@ lifetime: compacting while the cache is still warm costs more than it saves.
 composer test          # PHPUnit
 php bin/bia --help     # must work without an API key or a writable project
 php bin/bia doctor
+.build/build.sh        # dist/bia.phar and dist/bia, PHP inside, as a release builds them
 ```
+
+A release is a tag: set `Application::VERSION`, give the CHANGELOG a
+`## 1.2.3 (date)` section, and push `v1.2.3`. The release workflow tests
+it, builds it for each platform and publishes it with that section as its
+notes; a version with a `-` (`1.2.3-beta.1`) is a pre-release.
 
 Layout:
 

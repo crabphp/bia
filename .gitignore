@@ -1,3 +1,5 @@
 /vendor/
 /.phpunit.result.cache
 /.bia/
+/dist/
+/.build/spc/
