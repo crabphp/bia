@@ -7,7 +7,7 @@
         "php": "^8.4",
         "ext-mbstring": "*",
         "ext-pdo_sqlite": "*",
-        "crabphp/framework": "@dev"
+        "crabphp/framework": "^0.6"
     },
     "require-dev": {
         "phpunit/phpunit": "^13.4"

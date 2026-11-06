@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "6b1df6bffe3eabb1418b3d148530eb63",
+    "content-hash": "31500fa738f23979edccd23c011b3178",
     "packages": [
         {
             "name": "crabphp/framework",
@@ -12,7 +12,7 @@
             "dist": {
                 "type": "path",
                 "url": "../framework",
-                "reference": "01e643f592db3250e505c6f7fa796d9a98bbaabf"
+                "reference": "ce7e6fa7c6ee4d13fef7204ffc706c292454efdd"
             },
             "require": {
                 "ext-mbstring": "*",
@@ -45,6 +45,11 @@
                 "bin/crab"
             ],
             "type": "library",
+            "extra": {
+                "branch-alias": {
+                    "dev-main": "0.6.x-dev"
+                }
+            },
             "autoload": {
                 "psr-4": {
                     "Crab\\": "src/"
@@ -2571,9 +2576,7 @@
     ],
     "aliases": [],
     "minimum-stability": "dev",
-    "stability-flags": {
-        "crabphp/framework": 20
-    },
+    "stability-flags": {},
     "prefer-stable": true,
     "prefer-lowest": false,
     "platform": {
