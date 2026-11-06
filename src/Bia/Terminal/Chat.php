@@ -135,6 +135,7 @@ final class Chat
      * @param \Closure(Config): Agent $makeAgent Builds the agent for a model, as /model switches.
      * @param (\Closure(Config): array{config: Config, system: string, mcp: array<string, mixed>, agent: \Closure(Config): Agent})|null $reload
      *        Reads the config and instructions again, on the model and effort of the config given, as /reload asks.
+     * @param (\Closure(Cancellation): ?string)|null $update Finds whether a newer Bia is out, in the background.
      */
     public function __construct(
         private readonly Terminal $terminal,
@@ -159,6 +160,7 @@ final class Chat
         private readonly ?Inspection $inspection = null,
         private readonly ?Subagents $subagents = null,
         private readonly ?\Closure $reload = null,
+        private readonly ?\Closure $update = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->away = new RecapSchedule(microtime(true));
@@ -340,6 +342,7 @@ final class Chat
         $this->report('idle');
         // After the first screen: no server keeps Bia from being ready.
         Task::spawn(EventLoop::current(), $this->startMcp(...));
+        $checking = $this->update !== null ? Task::spawn(EventLoop::current(), $this->checkUpdate(...)) : null;
         try {
             while ($this->running) {
                 $key = $this->terminal->key($cancellation);
@@ -352,6 +355,7 @@ final class Chat
                 }
             }
         } finally {
+            $checking?->cancel();
             $this->turn?->cancel();
             $this->confirming?->resume(false);
             $this->stopBlinking();
@@ -1268,6 +1272,23 @@ final class Chat
         $settle();
         $this->lineStart();
         $this->seedRecap($id, $entries);
+    }
+
+    /**
+     * Says a newer Bia is out, once it is known; nothing when it is not,
+     * or when it could not be found.
+     */
+    private function checkUpdate(Cancellation $cancellation): void
+    {
+        try {
+            $newer = ($this->update)($cancellation);
+        } catch (\Throwable) {
+            return;
+        }
+        if ($newer !== null && $this->running) {
+            $this->note("Bia {$newer} is out · bia update");
+            $this->draw();
+        }
     }
 
     /**

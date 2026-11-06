@@ -76,6 +76,13 @@ bia doctor
 
 It also has `bia.phar`, for a PHP 8.4 of your own: `php bia.phar`.
 
+`bia update` replaces either with the latest release's, checked against its
+`SHA256SUMS` and run once before it takes the old one's place. A
+conversation says when one is out, `· Bia 0.2.0 is out · bia update`: it asks
+GitHub in the background once its first screen is drawn, at most once a
+day, and never makes Bia wait. `update.check => false` turns that off; Bia
+run from source never asks.
+
 ### From source
 
 A checkout sits beside the framework, which its `composer.json` loads by
@@ -137,6 +144,7 @@ bia config [--json]                 Show the merged configuration, secrets redac
 bia doctor                          Check PHP, tools, the model and MCP servers
 bia init                            Create .agents/bia.json in this directory
 bia init --global                   Create ~/.bia/config.php with every setting
+bia update                          Install the latest release, for the binary and bia.phar
 ```
 
 | Option | Effect |

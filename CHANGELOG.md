@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **`bia update`** installs the latest release, for the binary and
+  `bia.phar`: downloaded, checked against its `SHA256SUMS` and run once
+  before it replaces the old one. A conversation says when one is out,
+  asking GitHub in the background at most once a day, never making Bia
+  wait; `update.check => false` turns that off. A Bia whose file another
+  replaced as it ran stops with a message to start it again, rather than
+  fail in a confusing way.
+
 ## 0.1.0 (2026-11-06)
 
 - **Bia as one file, with PHP inside,** for Linux and macOS on x86_64 and

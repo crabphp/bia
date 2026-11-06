@@ -288,6 +288,10 @@ final readonly class Config
                 // How answers appear: normal, as they arrive; smooth, a steady flow; power, dropping into place.
                 'render' => 'normal',
             ],
+            'update' => [
+                // A release's Bia says when a newer one is out, asking GitHub at most once a day.
+                'check' => true,
+            ],
             'storage' => [
                 'path' => $home . '/bia.sqlite',
             ],
@@ -550,6 +554,21 @@ final readonly class Config
 
                 /*
                 |--------------------------------------------------------------------------
+                | Updates
+                |--------------------------------------------------------------------------
+                |
+                | A conversation in Bia's binary or bia.phar asks GitHub, at most once a
+                | day and in the background, whether a newer Bia is out, and says so;
+                | bia update installs it. Bia run from source never asks.
+                |
+                */
+
+                // 'update' => [
+                //     'check' => true,
+                // ],
+
+                /*
+                |--------------------------------------------------------------------------
                 | Storage & Cache
                 |--------------------------------------------------------------------------
                 |
@@ -786,6 +805,10 @@ final readonly class Config
             if (isset($compaction[$key]) && (!is_int($compaction[$key]) || $compaction[$key] < 1)) {
                 throw new \InvalidArgumentException("compaction.{$key} must be a positive whole number, or null.");
             }
+        }
+        $update = $values['update'] ?? [];
+        if (!is_array($update) || (isset($update['check']) && !is_bool($update['check']))) {
+            throw new \InvalidArgumentException('update.check must be true or false.');
         }
         $recap = $values['recap'] ?? [];
         if (!is_array($recap) || (isset($recap['auto']) && !is_bool($recap['auto']))) {

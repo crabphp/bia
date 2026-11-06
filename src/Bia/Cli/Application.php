@@ -55,7 +55,13 @@ use Bia\Tui\Region;
 use Bia\Tui\Screen;
 use Bia\Tui\Style;
 use Bia\Tui\Terminal;
+use Bia\Update\Check;
+use Bia\Update\Installed;
+use Bia\Update\Releases;
+use Crab\Engine\Async\Cancellation;
 use Crab\Engine\Async\CancelledException;
+use Crab\Engine\EventLoop;
+use Crab\Engine\Network\DnsResolver;
 use Crab\HttpClient\Client;
 
 /**
@@ -71,6 +77,7 @@ final class Application
     public static function run(array $arguments): int
     {
         try {
+            Installed::guard();
             [$options, $words] = self::options($arguments);
             if ($options['version'] ?? false) {
                 fwrite(STDOUT, self::VERSION . PHP_EOL);
@@ -83,6 +90,9 @@ final class Application
             $command = $words[0] ?? '';
             if ($command === 'doctor') {
                 return self::doctor();
+            }
+            if ($command === 'update') {
+                return self::update();
             }
             if ($command === 'config') {
                 return self::config($options);
@@ -134,6 +144,7 @@ final class Application
               bia fork <session-id>
               bia export <session-id>
               bia init [--global]
+              bia update
 
             Options:
               --model NAME       Select the model
@@ -173,6 +184,71 @@ final class Application
             static fn (Config $config): Model => self::model($config, $http),
             static fn (Config $config): array => self::mcp($config, new ProcessRunner($config->secrets()), $http, $root),
         ))->run();
+    }
+
+    /**
+     * `bia update`: a release's Bia, the binary or bia.phar, replaced by the
+     * latest release's, downloaded, checked against its SHA256SUMS and run
+     * once before it takes this one's place.
+     */
+    private static function update(): int
+    {
+        $file = Installed::file() ?? throw new \RuntimeException('This Bia runs from source: update it with git pull and composer install.');
+        $asset = Installed::asset() ?? throw new \RuntimeException('No Bia binary is built for ' . PHP_OS_FAMILY . ' ' . php_uname('m') . '; bia.phar runs on a PHP 8.4 of your own: ' . Releases::REPOSITORY . '/releases');
+        if (!is_writable(dirname($file))) {
+            throw new \RuntimeException('Bia cannot write in ' . dirname($file) . ': run sudo bia update, or install Bia where you can write.');
+        }
+        $releases = new Releases(new Client(redirects: 0), new ProcessRunner(), self::VERSION);
+        return Loop::run(static function (Cancellation $cancellation) use ($releases, $file, $asset): int {
+            try {
+                $latest = $releases->latest($cancellation);
+            } catch (CancelledException $cancelled) {
+                throw $cancelled;
+            } catch (\Throwable $error) {
+                throw new \RuntimeException('GitHub could not be asked for the latest Bia: ' . preg_replace('#^HEAD \S+ failed:\s*#', '', $error->getMessage()));
+            }
+            if (!Releases::newer($latest, self::VERSION)) {
+                fwrite(STDOUT, 'Bia ' . self::VERSION . ' is up to date' . PHP_EOL);
+                return 0;
+            }
+            fwrite(STDOUT, 'Updating Bia ' . self::VERSION . " to {$latest}…" . PHP_EOL);
+            $new = $releases->download($latest, $asset, $file, Installed::binary() ? null : PHP_BINARY, $cancellation);
+            if (!@rename($new, $file)) {
+                @unlink($new);
+                throw new \RuntimeException("Bia could not replace {$file}.");
+            }
+            // From here this process loads nothing more from its file, which is the new Bia's now.
+            fwrite(STDOUT, "Bia {$latest} is installed: {$file}" . PHP_EOL . 'What changed: ' . Releases::REPOSITORY . "/releases/tag/v{$latest}" . PHP_EOL);
+            return 0;
+        });
+    }
+
+    /**
+     * What a conversation runs in the background, once its first screen is
+     * drawn, to say a newer Bia is out: for a release's Bia only, as a
+     * checkout is updated with git, and unless update.check is off. Its
+     * classes load when it runs, not at the start.
+     *
+     * @return (\Closure(Cancellation): ?string)|null
+     */
+    private static function updates(Config $config): ?\Closure
+    {
+        if ($config->get('update.check') === false || Installed::file() === null || Installed::asset() === null) {
+            return null;
+        }
+        $file = $config->cachePath() . '/update.json';
+        return static function (Cancellation $cancellation) use ($file): ?string {
+            $check = new Check(
+                new Releases(new Client(redirects: 0), new ProcessRunner(), self::VERSION),
+                $file,
+                self::VERSION,
+                static function (?Cancellation $cancellation): void {
+                    // Found over UDP only: the system's resolver, the fallback, would hold the whole conversation.
+                    (new DnsResolver(fallback: false))->resolve(EventLoop::current(), Releases::HOST, $cancellation);
+                },
+            );
+            return $check->newer($cancellation);
+        };
     }
 
     /**
@@ -453,6 +529,7 @@ final class Application
                 images: new \Bia\Terminal\Images($runner, dirname($config->databasePath()) . '/images', $workspace->root()),
                 inspection: $inspection,
                 subagents: $subagents,
+                update: self::updates($config),
                 reload: static function (Config $current) use ($overrides, $setup): array {
                     // Read again as at the start, on the model and effort chosen since.
                     $config = Config::load(overrides: $overrides);

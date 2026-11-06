@@ -151,6 +151,26 @@ identity, tool guidance, the environment, and the `AGENTS.md` / `CLAUDE.md`
 files from the user's config directory and from the repository root down to
 the working directory, capped at 32 KB.
 
+## Updates
+
+`Bia\Update` is for a release's Bia, the binary or `bia.phar`; one run
+from source has no file of its own to replace and never asks. `Releases`
+finds the latest from where GitHub's `releases/latest` redirects, one
+`HEAD` with no body and no API limit. `bia update` downloads the file for
+this system, checks it against the release's `SHA256SUMS`, runs it once
+to see it says the new version, and renames it over the old one.
+
+A conversation's `Check` runs as a task after the first screen, like the
+MCP servers, and is cancelled when Bia ends; nothing waits on it. Its
+answer is kept a day in `cache/update.json`. It finds GitHub's address
+over UDP only: the system's resolver, Crab's fallback, would hold the
+process.
+
+A Bia loads its code from its own file as it first needs it, by path.
+`Installed::guard()` sees that file replaced under a running Bia, by
+another's `bia update`, and stops it with a message rather than let it
+load code from the new file at the old one's offsets.
+
 ## Speed rules
 
 - Keep CLI startup independent of database and model initialization.
