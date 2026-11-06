@@ -33,7 +33,7 @@ final readonly class Config
     public const REMEMBERED_KEYS = ['model.name', 'model.reasoning_effort', 'tui.render'];
 
     /** How hard a reasoning model thinks; default sends none and leaves it to the provider. */
-    public const EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+    public const EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
     /**
      * Settings a project's `.agents/bia.json` may set, as dotted prefixes.
@@ -234,7 +234,7 @@ final readonly class Config
                 'idle_timeout' => 120.0,
                 // Tokens the model can take in one request; compaction keeps below it.
                 'context_window' => 128_000,
-                // How hard a reasoning model thinks: none, minimal, low, medium, high, xhigh; default sends none.
+                // How hard a reasoning model thinks: none, minimal, low, medium, high, xhigh, max; default sends none.
                 'reasoning_effort' => 'default',
             ],
             'fallback' => [
@@ -379,7 +379,7 @@ final readonly class Config
                 | conversation below it.
                 |
                 | reasoning_effort is how hard a reasoning model thinks: none, minimal,
-                | low, medium, high or xhigh; default leaves it to the provider.
+                | low, medium, high, xhigh or max; default leaves it to the provider.
                 | /effort switches it.
                 |
                 */

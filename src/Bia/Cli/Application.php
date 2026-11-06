@@ -139,7 +139,7 @@ final class Application
               --model NAME       Select the model
               --base-url URL     Select an OpenAI-compatible API base URL
               --api-key KEY      Supply the API key for this invocation
-              --effort LEVEL     Reasoning effort: none, minimal, low, medium, high, xhigh
+              --effort LEVEL     Reasoning effort: none, minimal, low, medium, high, xhigh, max
               --resume ID        Continue an existing session
               --yes              Approve tools whose permission is "ask"
               --json             Emit JSONL events

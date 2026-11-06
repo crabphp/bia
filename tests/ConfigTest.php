@@ -98,6 +98,7 @@ final class ConfigTest extends TestCase
         self::assertSame('high', $high->effort());
         self::assertSame('high', $high->withModel('anthropic/claude-sonnet-4-5')->effort());
         self::assertSame('low', Config::load($this->directory(), ['model' => ['reasoning_effort' => 'low']])->effort());
+        self::assertSame('max', $config->withEffort('max')->effort());
 
         $this->expectException(\InvalidArgumentException::class);
         $this->expectExceptionMessage('model.reasoning_effort');
