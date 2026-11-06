@@ -199,7 +199,7 @@ final class Style
             $count = 1;
             if ($token === "\t") {
                 [$token, $count] = [' ', 8 - $used % 8];
-            } elseif (ord($token) < 0x20 || $token === "\x7f") {
+            } elseif (ord($token[0]) < 0x20 || $token === "\x7f") {
                 continue;
             }
             $space = $token === ' ';
