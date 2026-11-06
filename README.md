@@ -1,7 +1,7 @@
 # Bia
 
 ```text
-▙▄▄▄▄▄▟   bia 0.1.0 · provider/model
+▙▄▄▄▄▄▟   bia 0.1.1 · provider/model
 █▙███▟█   ~/code/my-project
 ```
 
@@ -661,7 +661,7 @@ provider.
 
 ## Status and limits
 
-Bia is at 0.1.0. Not yet built:
+Bia is at 0.1.1. Not yet built:
 - **Only the Chat Completions API.** Native Anthropic Messages, Gemini and
   OpenAI Responses adapters are planned.
 - **No native Windows.** Bia runs in WSL there.

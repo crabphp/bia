@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 (2026-11-06)
 
 - **`/model` and `/effort` while Bia works,** no longer refused as busy:
   the turn running ends on the model it started with, and the choice
@@ -11,7 +11,8 @@
   asking GitHub in the background at most once a day, never making Bia
   wait; `update.check => false` turns that off. A Bia whose file another
   replaced as it ran stops with a message to start it again, rather than
-  fail in a confusing way.
+  fail in a confusing way. 0.1.0 has no `bia update`: install it once more
+  with the README's line, and from then on `bia update` does.
 
 ## 0.1.0 (2026-11-06)
 
