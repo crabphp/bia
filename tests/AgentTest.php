@@ -121,20 +121,61 @@ final class AgentTest extends TestCase
         }
     }
 
-    public function testAnAnswerCutOffPartwayIsNotTriedAgain(): void
+    public function testAnAnswerCutOffPartwayStartsOver(): void
     {
         [$store, $session] = $this->session();
         $model = new FlakyModel([[new ModelException('stream broke', 500), 'half an ans']]);
         $renderer = new FakeRenderer();
         $agent = new Agent($model, 'fake', new Registry(), $store, $renderer, '/workspace', retryDelays: [0.0]);
 
-        $this->expectException(ModelException::class);
+        self::assertSame('done', $agent->run($session, 'hi')->text);
+        self::assertSame(2, $model->calls, 'A stream failing midway is tried again, not given up on.');
+        self::assertSame(['500 · retry 1/1 in 0s · the answer starts over'], $renderer->notices, 'The notice closes the cut text before the new answer.');
+        self::assertSame('half an ansdone', $renderer->text);
+        $answers = array_values(array_filter(self::messages($store, $session), static fn (Message $m): bool => $m->role === 'assistant'));
+        self::assertCount(1, $answers, 'The cut answer is never stored.');
+        self::assertSame('done', $answers[0]->text);
+    }
+
+    public function testATurnWithWorkBehindItWaitsLonger(): void
+    {
+        [$store, $session] = $this->session();
+        $model = new ToolThenFlakyModel(array_fill(0, 3, new ModelException('down', 502)));
+        $registry = (new Registry())->add(new EchoTool());
+        $agent = new Agent($model, 'fake', $registry, $store, new FakeRenderer(), '/workspace', retryDelays: [0.001], patience: 0.01);
+
+        self::assertSame('done', $agent->run($session, 'run the tool')->text);
+        self::assertSame(5, $model->calls, 'The tool results behind the request are worth more tries than one wait.');
+
+        [$store, $session] = $this->session();
+        $fresh = new FlakyModel(array_fill(0, 2, [new ModelException('down', 502), '']));
+        $agent = new Agent($fresh, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', retryDelays: [0.001], patience: 0.01);
         try {
             $agent->run($session, 'hi');
-        } finally {
-            self::assertSame(1, $model->calls, 'Its text was already shown; trying again would show it twice.');
-            self::assertSame('half an ans', $renderer->text);
+            self::fail('A fresh prompt is not waited on past its delays.');
+        } catch (ModelException) {
+            self::assertSame(2, $fresh->calls, 'The patience is for work already done, not a prompt just asked.');
         }
+    }
+
+    public function testAnUnansweredTurnIsPickedBackUp(): void
+    {
+        [$store, $session] = $this->session();
+        $call = self::call('call-1', 'echo', ['value' => 'hello']);
+        $store->append($session, Message::user('run the tool'));
+        $store->append($session, new Message('assistant', '', [$call]));
+        $store->append($session, Message::toolResult($call, 'echoed hello', true));
+
+        $model = new ScriptedModel([]);
+        $agent = new Agent($model, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace');
+
+        self::assertSame('done', $agent->resume($session)->text);
+        self::assertSame(1, $model->calls);
+        self::assertSame(
+            ['user', 'assistant', 'tool', 'assistant'],
+            array_map(static fn (Message $m): string => $m->role, self::messages($store, $session)),
+            'Nothing joins the conversation but the answer it waited for.',
+        );
     }
 
     public function testToolTurnIsCheckpointedBeforeTheFinalTurn(): void
@@ -527,6 +568,35 @@ final class FlakyModel implements Model
                 $emit(ModelEvent::text($failure[1]));
             }
             throw $failure[0];
+        }
+        $emit(ModelEvent::text('done'));
+        return new ModelResult('done');
+    }
+}
+
+/**
+ * Calls one tool first, then fails each given failure before answering "done".
+ */
+final class ToolThenFlakyModel implements Model
+{
+    public int $calls = 0;
+
+    /**
+     * @param list<\Throwable> $failures
+     */
+    public function __construct(private array $failures) {}
+
+    public function stream(ModelRequest $request, callable $emit, ?Cancellation $cancellation = null): ModelResult
+    {
+        $this->calls++;
+        if ($this->calls === 1) {
+            $call = new ToolCall('call-1', 'echo', ['value' => 'hello']);
+            $emit(ModelEvent::toolCall($call->toArray()));
+            return new ModelResult('', 'tool_calls', toolCalls: [$call]);
+        }
+        $failure = array_shift($this->failures);
+        if ($failure !== null) {
+            throw $failure;
         }
         $emit(ModelEvent::text('done'));
         return new ModelResult('done');

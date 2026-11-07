@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Bia\Tests;
 
+use Bia\Contracts\Image;
 use Bia\Contracts\ToolContext;
 use Bia\Mcp\AuthStore;
 use Bia\Mcp\Manager;
@@ -89,6 +90,67 @@ final class McpTest extends TestCase
         self::assertSame([], $manager->tools(), 'Closed, its tools are gone.');
         usleep(100_000);
         self::assertSame('', trim((string) shell_exec('pgrep -f ' . escapeshellarg('Fixtures/mcp-server.ph[p]'))), 'No server outlives it, even one busy with a slow call.');
+    }
+
+    public function testAttachedImagesAreInjectedIntoAnMcpUploadArgument(): void
+    {
+        $manager = new Manager(new ProcessRunner(), new Client(), sys_get_temp_dir(), 'test', timeout: 2.0, startup: 5.0);
+        $manager->add(new Server('fixture', 'stdio', PHP_BINARY, [__DIR__ . '/Fixtures/mcp-server.php'], ['MCP_FIXTURE_MEDIA' => '1']));
+        $manager->start();
+        $manager->ready(5.0);
+
+        $file = sys_get_temp_dir() . '/bia-mcp-image-' . bin2hex(random_bytes(4)) . '.png';
+        $bytes = "\x89PNG\r\n\x1a\n\x00";
+        file_put_contents($file, $bytes);
+        try {
+            $context = new ToolContext(sys_get_temp_dir(), 'session', images: [new Image($file, 'image/png')]);
+            $registry = (new Registry())->from($manager->tools(...));
+            $result = $registry->execute('mcp__fixture__media', [], $context);
+
+            self::assertTrue($result->ok, $result->text);
+            self::assertSame('media: image/png Attached image. ' . strlen(base64_encode($bytes)), $result->text);
+            self::assertStringContainsString('supplied automatically', $registry->definitions()[1]->description);
+        } finally {
+            @unlink($file);
+            $manager->close();
+        }
+    }
+
+    public function testMcpArgumentsKeepOptionalFieldsFromTheModel(): void
+    {
+        $manager = new Manager(new ProcessRunner(), new Client(), sys_get_temp_dir(), 'test', timeout: 2.0, startup: 5.0);
+        $manager->add(new Server('fixture', 'stdio', PHP_BINARY, [__DIR__ . '/Fixtures/mcp-server.php'], ['MCP_FIXTURE_MEDIA' => '1']));
+        $manager->start();
+        $manager->ready(5.0);
+
+        $file = sys_get_temp_dir() . '/bia-mcp-image-' . bin2hex(random_bytes(4)) . '.png';
+        $bytes = "\x89PNG\r\n\x1a\n\x00";
+        file_put_contents($file, $bytes);
+        try {
+            $context = new ToolContext(sys_get_temp_dir(), 'session', images: [new Image($file, 'image/png')]);
+            $registry = (new Registry())->from($manager->tools(...));
+            $result = $registry->execute('mcp__fixture__media', [
+                'images' => [],
+                'video' => ['data' => '', 'mimeType' => 'video/mp4', 'alt' => ''],
+            ], $context);
+
+            self::assertTrue($result->ok, $result->text);
+            self::assertSame('video-present', $result->text, 'Bia passes an external MCP tool call through without server-specific rewriting.');
+        } finally {
+            @unlink($file);
+            $manager->close();
+        }
+    }
+
+    public function testMcpArgumentsWithUnknownFieldsAreRejectedBeforeTheServerCall(): void
+    {
+        $manager = $this->fixture();
+        $registry = (new Registry())->from($manager->tools(...));
+        $result = $registry->execute('mcp__fixture__echo', ['text' => 'hi', 'reason' => 'wrong'], new ToolContext(sys_get_temp_dir(), 'session'));
+
+        self::assertFalse($result->ok);
+        self::assertStringContainsString('unknown field: reason', $result->text);
+        $manager->close();
     }
 
     public function testAServersNewToolsAreOfferedAsItSaysTheyChanged(): void

@@ -68,9 +68,8 @@ the rule here first, with the user's agreement.
   line separates two blocks: start each with `Surface::gap()`, which never
   makes a second one and none at the top.
 - Nothing inside a block is blank, except the answer's own paragraph breaks;
-  an answer's leading blank lines are dropped. The user's message has one
-  shaded row of padding above and below it, in colour only (with `NO_COLOR`
-  none: it would only be blank).
+  an answer's leading blank lines are dropped. The user's message has no
+  padding: one shaded row for each of its lines.
 
 **Words**
 - A line starts with a capital, unless it starts with a name: a tool, a

@@ -57,6 +57,16 @@ final class ImageTest extends TestCase
         self::assertSame('plain', OpenAiCompatibleModel::messages([Message::user('plain')])[0]['content'], 'Without images, text as before.');
     }
 
+    public function testAnImageCanProvideRawBase64ForAnUploadTool(): void
+    {
+        $file = $this->root . '/a.png';
+        file_put_contents($file, self::PNG);
+        $image = new Image($file, 'image/png');
+
+        self::assertSame(base64_encode(self::PNG), $image->base64());
+        self::assertSame(self::PNG, $image->bytes());
+    }
+
     public function testAPastedPathToAnImageIsTheImage(): void
     {
         $images = new Images(new ProcessRunner(), $this->root . '/kept', $this->root);

@@ -52,7 +52,8 @@ final class Style
      */
     public static function bar(string $text): string
     {
-        return self::color() ? "\e[48;5;236m{$text}\e[K\e[0m" : $text;
+        // A style inside ends with a reset; the shade is set again after it.
+        return self::color() ? "\e[48;5;236m" . str_replace("\e[0m", "\e[0m\e[48;5;236m", $text) . "\e[K\e[0m" : $text;
     }
 
     public static function bold(string $text): string

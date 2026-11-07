@@ -41,8 +41,27 @@ final readonly class Image
      */
     public function dataUrl(): ?string
     {
+        $base64 = $this->base64();
+        return $base64 === null ? null : 'data:' . $this->mime . ';base64,' . $base64;
+    }
+
+    /**
+     * The image bytes as base64, for a tool that accepts an upload; null when
+     * the kept copy is gone or cannot be read.
+     */
+    public function base64(): ?string
+    {
+        $bytes = $this->bytes();
+        return $bytes === null ? null : base64_encode($bytes);
+    }
+
+    /**
+     * The image's bytes; null when its kept copy is gone or cannot be read.
+     */
+    public function bytes(): ?string
+    {
         $bytes = is_file($this->path) ? file_get_contents($this->path) : false;
-        return $bytes === false ? null : 'data:' . $this->mime . ';base64,' . base64_encode($bytes);
+        return $bytes === false ? null : $bytes;
     }
 
     /**

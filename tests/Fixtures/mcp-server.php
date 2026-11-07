@@ -32,6 +32,43 @@ while (($line = fgets(STDIN)) !== false) {
             break;
         case 'tools/list':
             $second = ($params['cursor'] ?? null) === 'page-2';
+            $first = [
+                ['name' => 'echo', 'description' => 'Says it back.', 'inputSchema' => ['type' => 'object', 'properties' => ['text' => ['type' => 'string']], 'required' => ['text'], 'additionalProperties' => false]],
+            ];
+            if (getenv('MCP_FIXTURE_MEDIA') === '1') {
+                $first[] = ['name' => 'media', 'description' => 'Receives an image upload.', 'inputSchema' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'images' => [
+                            'type' => 'array',
+                            'minItems' => 1,
+                            'maxItems' => 4,
+                            'items' => [
+                                'type' => 'object',
+                                'properties' => [
+                                    'data' => ['type' => 'string', 'maxLength' => 100],
+                                    'mimeType' => ['type' => 'string', 'enum' => ['image/png', 'image/jpeg', 'image/webp']],
+                                    'alt' => ['type' => 'string'],
+                                ],
+                                'required' => ['data', 'alt'],
+                                'additionalProperties' => false,
+                            ],
+                        ],
+                        'video' => [
+                            'type' => 'object',
+                            'properties' => [
+                                'data' => ['type' => 'string'],
+                                'mimeType' => ['type' => 'string'],
+                                'alt' => ['type' => 'string'],
+                            ],
+                            'required' => ['data'],
+                            'additionalProperties' => false,
+                        ],
+                    ],
+                    'required' => ['images'],
+                    'additionalProperties' => false,
+                ]];
+            }
             $reply(['jsonrpc' => '2.0', 'id' => $id, 'result' => $second
                 ? ['tools' => [
                     ['name' => 'fail', 'description' => 'Always fails.', 'inputSchema' => ['type' => 'object']],
@@ -40,9 +77,7 @@ while (($line = fgets(STDIN)) !== false) {
                     ['name' => 'crash', 'description' => 'Brings the server down.', 'inputSchema' => ['type' => 'object']],
                     ...($grown ? [['name' => 'extra', 'description' => 'Added.', 'inputSchema' => ['type' => 'object']]] : []),
                 ]]
-                : ['tools' => [
-                    ['name' => 'echo', 'description' => 'Says it back.', 'inputSchema' => ['type' => 'object', 'properties' => ['text' => ['type' => 'string']], 'required' => ['text']]],
-                ], 'nextCursor' => 'page-2']]);
+                : ['tools' => $first, 'nextCursor' => 'page-2']]);
             break;
         case 'tools/call':
             $name = $params['name'] ?? '';
@@ -51,6 +86,16 @@ while (($line = fgets(STDIN)) !== false) {
                     ['type' => 'text', 'text' => 'echo: ' . ($params['arguments']['text'] ?? '')],
                     ['type' => 'image', 'data' => 'AAAA', 'mimeType' => 'image/png'],
                 ]]]);
+            } elseif ($name === 'media') {
+                if (array_key_exists('video', $params['arguments'] ?? [])) {
+                    $reply(['jsonrpc' => '2.0', 'id' => $id, 'result' => ['content' => [['type' => 'text', 'text' => 'video-present']]]]);
+                    break;
+                }
+                $image = $params['arguments']['images'][0] ?? [];
+                $reply(['jsonrpc' => '2.0', 'id' => $id, 'result' => ['content' => [[
+                    'type' => 'text',
+                    'text' => 'media: ' . ($image['mimeType'] ?? '') . ' ' . ($image['alt'] ?? '') . ' ' . strlen((string) ($image['data'] ?? '')),
+                ]]]]);
             } elseif ($name === 'fail') {
                 $reply(['jsonrpc' => '2.0', 'id' => $id, 'result' => ['content' => [['type' => 'text', 'text' => 'it went wrong']], 'isError' => true]]);
             } elseif ($name === 'grow') {

@@ -303,6 +303,26 @@ final class ConfigTest extends TestCase
         }
     }
 
+    public function testAProviderCanSelectTheResponsesWireApi(): void
+    {
+        $this->global("<?php return ['providers' => ['tda' => ['base_url' => 'http://tda/v1', 'api_key' => 'tda-key', 'wire_api' => 'responses']], 'model' => ['name' => 'tda/astra']];");
+
+        $config = Config::load($this->directory());
+        self::assertSame('responses', $config->get('model.wire_api'));
+        self::assertSame('responses', $config->get('model.endpoint'));
+        self::assertSame('responses', $config->providers()['tda']['endpoint']);
+        self::assertSame('responses', $config->providers()['tda']['wire_api']);
+    }
+
+    public function testAnUnknownWireApiIsRejected(): void
+    {
+        $this->global("<?php return ['model' => ['wire_api' => 'legacy']];");
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('model.wire_api');
+        Config::load($this->directory());
+    }
+
     public function testAnthropicOpenAiAndCliProxyApiAreBuiltIn(): void
     {
         putenv('BIA_HOME=' . $this->directory() . '/bia');

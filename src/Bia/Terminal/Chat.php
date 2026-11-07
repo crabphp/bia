@@ -808,6 +808,10 @@ final class Chat
         $text = trim($text);
         $this->closeMenu();
         if ($text === '') {
+            // Enter on nothing picks an unanswered turn back up, as after a failed request.
+            if ($this->turn === null && $this->viewing === null) {
+                $this->pickUp();
+            }
             return;
         }
         // The address a login was sent back to, pasted: it carries a code, so it goes
@@ -880,6 +884,43 @@ final class Chat
     }
 
     /**
+     * Whether the conversation awaits the model: it ends on tool results
+     * or a user message that never got its answer, as after a failed
+     * request or a stopped turn.
+     */
+    private function unanswered(): bool
+    {
+        if ($this->sessionId === null || $this->agent === null) {
+            return false;
+        }
+        foreach (array_reverse($this->sessions->path($this->sessionId)) as $entry) {
+            $message = $entry->message();
+            if ($message !== null) {
+                return $message->role === 'tool' || $message->role === 'user';
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Picks an unanswered turn back up: nothing joins the conversation,
+     * the model is just asked again where it left off.
+     */
+    private function pickUp(): void
+    {
+        $sessionId = $this->sessionId;
+        if ($sessionId === null || !$this->unanswered()) {
+            return;
+        }
+        $this->used = true;
+        $this->renderer->collapse();
+        $this->work('Thinking', function (Cancellation $cancellation) use ($sessionId): void {
+            $this->agent?->resume($sessionId, $this->system, $cancellation, $this->steer(...));
+            $this->away->turnDone();
+        });
+    }
+
+    /**
      * What the user wrote while Bia worked, handed to the agent at a step:
      * shown where it joins the conversation.
      *
@@ -935,6 +976,9 @@ final class Chat
                 $this->renderer->catchUp();
                 $this->region->gap();
                 $this->region->print(Style::error('bia: ' . $error->getMessage()) . "\n");
+                if ($this->unanswered()) {
+                    $this->region->print(Style::dim('· Enter picks the turn back up') . "\n");
+                }
                 $state = 'error';
             } finally {
                 $this->turn = null;
@@ -987,10 +1031,6 @@ final class Chat
         $shown = Style::bar('› ' . array_shift($lines));
         foreach ($lines as $line) {
             $shown .= "\n" . Style::bar('  ' . $line);
-        }
-        if (Style::color()) {
-            // A shaded row above and below, to give the words room; without colour they would only be blank.
-            $shown = Style::bar('') . "\n" . $shown . "\n" . Style::bar('');
         }
         $surface->print($shown . "\n");
         $surface->gap();

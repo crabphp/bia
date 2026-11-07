@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- A stream that fails midway is tried again: any answer text already shown
+  is closed under a notice and the answer starts over. Before, one mid-stream
+  failure ended the turn.
+- A turn with tool results behind it keeps trying a failing provider for up
+  to five minutes at the last delay, rather than losing that work after
+  31 seconds of tries.
+- A turn whose request still failed is picked back up with Enter on an empty
+  input: the model is asked again where it left off, nothing joins the
+  conversation.
+- The user's message is one shaded row a line, with no padding.
+- MCP upload tools receive attached images directly, and invalid MCP arguments
+  are reported before a server request.
+- Responses function tools explicitly preserve optional MCP fields.
+- Providers may select the OpenAI Responses wire format with `wire_api`;
+  tdaproxy is configured that way in the user's global config.
+
 ## 0.1.1 (2026-11-06)
 
 - **`/model` and `/effort` while Bia works,** no longer refused as busy:

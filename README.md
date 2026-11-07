@@ -16,9 +16,9 @@ bia "find why the login test fails and fix it"
 
 ## Features
 
-- **Streaming replies** over Crab's HTTP client, from any OpenAI-compatible
-  Chat Completions API: OpenAI, OpenRouter, vLLM, Ollama, LM Studio, tdaproxy
-  and others.
+- **Streaming replies** over Crab's HTTP client, from OpenAI-compatible Chat
+  Completions or Responses APIs: OpenAI, OpenRouter, vLLM, Ollama, LM Studio,
+  tdaproxy and others.
 - **Fallback:** a provider limited or down hands the request straight to
   your next model, and gets it back after a cooldown.
 - **Coding tools:** read, list, search, edit, write, patch, shell and git
@@ -67,14 +67,51 @@ bia "find why the login test fails and fix it"
 
 Each [release](https://github.com/crabphp/bia/releases/latest) has Bia as
 one file with PHP inside, for `linux-x86_64`, `linux-aarch64`,
-`macos-x86_64` and `macos-aarch64`:
+`macos-x86_64` and `macos-aarch64`. No PHP or Composer installation needed.
+
+### Linux
 
 ```sh
-curl -fsSL https://github.com/crabphp/bia/releases/latest/download/bia-linux-x86_64.tar.gz | tar xz -C ~/.local/bin
+mkdir -p "$HOME/.local/bin"
+curl -fsSL https://github.com/crabphp/bia/releases/latest/download/bia-linux-x86_64.tar.gz | tar xz -C "$HOME/.local/bin"
+export PATH="$HOME/.local/bin:$PATH"
 bia doctor
 ```
 
-It also has `bia.phar`, for a PHP 8.4 of your own: `php bia.phar`.
+For ARM64 Linux, use `bia-linux-aarch64.tar.gz` instead. Add the `export`
+line to your shell's startup file to keep Bia on your PATH.
+
+### macOS
+
+In Terminal, run this to install for Apple Silicon or Intel automatically:
+
+```sh
+mkdir -p "$HOME/.local/bin"
+arch="$(uname -m)"
+[ "$arch" = "arm64" ] && arch="aarch64"
+curl -fsSL "https://github.com/crabphp/bia/releases/latest/download/bia-macos-${arch}.tar.gz" \
+  | tar xz -C "$HOME/.local/bin"
+export PATH="$HOME/.local/bin:$PATH"
+bia doctor
+```
+
+Add this line to `~/.zshrc` (macOS's default shell) so new terminals can
+find Bia too:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+With [Homebrew](https://brew.sh), install the search tool with
+`brew install ripgrep`. If Git is missing, run `xcode-select --install`.
+Then follow [Quick start](#quick-start) to set your API key and run Bia in
+your project.
+
+### PHAR
+
+Each release also has `bia.phar`, for a PHP 8.4 of your own: `php bia.phar`.
+
+### Updating
 
 `bia update` replaces either with the latest release's, checked against its
 `SHA256SUMS` and run once before it takes the old one's place. A
@@ -116,6 +153,7 @@ Through tdaproxy (tested with `gpt-6-astra` and `gpt-6-sol`, which have a
 export BIA_PROVIDER=tdaproxy
 export TDAPROXY_API_KEY=...
 export BIA_BASE_URL=<tdaproxy base URL>/v1
+export BIA_WIRE_API=responses
 export BIA_MODEL=gpt-6-astra
 bia
 ```
@@ -492,6 +530,8 @@ under `models`:
     'cliproxyapi' => ['api_key' => 'sk-...'],
     'tdaproxy' => [
         'base_url' => 'https://tdaproxy.example/v1',
+        'wire_api' => 'responses',
+        'endpoint' => 'responses',
         'api_key' => env('TDA_TOKEN'),
         'context_window' => 272000,
         'models' => ['gpt-6-mini' => ['context_window' => 128000]],
@@ -501,7 +541,9 @@ under `models`:
 ```
 
 A provider takes any `model` setting (`base_url`, `api_key`, `endpoint`,
-`timeout`, `idle_timeout`, `context_window`). `--base-url`, `--api-key`,
+`wire_api` (`chat` or `responses`), `timeout`, `idle_timeout`,
+`context_window`). Set `wire_api` and `endpoint` to `responses` for a
+Responses provider. `--base-url`, `--api-key`,
 `BIA_BASE_URL` and `BIA_API_KEY` still override it. A prefix that
 names no provider stays part of the model name, so `meta/llama-4` on
 OpenRouter works as before. A project's `.agents/bia.json` may pick a
@@ -555,6 +597,7 @@ with the offending keys named. `bia init` creates one.
 | `BIA_BASE_URL` | `model.base_url` |
 | `BIA_MODEL` | `model.name`, e.g. `cliproxyapi/claude-sonnet-4-6` |
 | `BIA_PROVIDER` | `model.provider` |
+| `BIA_WIRE_API` | `model.wire_api`, `chat` or `responses` |
 | `BIA_HOME` | Where Bia keeps its files, `~/.bia` by default |
 | `NO_COLOR` | Plain tool lines |
 
@@ -662,8 +705,8 @@ provider.
 ## Status and limits
 
 Bia is at 0.1.1. Not yet built:
-- **Only the Chat Completions API.** Native Anthropic Messages, Gemini and
-  OpenAI Responses adapters are planned.
+- **Only OpenAI-compatible wire formats.** Native Anthropic Messages and
+  Gemini adapters are planned.
 - **No native Windows.** Bia runs in WSL there.
 - **No sandbox.** The agent has your permissions in the workspace and beyond
   it through `shell`.

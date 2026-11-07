@@ -776,6 +776,7 @@ final class Application
             (string) $config->get('model.endpoint', 'chat/completions'),
             (float) $config->get('model.timeout'),
             (float) $config->get('model.idle_timeout'),
+            wireApi: (string) $config->get('model.wire_api', 'chat'),
         );
         return $record === null ? $model : new Metered($model, $config->modelLabel(), $record);
     }

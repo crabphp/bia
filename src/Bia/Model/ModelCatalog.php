@@ -25,7 +25,7 @@ final readonly class ModelCatalog
     ) {}
 
     /**
-     * @param array<string, array{base_url: string, endpoint?: string, api_key: ?string, models: list<string>}> $providers
+     * @param array<string, array{base_url: string, endpoint?: string, wire_api?: string, api_key: ?string, models: list<string>}> $providers
      * @return array{models: list<string>, errors: array<string, string>} Models as provider/model, sorted.
      */
     public function list(array $providers, ?Cancellation $cancellation = null): array

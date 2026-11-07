@@ -71,6 +71,95 @@ final class ModelTest extends TestCase
         self::assertArrayNotHasKey('reasoning_effort', $body, 'No effort is sent unless one was chosen.');
     }
 
+    public function testResponsesWireSendsInputToResponsesAndNormalizesItsEvents(): void
+    {
+        $http = new FakeClient([
+            'POST https://proxy.example/v1/responses' => FakeClient::response(
+                200,
+                "data: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\"}\n\n"
+                . "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":4,\"output_tokens\":2,\"total_tokens\":6}}}\n\n"
+                . "data: [DONE]\n\n",
+                ['Content-Type' => 'text/event-stream'],
+            ),
+        ]);
+        $model = new OpenAiCompatibleModel(
+            $http,
+            'https://proxy.example/v1',
+            'key',
+            'test',
+            wireApi: OpenAiCompatibleModel::RESPONSES,
+        );
+        $events = [];
+        $result = Loop::run(static function ($cancellation) use ($model, &$events) { return $model->stream(
+            new ModelRequest('test', [new Message('user', 'hi')], [], ['reasoning_effort' => 'high']),
+            static function (ModelEvent $event) use (&$events): void { $events[] = $event; },
+            $cancellation,
+        ); });
+
+        self::assertSame('hello', $result->text);
+        self::assertSame(['input' => 4, 'output' => 2, 'total' => 6], $result->usage);
+        self::assertSame(['text_delta', 'usage', 'completed'], array_map(static fn (ModelEvent $event): string => $event->type, $events));
+        $request = $http->sent('POST https://proxy.example/v1/responses')[0];
+        $body = json_decode((string) $request->getBody(), true);
+        self::assertArrayHasKey('input', $body);
+        self::assertArrayNotHasKey('messages', $body);
+        self::assertSame(['role' => 'user', 'content' => 'hi'], $body['input'][0]);
+        self::assertSame(['effort' => 'high'], $body['reasoning']);
+    }
+
+    public function testResponsesWireConvertsToolsAndReadsFunctionCalls(): void
+    {
+        $http = new FakeClient([
+            'POST https://proxy.example/v1/responses' => FakeClient::response(
+                200,
+                "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"write_file\"}}\n\n"
+                . "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"delta\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}\n\n"
+                . "data: {\"type\":\"response.function_call_arguments.done\",\"item_id\":\"fc_1\",\"arguments\":\"{\\\"path\\\":\\\"a.txt\\\"}\"}\n\n"
+                . "data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n"
+                . "data: [DONE]\n\n",
+                ['Content-Type' => 'text/event-stream'],
+            ),
+        ]);
+        $model = new OpenAiCompatibleModel($http, 'https://proxy.example/v1', 'key', 'test', wireApi: OpenAiCompatibleModel::RESPONSES);
+        $tool = new \Bia\Contracts\ToolDefinition('write_file', 'Write a file', ['type' => 'object', 'properties' => []]);
+
+        $result = Loop::run(static function ($cancellation) use ($model, $tool) { return $model->stream(
+            new ModelRequest('test', [Message::user('write it')], [$tool]),
+            static function (): void {},
+            $cancellation,
+        ); });
+
+        self::assertSame([['id' => 'call_1', 'name' => 'write_file', 'arguments' => ['path' => 'a.txt']]], array_map(
+            static fn (\Bia\Contracts\ToolCall $call): array => $call->toArray(),
+            $result->toolCalls,
+        ));
+        $body = json_decode((string) $http->sent('POST https://proxy.example/v1/responses')[0]->getBody(), true);
+        self::assertSame([
+            ['type' => 'function', 'name' => 'write_file', 'description' => 'Write a file', 'strict' => false, 'parameters' => ['type' => 'object', 'properties' => []]],
+        ], $body['tools']);
+    }
+
+    public function testResponsesInputKeepsImagesAndToolResultsInProviderShape(): void
+    {
+        $path = tempnam(sys_get_temp_dir(), 'bia-image-');
+        self::assertIsString($path);
+        file_put_contents($path, "\x89PNG\r\n\x1a\nbytes");
+        try {
+            $call = new \Bia\Contracts\ToolCall('call_1', 'look', ['x' => 1]);
+            $input = OpenAiCompatibleModel::responsesInput([
+                Message::user('look', [new \Bia\Contracts\Image($path, 'image/png')]),
+                new Message('assistant', '', [$call]),
+                Message::toolResult($call, 'done', true),
+            ]);
+            self::assertSame('input_image', $input[0]['content'][1]['type']);
+            self::assertStringStartsWith('data:image/png;base64,', $input[0]['content'][1]['image_url']);
+            self::assertSame(['type' => 'function_call', 'call_id' => 'call_1', 'name' => 'look', 'arguments' => '{"x":1}'], $input[1]);
+            self::assertSame(['type' => 'function_call_output', 'call_id' => 'call_1', 'output' => 'done'], $input[2]);
+        } finally {
+            @unlink($path);
+        }
+    }
+
     public function testTheReasoningEffortIsSentWithTheRequest(): void
     {
         $http = new FakeClient([

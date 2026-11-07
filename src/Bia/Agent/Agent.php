@@ -49,6 +49,13 @@ final readonly class Agent
     private const RETRY_AFTER_LIMIT = 60.0;
 
     /**
+     * Seconds of waiting, in all, that a turn with tool results behind it
+     * keeps trying a failing provider: abandoning the turn throws that work
+     * away, so it is tried at the last delay long past a fresh prompt.
+     */
+    private const PATIENCE = 300.0;
+
+    /**
      * @param list<float> $retryDelays Waits before each new try of a request that failed for a passing reason.
      * @param array<string, mixed> $options Sent with every request, as the reasoning effort.
      */
@@ -68,6 +75,7 @@ final readonly class Agent
         private array $options = [],
         private ?Inspection $inspection = null,
         private ?Recap $recap = null,
+        private float $patience = self::PATIENCE,
     ) {
         if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
@@ -85,6 +93,35 @@ final readonly class Agent
         // How long the conversation rested before this prompt: past the cache's life, compacting is nearly free.
         $idle = $this->compactor?->idle($entries) ?? 0.0;
         $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt), $images));
+        return $this->loop($sessionId, $entries, $idle, $system, $cancellation, $steer, $images, continued: false);
+    }
+
+    /**
+     * Picks a turn back up where it stopped: the conversation ends on tool
+     * results or a user message the model never answered, as after a failed
+     * request, and the model is asked again with nothing new added.
+     *
+     * @param \Closure(): list<string|Message>|null $steer As in run().
+     */
+    public function resume(string $sessionId, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null): ModelResult
+    {
+        $entries = $this->sessions->path($sessionId);
+        $idle = $this->compactor?->idle($entries) ?? 0.0;
+        return $this->loop($sessionId, $entries, $idle, $system, $cancellation, $steer, [], continued: true);
+    }
+
+    /**
+     * @param list<Entry> $entries
+     * @param \Closure(): list<string|Message>|null $steer
+     * @param list<\Bia\Contracts\Image> $images
+     * @param bool $continued Whether this turn continues work already done, worth more patience with a failing provider.
+     */
+    private function loop(string $sessionId, array $entries, float $idle, string $system, ?Cancellation $cancellation, ?\Closure $steer, array $images, bool $continued): ModelResult
+    {
+        // A short follow-up such as "do it" still refers to the image in the
+        // preceding user message. Keep that attachment available to an MCP
+        // upload tool until a newer user message carries another one.
+        $attachments = $images !== [] ? $images : self::lastImages($entries);
         $retried = false;
         $stepped = false;
         $this->inspection?->turn();
@@ -99,9 +136,13 @@ final readonly class Agent
                 // After the tool results, where a user message may follow them: the user steers.
                 foreach ($steer() as $message) {
                     $repeats = []; // a word from the user is a new direction: nothing repeats it
-                    $entries[] = $this->sessions->append($sessionId, $message instanceof Message
+                    $user = $message instanceof Message
                         ? Message::user(self::clean($message->text), $message->images)
-                        : Message::user(self::clean($message)));
+                        : Message::user(self::clean($message));
+                    if ($user->images !== []) {
+                        $attachments = $user->images;
+                    }
+                    $entries[] = $this->sessions->append($sessionId, $user);
                 }
             }
             $stepped = false;
@@ -122,7 +163,7 @@ final readonly class Agent
             }
             $this->inspection?->request($this->modelName, $this->options, $system, $definitions, $context->messages());
             try {
-                $result = $this->request(new ModelRequest($this->modelName, $messages, $definitions, $this->options), $cancellation);
+                $result = $this->request(new ModelRequest($this->modelName, $messages, $definitions, $this->options), $cancellation, invested: $continued || $turn > 0);
             } catch (ModelException $error) {
                 // Our estimate was short: compact once and try the same turn again.
                 if (!$error->contextOverflow || $retried || $this->compactor === null) {
@@ -154,7 +195,7 @@ final readonly class Agent
                 return $result;
             }
 
-            $toolContext = new ToolContext($this->workspace, $sessionId);
+            $toolContext = new ToolContext($this->workspace, $sessionId, images: $attachments);
             foreach ($this->batches($result->toolCalls) as $batch) {
                 foreach ($this->execute($batch, $toolContext, $cancellation) as $index => $toolResult) {
                     $call = $batch[$index];
@@ -186,13 +227,14 @@ final readonly class Agent
     /**
      * Streams one request, trying again after a failure that may pass: a
      * rate limit, an overloaded or failing provider, a lost connection. A
-     * request is tried again only while nothing of its answer has arrived,
-     * so no text is ever shown twice.
+     * stream that fails midway is tried again too: any answer text already
+     * shown is closed under a notice, and the new answer starts afresh.
+     * Only the completed answer is ever stored.
      */
-    private function request(ModelRequest $request, ?Cancellation $cancellation): ModelResult
+    private function request(ModelRequest $request, ?Cancellation $cancellation, bool $invested = false): ModelResult
     {
         try {
-            $result = $this->attempts($request, $cancellation);
+            $result = $this->attempts($request, $cancellation, $invested);
         } catch (\Throwable $error) {
             $this->inspection?->failed($error);
             throw $error;
@@ -201,39 +243,64 @@ final readonly class Agent
         return $result;
     }
 
-    private function attempts(ModelRequest $request, ?Cancellation $cancellation): ModelResult
+    private function attempts(ModelRequest $request, ?Cancellation $cancellation, bool $invested): ModelResult
     {
+        $delays = $this->delays($invested);
         for ($attempt = 0; ; $attempt++) {
             $started = false;
+            $shown = false;
             try {
                 return $this->model->stream(
                     $request,
-                    function ($event) use (&$started): void {
+                    function ($event) use (&$started, &$shown): void {
                         if (!$started) {
                             $this->inspection?->firstToken();
                         }
                         $started = true;
+                        if ($event->type === 'text_delta' && $event->text !== '') {
+                            $shown = true;
+                        }
                         $this->renderer->event($event);
                     },
                     $cancellation,
                 );
             } catch (ModelException | NetworkException $error) {
                 $transient = $error instanceof NetworkException || $error->transient();
-                if ($started || !$transient || $attempt >= count($this->retryDelays)) {
+                if (!$transient || $attempt >= count($delays)) {
                     throw $error;
                 }
-                $wait = $this->retryDelays[$attempt];
+                $wait = $delays[$attempt];
                 if ($error instanceof ModelException && $error->retryAfter !== null) {
                     $wait = min(max($wait, $error->retryAfter), self::RETRY_AFTER_LIMIT);
                 }
                 $why = $error instanceof ModelException ? (string) $error->status : 'connection failed';
-                $tries = count($this->retryDelays);
-                $notice = "{$why} · retry " . ($attempt + 1) . "/{$tries} in " . self::seconds($wait);
+                $notice = "{$why} · retry " . ($attempt + 1) . '/' . count($delays) . ' in ' . self::seconds($wait)
+                    . ($shown ? ' · the answer starts over' : '');
                 $this->inspection?->event($notice);
                 $this->renderer->notice($notice);
                 self::wait($wait, $cancellation);
             }
         }
+    }
+
+    /**
+     * The waits before each new try. A turn that already has tool results
+     * behind it keeps trying at the last delay until the patience is spent,
+     * rather than losing that work to a provider failing for a minute.
+     *
+     * @return list<float>
+     */
+    private function delays(bool $invested): array
+    {
+        $delays = $this->retryDelays;
+        $last = (float) end($delays);
+        if (!$invested || $last <= 0.0) {
+            return $delays;
+        }
+        for ($left = $this->patience - array_sum($delays); $left > 0; $left -= $last) {
+            $delays[] = $last;
+        }
+        return $delays;
     }
 
     /**
@@ -384,11 +451,27 @@ final readonly class Agent
                 $context->sessionId,
                 $context->metadata,
                 fn (string $output) => $this->renderer->running($call, $output),
+                $context->images,
             );
             return $this->tools->execute($call->name, $call->arguments, $context, $cancellation);
         } catch (\Throwable $error) {
             return new ToolResult($error->getMessage(), false, ['error' => $error::class]);
         }
+    }
+
+    /**
+     * @param list<Entry> $entries
+     * @return list<\Bia\Contracts\Image>
+     */
+    private static function lastImages(array $entries): array
+    {
+        for ($i = count($entries) - 1; $i >= 0; $i--) {
+            $message = $entries[$i]->message();
+            if ($message !== null && $message->role === 'user' && $message->images !== []) {
+                return $message->images;
+            }
+        }
+        return [];
     }
 
     /**

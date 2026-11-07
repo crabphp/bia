@@ -61,7 +61,7 @@ final readonly class Config
         }
 
         $environment = [];
-        foreach (['BIA_PROVIDER' => 'provider', 'BIA_BASE_URL' => 'base_url', 'BIA_MODEL' => 'name', 'BIA_API_KEY' => 'api_key'] as $name => $key) {
+        foreach (['BIA_PROVIDER' => 'provider', 'BIA_BASE_URL' => 'base_url', 'BIA_MODEL' => 'name', 'BIA_API_KEY' => 'api_key', 'BIA_WIRE_API' => 'wire_api'] as $name => $key) {
             $value = getenv($name);
             if ($value !== false && $value !== '') {
                 $environment['model'][$key] = $value;
@@ -116,9 +116,9 @@ final readonly class Config
 
     /**
      * Each provider as a model of it would use it: its base_url, endpoint,
-     * api_key and the models listed for it.
+     * wire API, api_key and the models listed for it.
      *
-     * @return array<string, array{base_url: string, endpoint: string, api_key: ?string, models: list<string>}>
+     * @return array<string, array{base_url: string, endpoint: string, wire_api?: string, api_key: ?string, models: list<string>}>
      */
     public function providers(): array
     {
@@ -133,12 +133,20 @@ final readonly class Config
                 continue;
             }
             $key = $model['api_key'] ?? null;
+            $wireApi = (string) ($model['wire_api'] ?? 'chat');
+            $endpoint = (string) ($model['endpoint'] ?? 'chat/completions');
+            if ($wireApi === 'responses' && rtrim($endpoint, '/') === 'chat/completions') {
+                $endpoint = 'responses';
+            }
             $providers[$name] = [
                 'base_url' => (string) $model['base_url'],
-                'endpoint' => (string) ($model['endpoint'] ?? 'chat/completions'),
+                'endpoint' => $endpoint,
                 'api_key' => is_string($key) && $key !== '' ? $key : null,
                 'models' => array_values(array_map('strval', array_keys((array) ($settings['models'] ?? [])))),
             ];
+            if ($wireApi !== 'chat') {
+                $providers[$name]['wire_api'] = $wireApi;
+            }
         }
         return $providers;
     }
@@ -227,6 +235,7 @@ final readonly class Config
                 'provider' => 'openai-compatible',
                 'base_url' => 'https://api.openai.com/v1',
                 'endpoint' => 'chat/completions',
+                'wire_api' => 'chat',
                 'api_key' => null,
                 'name' => 'gpt-5',
                 // A whole reply may take this long; a server silent for idle_timeout seconds is given up on.
@@ -345,6 +354,7 @@ final readonly class Config
                 | A provider takes any model setting below. Give its key as api_key,
                 | pasted in or read with env(), e.g. 'api_key' => env('MY_KEY').
                 | Without one, Bia reads <NAME>_API_KEY, e.g. CLIPROXYAPI_API_KEY.
+                | Set wire_api and endpoint to 'responses' for a Responses API provider.
                 |
                 | Only a model that differs from its provider needs an entry under
                 | "models", e.g. 'models' => ['gemini-2.5-pro' => ['context_window' => 1000000]].
@@ -394,6 +404,7 @@ final readonly class Config
                 //     'api_key' => null,
                 //     'provider' => 'openai-compatible',
                 //     'endpoint' => 'chat/completions',
+                //     'wire_api' => 'chat', // or 'responses'
                 //     'timeout' => 3600.0,
                 //     'idle_timeout' => 120.0,
                 //     'context_window' => 128000,
@@ -690,6 +701,10 @@ final readonly class Config
             $provider = $values['model']['provider'];
         }
         if ($provider === null) {
+            if (($values['model']['wire_api'] ?? 'chat') === 'responses'
+                && rtrim((string) ($values['model']['endpoint'] ?? 'chat/completions'), '/') === 'chat/completions') {
+                $values['model']['endpoint'] = 'responses';
+            }
             return $values;
         }
         $settings = $providers[$provider];
@@ -706,6 +721,10 @@ final readonly class Config
         }
         unset($settings['models'], $settings['name'], $model['name']);
         $values['model'] = self::merge(self::merge(self::merge($values['model'], $settings), $model), $explicit);
+        if (($values['model']['wire_api'] ?? 'chat') === 'responses'
+            && rtrim((string) ($values['model']['endpoint'] ?? 'chat/completions'), '/') === 'chat/completions') {
+            $values['model']['endpoint'] = 'responses';
+        }
         $values['model']['provider'] = $provider;
         $values['model']['name'] = $name;
         return $values;
@@ -747,6 +766,9 @@ final readonly class Config
         }
         if (isset($model['endpoint']) && (!is_string($model['endpoint']) || $model['endpoint'] === '')) {
             throw new \InvalidArgumentException('model.endpoint must be a non-empty string.');
+        }
+        if (isset($model['wire_api']) && (!is_string($model['wire_api']) || !in_array($model['wire_api'], ['chat', 'responses'], true))) {
+            throw new \InvalidArgumentException('model.wire_api must be chat or responses.');
         }
         if (isset($model['api_key']) && $model['api_key'] !== null && !is_string($model['api_key'])) {
             throw new \InvalidArgumentException('model.api_key must be a string or null.');
