@@ -1,0 +1,1 @@
+Write `index.html` in the current directory: a page with a full-window WebGL2 canvas that draws a slowly rotating colourful triangle on a dark background. No libraries. Then reply with one line saying it is done.
