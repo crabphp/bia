@@ -151,10 +151,10 @@ final readonly class McpTool implements Tool
             if (!is_array($entry) || ($entry !== [] && array_is_list($entry))) {
                 throw new \InvalidArgumentException('images must contain objects.');
             }
-            if (!array_key_exists($dataKey, $entry) || $entry[$dataKey] === '') {
-                $entry[$dataKey] = $data;
-            }
-            if ($mimeKey !== null && !array_key_exists($mimeKey, $entry)) {
+            // The bytes and their type are Bia's to give: whatever the model wrote there, a
+            // placeholder such as "[user-attached-image-1]" or a path, is not the image.
+            $entry[$dataKey] = $data;
+            if ($mimeKey !== null) {
                 $entry[$mimeKey] = $image->mime;
             }
             if ($altKey !== null && !array_key_exists($altKey, $entry)) {

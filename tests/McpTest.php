@@ -116,6 +116,31 @@ final class McpTest extends TestCase
         }
     }
 
+    public function testTheModelsStandInForAnAttachedImageIsReplacedByItsBytes(): void
+    {
+        $manager = new Manager(new ProcessRunner(), new Client(), sys_get_temp_dir(), 'test', timeout: 2.0, startup: 5.0);
+        $manager->add(new Server('fixture', 'stdio', PHP_BINARY, [__DIR__ . '/Fixtures/mcp-server.php'], ['MCP_FIXTURE_MEDIA' => '1']));
+        $manager->start();
+        $manager->ready(5.0);
+
+        $file = sys_get_temp_dir() . '/bia-mcp-image-' . bin2hex(random_bytes(4)) . '.png';
+        $bytes = "\x89PNG\r\n\x1a\n\x00";
+        file_put_contents($file, $bytes);
+        try {
+            $context = new ToolContext(sys_get_temp_dir(), 'session', images: [new Image($file, 'image/png')]);
+            $registry = (new Registry())->from($manager->tools(...));
+            $result = $registry->execute('mcp__fixture__media', [
+                'images' => [['data' => '[user-attached-image-1]', 'mimeType' => 'image/jpeg', 'alt' => 'Two dogs by a door.']],
+            ], $context);
+
+            self::assertTrue($result->ok, $result->text);
+            self::assertSame('media: image/png Two dogs by a door. ' . strlen(base64_encode($bytes)), $result->text, 'The bytes and type are the image\'s; the alt text stays the model\'s.');
+        } finally {
+            @unlink($file);
+            $manager->close();
+        }
+    }
+
     public function testMcpArgumentsKeepOptionalFieldsFromTheModel(): void
     {
         $manager = new Manager(new ProcessRunner(), new Client(), sys_get_temp_dir(), 'test', timeout: 2.0, startup: 5.0);
