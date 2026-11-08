@@ -35,14 +35,19 @@ final class ModelException extends \RuntimeException
     }
 
     /**
-     * A proxy that turns Chat Completions into OpenAI's Responses API now
-     * and then loses a message's role on the way, and the same request
-     * passes when sent again: "Invalid value: ''. Supported values are:
-     * 'assistant', 'system', ...". The request was right; try it again.
+     * A proxy (CLIProxyAPI) in front of OpenAI's Responses API now and then
+     * refuses a request that was right, and passes the same one sent again:
+     * it loses a message's role ("Invalid value: ''. Supported values are:
+     * 'assistant', ..."), loses a tool's output ("No tool output found for
+     * function call ...", where Context gives every call one), or answers
+     * a bare "Bad Request". Try it again.
      */
     public function garbled(): bool
     {
-        return $this->status === 400 && preg_match("/Invalid value: ''\\. Supported values are: 'assistant'/", $this->getMessage()) === 1;
+        return $this->status === 400 && preg_match(
+            "/Invalid value: ''\\. Supported values are: 'assistant'|No tool output found for function call|answered 400: Bad Request$/",
+            $this->getMessage(),
+        ) === 1;
     }
 
     /**
@@ -64,7 +69,7 @@ final class ModelException extends \RuntimeException
     {
         $data = json_decode($body, true);
         $detail = is_array($data)
-            ? ($data['error']['message'] ?? $data['message'] ?? $data['error'] ?? null)
+            ? ($data['error']['message'] ?? $data['message'] ?? $data['error'] ?? $data['detail'] ?? null)
             : null;
         $detail = is_string($detail) && $detail !== '' ? $detail : trim(mb_strcut($body, 0, 500, 'UTF-8'));
         $overflow = in_array($status, [400, 413], true)

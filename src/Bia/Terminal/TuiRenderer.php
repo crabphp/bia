@@ -136,7 +136,8 @@ final class TuiRenderer implements Renderer
                 return;
             case 'tool_call':
                 $name = is_string($event->data['name'] ?? null) ? $event->data['name'] : 'a tool';
-                ($this->activity)("Running {$name}");
+                $arguments = is_array($event->data['arguments'] ?? null) ? $event->data['arguments'] : [];
+                ($this->activity)(self::activity(new ToolCall((string) ($event->data['id'] ?? ''), $name, $arguments)));
                 return;
             case 'usage':
                 ($this->usage)($event->data);
@@ -175,7 +176,18 @@ final class TuiRenderer implements Renderer
             );
         }
         $this->draw();
-        ($this->activity)('Thinking');
+        // Calls of one step run together: say what is still running, not the last one the model named.
+        $left = $this->running === [] ? null : end($this->running)['call'];
+        ($this->activity)($left === null ? 'Thinking' : self::activity($left));
+    }
+
+    /**
+     * What the spinner says while a call runs.
+     */
+    private static function activity(ToolCall $call): string
+    {
+        $agent = $call->name === 'agent' && is_string($call->arguments['name'] ?? null) ? trim($call->arguments['name']) : '';
+        return $agent !== '' ? "Asking {$agent}" : "Running {$call->name}";
     }
 
     /**

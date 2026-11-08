@@ -199,7 +199,6 @@ final readonly class Agent
             foreach ($this->batches($result->toolCalls) as $batch) {
                 foreach ($this->execute($batch, $toolContext, $cancellation) as $index => $toolResult) {
                     $call = $batch[$index];
-                    $this->renderer->tool($call, $toolResult);
                     $text = $this->bound($toolResult->text, $sessionId, $call);
                     $key = hash('xxh128', $call->name . "\0" . self::canonical($call->arguments) . "\0" . $toolResult->text);
                     $times = $repeats[$key] = ($repeats[$key] ?? 0) + 1;
@@ -424,12 +423,18 @@ final readonly class Agent
      */
     private function execute(array $batch, ToolContext $context, ?Cancellation $cancellation): array
     {
+        // Each is shown as it ends: a read done is not kept waiting on a subagent that takes an hour.
+        $run = function (ToolCall $call) use ($context, $cancellation): ToolResult {
+            $result = $this->call($call, $context, $cancellation);
+            $this->renderer->tool($call, $result);
+            return $result;
+        };
         if (count($batch) === 1) {
-            return [$this->call($batch[0], $context, $cancellation)];
+            return [$run($batch[0])];
         }
         $loop = EventLoop::current();
         $tasks = array_map(
-            fn (ToolCall $call): Task => Task::spawn($loop, fn (): ToolResult => $this->call($call, $context, $cancellation)),
+            static fn (ToolCall $call): Task => Task::spawn($loop, static fn (): ToolResult => $run($call)),
             $batch,
         );
         return array_map(static fn (Task $task): ToolResult => $task->await(), $tasks);

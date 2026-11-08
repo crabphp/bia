@@ -107,6 +107,23 @@ final class AgentTest extends TestCase
         self::assertSame(2, $model->calls);
     }
 
+    public function testAToolOutputLostByAProxyIsTriedAgain(): void
+    {
+        foreach ([
+            '{"error":{"message":"No tool output found for function call call_7ae984399217425796c078cb8798de10.","type":"invalid_request_error","param":"input"}}',
+            '{"detail":"Bad Request"}',
+        ] as $body) {
+            [$store, $session] = $this->session();
+            $model = new FlakyModel([[ModelException::fromAnswer(400, $body), '']]);
+            $agent = new Agent($model, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', retryDelays: [0.0]);
+
+            self::assertSame('done', $agent->run($session, 'hi')->text, "Sent again after: {$body}");
+            self::assertSame(2, $model->calls);
+        }
+        self::assertSame('The model provider answered 400: Bad Request', ModelException::fromAnswer(400, '{"detail":"Bad Request"}')->getMessage());
+        self::assertFalse(ModelException::fromAnswer(400, '{"error":{"message":"Bad Request: unknown parameter foo"}}')->garbled(), 'A request that was wrong is not sent again.');
+    }
+
     public function testTriesStopAfterTheLastWait(): void
     {
         [$store, $session] = $this->session();
@@ -213,6 +230,24 @@ final class AgentTest extends TestCase
         self::assertLessThan(0.5, microtime(true) - $started, 'Read-only tools ran one after another.');
         $tools = array_values(array_filter(self::messages($store, $session), static fn (Message $m): bool => $m->role === 'tool'));
         self::assertSame(['a', 'b', 'c'], array_map(static fn (Message $m): string => (string) $m->toolCallId, $tools), 'Results were stored out of call order.');
+    }
+
+    public function testEachCallRunTogetherIsShownAsItEnds(): void
+    {
+        [$store, $session] = $this->session();
+        $calls = [
+            self::call('slow', 'sleep', ['seconds' => 0.3]),
+            self::call('quick', 'sleep', ['seconds' => 0.01]),
+            self::call('middle', 'sleep', ['seconds' => 0.1]),
+        ];
+        $renderer = new FakeRenderer();
+        $agent = new Agent(new ScriptedModel([$calls]), 'fake', (new Registry())->add(new SleepTool()), $store, $renderer, '/workspace');
+
+        $agent->run($session, 'sleep three times');
+
+        self::assertSame(['quick', 'middle', 'slow'], $renderer->ended, 'A call done waited on a slower one to be shown.');
+        $tools = array_values(array_filter(self::messages($store, $session), static fn (Message $m): bool => $m->role === 'tool'));
+        self::assertSame(['slow', 'quick', 'middle'], array_map(static fn (Message $m): string => (string) $m->toolCallId, $tools), 'Results are stored in call order.');
     }
 
     public function testUnreadableArgumentsAreAnsweredWithoutRunningTheTool(): void
@@ -624,7 +659,13 @@ final class FakeRenderer implements Renderer
     public function tool(ToolCall $call, ToolResult $result): void
     {
         $this->tools[] = $call->name;
+        $this->ended[] = $call->id;
     }
+
+    /**
+     * @var list<string> Each call's id, in the order its row was drawn.
+     */
+    public array $ended = [];
 
     public function notice(string $message): void
     {
