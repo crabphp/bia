@@ -728,7 +728,11 @@ final class Chat
     private static function duration(float $seconds): string
     {
         $seconds = (int) round($seconds);
-        return $seconds < 60 ? "{$seconds}s" : intdiv($seconds, 60) . 'm ' . ($seconds % 60) . 's';
+        return match (true) {
+            $seconds < 60 => "{$seconds}s",
+            $seconds < 3600 => intdiv($seconds, 60) . 'm ' . ($seconds % 60) . 's',
+            default => intdiv($seconds, 3600) . 'h ' . intdiv($seconds % 3600, 60) . 'm',
+        };
     }
 
     /**
@@ -960,13 +964,20 @@ final class Chat
         $this->stats->turnStarted();
         $this->startTicker();
         $this->report('working');
-        Task::spawn(EventLoop::current(), function () use ($work, $cancellation): void {
+        $started = microtime(true);
+        Task::spawn(EventLoop::current(), function () use ($work, $cancellation, $label, $started): void {
             $finished = false;
             $state = 'idle';
             try {
                 $work($cancellation);
                 $finished = true;
                 $state = 'done';
+                if ($label === 'Thinking') {
+                    // A message fully answered: how long Bia worked on it, and when it finished.
+                    $this->renderer->catchUp();
+                    $this->region->gap();
+                    $this->region->print(Style::dim('· Worked for ' . self::duration(microtime(true) - $started) . ' · ' . date('g:i A')) . "\n");
+                }
             } catch (CancelledException) {
                 $this->renderer->catchUp();
                 $this->region->gap();

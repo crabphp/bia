@@ -76,6 +76,7 @@ final class Application
      */
     public static function run(array $arguments): int
     {
+        self::localTime();
         try {
             Installed::guard();
             [$options, $words] = self::options($arguments);
@@ -191,6 +192,21 @@ final class Application
      * latest release's, downloaded, checked against its SHA256SUMS and run
      * once before it takes this one's place.
      */
+    /**
+     * Times shown and the date the model is told are the system's, as `date`
+     * shows them: TZ, else /etc/localtime, over php.ini's (often UTC).
+     */
+    private static function localTime(): void
+    {
+        $zone = ltrim((string) getenv('TZ'), ':');
+        if ($zone === '' && ($link = @readlink('/etc/localtime')) !== false && preg_match('#zoneinfo/(.+)$#', $link, $match) === 1) {
+            $zone = $match[1];
+        }
+        if ($zone !== '') {
+            @date_default_timezone_set($zone); // a zone PHP does not know leaves its own
+        }
+    }
+
     private static function update(): int
     {
         $file = Installed::file() ?? throw new \RuntimeException('This Bia runs from source: update it with git pull and composer install.');

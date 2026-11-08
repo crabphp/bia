@@ -67,6 +67,9 @@ the rule here first, with the user's agreement.
   tool calls and notes, a recap, and the live lines at the bottom. Exactly one blank
   line separates two blocks: start each with `Surface::gap()`, which never
   makes a second one and none at the top.
+- A message fully answered ends with a note, dim: `· Worked for 4m 57s ·
+  1:54 AM`, how long Bia worked on it and when it finished, in the
+  machine's time zone. Not after one stopped or failed, nor on resume.
 - Nothing inside a block is blank, except the answer's own paragraph breaks;
   an answer's leading blank lines are dropped. The user's message has no
   padding: one shaded row for each of its lines.
