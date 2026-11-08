@@ -27,8 +27,13 @@ fails at once.
 The local path is deliberately small. It starts no web `App`, opens SQLite only
 when a session is used, and uses Crab's event loop only when a model call needs
 network I/O. Sessions are rows in SQLite; JSONL is an export format. A live
-conversation may use an actor for per-session ordering. Durable multi-step work
-uses Crab Runs and Queue, with every model and tool boundary checkpointed.
+conversation may use an actor for per-session ordering. Tool executions have
+their own durable journal: the start is recorded before a tool runs, its
+bounded result before the conversation moves on, and the journal is marked
+recorded after the session entry commits. A restart can therefore replay a
+completed result or tell the model that a running call has uncertain side
+effects. Durable multi-step work uses Crab Runs and Queue, with every model and
+tool boundary checkpointed.
 
 The terminal is an event consumer. A conversation in a terminal runs
 `Terminal\Chat` on the TUI kit; a one-shot prompt, a pipe and `--json` use
@@ -130,7 +135,9 @@ copied or rewritten.
 
 `Agent\Context` turns a path into what is sent: the latest compaction's
 summary, then the entries it kept, then everything after it. It gives every
-tool call a result, so a session cut off by a crash still resumes.
+tool call a result, and the execution journal repairs a boundary left by a
+crash with either the saved result or an explicit uncertain-side-effects
+message.
 
 `Agent\Compactor` keeps requests inside the context window. It estimates a
 request from the provider's last reported usage plus a character estimate of

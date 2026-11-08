@@ -5,18 +5,21 @@ declare(strict_types=1);
 namespace Bia\Session;
 
 use Bia\Contracts\Compaction;
+use Bia\Contracts\ExecutionStore;
 use Bia\Contracts\Pruning;
 use Bia\Contracts\Entry;
 use Bia\Contracts\Message;
 use Bia\Contracts\SessionStore;
 use Bia\Contracts\ToolCall;
+use Bia\Contracts\ToolExecution;
+use Bia\Contracts\ToolResult;
 
 /**
  * The local SQLite conversation store: an append-only log of entries, each
  * pointing at its parent, and a head per session. It opens and migrates
  * lazily, so commands such as `bia --help` never touch the database.
  */
-final class SqliteStore implements SessionStore
+final class SqliteStore implements SessionStore, ExecutionStore
 {
     private ?\PDO $pdo = null;
     private ?\PDOStatement $recordStatement = null;
@@ -197,6 +200,85 @@ final class SqliteStore implements SessionStore
         return count($found) === 1 ? (string) $found[0] : null;
     }
 
+    public function start(string $sessionId, ToolCall $call): string
+    {
+        $id = bin2hex(random_bytes(12));
+        $this->open()->prepare(<<<'SQL'
+            INSERT INTO tool_executions (id, session_id, call_id, name, arguments, status, started_at, recorded)
+            VALUES (?, ?, ?, ?, ?, 'running', ?, 0)
+            SQL)->execute([
+                $id,
+                $sessionId,
+                $call->id,
+                $call->name,
+                json_encode($call->arguments, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+                gmdate('c'),
+            ]);
+        return $id;
+    }
+
+    public function finish(string $executionId, ToolResult $result): void
+    {
+        $statement = $this->open()->prepare(<<<'SQL'
+            UPDATE tool_executions
+            SET status = ?, finished_at = ?, ok = ?, result = ?, result_data = ?
+            WHERE id = ?
+            SQL);
+        $statement->execute([
+            $result->ok ? 'completed' : 'failed',
+            gmdate('c'),
+            $result->ok ? 1 : 0,
+            $result->text,
+            json_encode($result->data, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES),
+            $executionId,
+        ]);
+        if ($statement->rowCount() !== 1) {
+            throw new \RuntimeException("Tool execution {$executionId} does not exist.");
+        }
+    }
+
+    public function recover(string $sessionId): array
+    {
+        $statement = $this->open()->prepare(<<<'SQL'
+            SELECT id, session_id, call_id, name, arguments, status, started_at, finished_at, ok, result, result_data
+            FROM tool_executions
+            WHERE session_id = ? AND recorded = 0
+            ORDER BY started_at, id
+            SQL);
+        $statement->execute([$sessionId]);
+        $found = [];
+        foreach ($statement->fetchAll() as $row) {
+            $status = (string) $row['status'];
+            $ok = $row['ok'] === null ? null : (bool) $row['ok'];
+            if ($status === 'running') {
+                $this->open()->prepare("UPDATE tool_executions SET status = 'unknown', finished_at = ?, ok = 0 WHERE id = ?")->execute([gmdate('c'), $row['id']]);
+                $status = 'unknown';
+                $ok = false;
+            }
+            $arguments = json_decode((string) $row['arguments'], true, 512, JSON_THROW_ON_ERROR);
+            $data = json_decode((string) ($row['result_data'] ?? '{}'), true, 512, JSON_THROW_ON_ERROR);
+            $found[] = new ToolExecution(
+                (string) $row['id'],
+                (string) $row['session_id'],
+                (string) $row['call_id'],
+                (string) $row['name'],
+                is_array($arguments) ? $arguments : [],
+                $status,
+                (string) $row['started_at'],
+                $row['finished_at'] === null ? null : (string) $row['finished_at'],
+                $ok,
+                (string) ($row['result'] ?? ''),
+                is_array($data) ? $data : [],
+            );
+        }
+        return $found;
+    }
+
+    public function recordExecution(string $executionId): void
+    {
+        $this->open()->prepare('UPDATE tool_executions SET recorded = 1 WHERE id = ?')->execute([$executionId]);
+    }
+
     public function close(): void
     {
         $this->pdo = null;
@@ -221,6 +303,7 @@ final class SqliteStore implements SessionStore
         $this->migrate($pdo);
         $this->migrateRequests($pdo);
         $this->migrateRecap($pdo);
+        $this->migrateExecutions($pdo);
         $pdo->prepare('DELETE FROM requests WHERE at < ?')->execute([time() - self::USAGE_DAYS * 86400]);
         return $this->pdo = $pdo;
     }
@@ -239,6 +322,43 @@ final class SqliteStore implements SessionStore
             $pdo->exec('ALTER TABLE sessions ADD COLUMN recap TEXT');
             $pdo->exec('ALTER TABLE sessions ADD COLUMN recap_head INTEGER');
             $pdo->exec('PRAGMA user_version = 4');
+            $pdo->commit();
+        } catch (\Throwable $error) {
+            $pdo->rollBack();
+            throw $error;
+        }
+    }
+
+    /**
+     * Version 5: durable tool execution boundaries. A result is recorded
+     * separately from the execution so a crash between the two can be healed
+     * without running the tool a second time.
+     */
+    private function migrateExecutions(\PDO $pdo): void
+    {
+        if ((int) $pdo->query('PRAGMA user_version')->fetchColumn() >= 5) {
+            return;
+        }
+        $pdo->beginTransaction();
+        try {
+            $pdo->exec(<<<'SQL'
+                CREATE TABLE IF NOT EXISTS tool_executions (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    call_id TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    arguments TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    finished_at TEXT,
+                    ok INTEGER,
+                    result TEXT NOT NULL DEFAULT '',
+                    result_data TEXT NOT NULL DEFAULT '{}',
+                    recorded INTEGER NOT NULL DEFAULT 0
+                )
+                SQL);
+            $pdo->exec('CREATE INDEX IF NOT EXISTS tool_executions_session ON tool_executions(session_id, recorded, started_at)');
+            $pdo->exec('PRAGMA user_version = 5');
             $pdo->commit();
         } catch (\Throwable $error) {
             $pdo->rollBack();

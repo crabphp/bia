@@ -6,6 +6,7 @@ namespace Bia\Agent;
 
 use Bia\Contracts\Compaction;
 use Bia\Contracts\Entry;
+use Bia\Contracts\ExecutionStore;
 use Bia\Contracts\Message;
 use Bia\Contracts\Pruning;
 use Bia\Contracts\Model;
@@ -76,6 +77,7 @@ final readonly class Agent
         private ?Inspection $inspection = null,
         private ?Recap $recap = null,
         private float $patience = self::PATIENCE,
+        private ?ExecutionStore $executions = null,
     ) {
         if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
@@ -90,6 +92,7 @@ final readonly class Agent
     public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null, array $images = []): ModelResult
     {
         $entries = $this->sessions->path($sessionId);
+        $this->recoverExecutions($sessionId, $entries);
         // How long the conversation rested before this prompt: past the cache's life, compacting is nearly free.
         $idle = $this->compactor?->idle($entries) ?? 0.0;
         $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt), $images));
@@ -118,6 +121,7 @@ final readonly class Agent
      */
     private function loop(string $sessionId, array $entries, float $idle, string $system, ?Cancellation $cancellation, ?\Closure $steer, array $images, bool $continued): ModelResult
     {
+        $this->recoverExecutions($sessionId, $entries);
         // A short follow-up such as "do it" still refers to the image in the
         // preceding user message. Keep that attachment available to an MCP
         // upload tool until a newer user message carries another one.
@@ -198,9 +202,10 @@ final readonly class Agent
 
             $toolContext = new ToolContext($this->workspace, $sessionId, images: $attachments);
             foreach ($this->batches($result->toolCalls) as $batch) {
-                foreach ($this->execute($batch, $toolContext, $cancellation) as $index => $toolResult) {
+                foreach ($this->execute($batch, $toolContext, $cancellation) as $index => $execution) {
                     $call = $batch[$index];
-                    $text = $this->bound($toolResult->text, $sessionId, $call);
+                    $toolResult = $execution['result'];
+                    $text = $toolResult->text;
                     $key = hash('xxh128', $call->name . "\0" . self::canonical($call->arguments) . "\0" . $toolResult->text);
                     $times = $repeats[$key] = ($repeats[$key] ?? 0) + 1;
                     if (in_array($times, self::REPEATS, true)) {
@@ -216,6 +221,9 @@ final readonly class Agent
                         $toolResult->ok,
                         $toolResult->data === [] ? [] : ['data' => $toolResult->data],
                     ));
+                    if ($execution['id'] !== null) {
+                        $this->executions?->recordExecution($execution['id']);
+                    }
                 }
             }
             $stepped = true;
@@ -420,25 +428,92 @@ final readonly class Agent
 
     /**
      * @param list<ToolCall> $batch
-     * @return list<ToolResult>
+     * @return list<array{result: ToolResult, id: string|null}>
      */
     private function execute(array $batch, ToolContext $context, ?Cancellation $cancellation): array
     {
         // Each is shown as it ends: a read done is not kept waiting on a subagent that takes an hour.
-        $run = function (ToolCall $call) use ($context, $cancellation): ToolResult {
+        $run = function (ToolCall $call) use ($context, $cancellation): array {
+            $id = $this->executions?->start($context->sessionId, $call);
             $result = $this->call($call, $context, $cancellation);
+            // Save the bounded form so a crash after the tool returns can be
+            // healed without retaining an unbounded duplicate in the journal.
+            $result = new ToolResult($this->bound($result->text, $context->sessionId, $call), $result->ok, $result->data);
+            $this->executions?->finish($id, $result);
             $this->renderer->tool($call, $result);
-            return $result;
+            return ['result' => $result, 'id' => $id];
         };
         if (count($batch) === 1) {
             return [$run($batch[0])];
         }
         $loop = EventLoop::current();
         $tasks = array_map(
-            static fn (ToolCall $call): Task => Task::spawn($loop, static fn (): ToolResult => $run($call)),
+            static fn (ToolCall $call): Task => Task::spawn($loop, static fn (): array => $run($call)),
             $batch,
         );
-        return array_map(static fn (Task $task): ToolResult => $task->await(), $tasks);
+        return array_map(static fn (Task $task): array => $task->await(), $tasks);
+    }
+
+    /**
+     * Heals a tool boundary left unfinished by a process crash. A saved result
+     * is replayed into the session; an invocation that was still running is
+     * represented as uncertain so the model can inspect before repeating it.
+     *
+     * @param list<Entry> $entries
+     */
+    private function recoverExecutions(string $sessionId, array &$entries): void
+    {
+        $recoveries = $this->executions?->recover($sessionId) ?? [];
+        if ($recoveries === []) {
+            return;
+        }
+        $calls = [];
+        $results = [];
+        foreach ($entries as $entry) {
+            $message = $entry->message();
+            if ($message === null) {
+                continue;
+            }
+            foreach ($message->toolCalls as $call) {
+                $calls[$call->id] = true;
+            }
+            if ($message->role === 'tool' && $message->toolCallId !== null) {
+                $results[$message->toolCallId] = true;
+            }
+        }
+        foreach ($recoveries as $execution) {
+            if (isset($results[$execution->callId])) {
+                // The session append won, but the journal acknowledgement did
+                // not; do not duplicate the result on the next resume.
+                $this->executions?->recordExecution($execution->id);
+                continue;
+            }
+            if (!isset($calls[$execution->callId])) {
+                $this->executions?->recordExecution($execution->id);
+                continue;
+            }
+            $result = match ($execution->status) {
+                'completed', 'failed' => new ToolResult($execution->result, $execution->ok ?? false, $execution->data),
+                default => new ToolResult(
+                    "The {$execution->name} call was interrupted before Bia recorded its result. "
+                    . 'Its side effects may have happened; inspect the current state before repeating it.',
+                    false,
+                    ['execution' => 'unknown'],
+                ),
+            };
+            $entries[] = $this->sessions->append($sessionId, Message::toolResult(
+                $execution->call(),
+                $result->text,
+                $result->ok,
+                $result->data === [] ? [] : ['data' => $result->data],
+            ));
+            $this->executions?->recordExecution($execution->id);
+            $notice = $execution->status === 'unknown'
+                ? "Recovered interrupted {$execution->name} call · inspect before repeating"
+                : "Recovered {$execution->name} result after interruption";
+            $this->inspection?->event($notice);
+            $this->renderer->notice($notice);
+        }
     }
 
     /**

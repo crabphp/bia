@@ -15,6 +15,7 @@ use Bia\Agent\Compactor;
 use Bia\Agent\Recap;
 use Bia\Agent\SystemPrompt;
 use Bia\Config\Config;
+use Bia\Contracts\ExecutionStore;
 use Bia\Contracts\Renderer;
 use Bia\Mcp\AuthStore;
 use Bia\Mcp\Manager;
@@ -779,6 +780,7 @@ final class Application
             options: $effort !== null ? ['reasoning_effort' => $effort] : [],
             inspection: $inspection,
             recap: new Recap($model, $modelName, $light),
+            executions: $store instanceof ExecutionStore ? $store : null,
         );
     }
 

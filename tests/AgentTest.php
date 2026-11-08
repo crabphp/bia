@@ -195,13 +195,73 @@ final class AgentTest extends TestCase
         );
     }
 
+    public function testAnInterruptedToolIsRecoveredWithoutBlindlyRepeatingIt(): void
+    {
+        [$store, $session] = $this->session();
+        $call = self::call('call-unknown', 'shell', ['command' => 'deploy']);
+        $store->append($session, Message::user('deploy it'));
+        $store->append($session, new Message('assistant', '', [$call]));
+        $store->start($session, $call); // The process dies while this call is running.
+
+        $model = new ScriptedModel([]);
+        $renderer = new FakeRenderer();
+        $agent = new Agent($model, 'fake', new Registry(), $store, $renderer, '/workspace', executions: $store);
+
+        self::assertSame('done', $agent->run($session, 'continue')->text);
+        $tools = array_values(array_filter($model->requests[0]->messages, static fn (Message $message): bool => $message->role === 'tool'));
+        self::assertCount(1, $tools);
+        self::assertStringContainsString('side effects may have happened', $tools[0]->text);
+        self::assertStringContainsString('inspect the current state', $tools[0]->text);
+        self::assertStringContainsString('Recovered interrupted shell call', implode('\n', $renderer->notices));
+        self::assertSame([], $store->recover($session), 'The uncertain boundary was recorded after recovery.');
+    }
+
+    public function testACompletedToolResultIsReplayedAfterTheSessionWriteWasInterrupted(): void
+    {
+        [$store, $session] = $this->session();
+        $call = self::call('call-completed', 'write_file', ['path' => 'a.txt']);
+        $store->append($session, Message::user('create it'));
+        $store->append($session, new Message('assistant', '', [$call]));
+        $execution = $store->start($session, $call);
+        $store->finish($execution, new ToolResult('created a.txt', true, ['path' => 'a.txt']));
+
+        $model = new ScriptedModel([]);
+        $agent = new Agent($model, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', executions: $store);
+
+        self::assertSame('done', $agent->run($session, 'continue')->text);
+        $tools = array_values(array_filter($model->requests[0]->messages, static fn (Message $message): bool => $message->role === 'tool'));
+        self::assertCount(1, $tools);
+        self::assertSame('created a.txt', $tools[0]->text);
+        self::assertSame([], $store->recover($session));
+    }
+
+    public function testRecoveryDoesNotDuplicateAResultAlreadyInTheSession(): void
+    {
+        [$store, $session] = $this->session();
+        $call = self::call('call-recorded', 'write_file', ['path' => 'a.txt']);
+        $store->append($session, Message::user('create it'));
+        $store->append($session, new Message('assistant', '', [$call]));
+        $store->append($session, Message::toolResult($call, 'created a.txt', true));
+        $execution = $store->start($session, $call);
+        $store->finish($execution, new ToolResult('created a.txt', true));
+
+        $model = new ScriptedModel([]);
+        $agent = new Agent($model, 'fake', new Registry(), $store, new FakeRenderer(), '/workspace', executions: $store);
+
+        self::assertSame('done', $agent->run($session, 'continue')->text);
+        $tools = array_values(array_filter($model->requests[0]->messages, static fn (Message $message): bool => $message->role === 'tool'));
+        self::assertCount(1, $tools);
+        self::assertSame('created a.txt', $tools[0]->text);
+        self::assertSame([], $store->recover($session));
+    }
+
     public function testToolTurnIsCheckpointedBeforeTheFinalTurn(): void
     {
         [$store, $session] = $this->session();
         $model = new ScriptedModel([[self::call('call-1', 'echo', ['value' => 'hello'])]]);
         $renderer = new FakeRenderer();
         $registry = (new Registry())->add(new EchoTool());
-        $agent = new Agent($model, 'fake', $registry, $store, $renderer, '/workspace');
+        $agent = new Agent($model, 'fake', $registry, $store, $renderer, '/workspace', executions: $store);
 
         $result = $agent->run($session, 'run the tool');
         $messages = self::messages($store, $session);
@@ -212,6 +272,7 @@ final class AgentTest extends TestCase
         self::assertSame(2, $model->calls);
         self::assertSame('done', $renderer->text);
         self::assertSame(['echo'], $renderer->tools, 'The renderer did not hear about the tool result.');
+        self::assertSame([], $store->recover($session), 'A completed tool leaves no pending execution.');
     }
 
     public function testReadOnlyCallsRunConcurrently(): void

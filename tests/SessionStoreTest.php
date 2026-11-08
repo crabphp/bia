@@ -8,11 +8,50 @@ use Bia\Contracts\Compaction;
 use Bia\Contracts\Entry;
 use Bia\Contracts\Message;
 use Bia\Contracts\ToolCall;
+use Bia\Contracts\ToolResult;
 use Bia\Session\SqliteStore;
 use PHPUnit\Framework\TestCase;
 
 final class SessionStoreTest extends TestCase
 {
+    public function testUnrecordedToolResultSurvivesAStoreRestart(): void
+    {
+        $path = $this->path();
+        $store = new SqliteStore($path);
+        $session = $store->create('/workspace', 'test-model');
+        $call = new ToolCall('call-1', 'write_file', ['path' => 'a.txt']);
+        $execution = $store->start($session, $call);
+        $store->finish($execution, new ToolResult('created a.txt', true, ['path' => 'a.txt']));
+        $store->close();
+
+        $reopened = new SqliteStore($path);
+        $found = $reopened->recover($session);
+
+        self::assertCount(1, $found);
+        self::assertSame($execution, $found[0]->id);
+        self::assertSame('completed', $found[0]->status);
+        self::assertSame('created a.txt', $found[0]->result);
+        self::assertSame(['path' => 'a.txt'], $found[0]->data);
+
+        $reopened->recordExecution($execution);
+        self::assertSame([], $reopened->recover($session));
+    }
+
+    public function testRunningToolIsMarkedUnknownOnRecovery(): void
+    {
+        $store = new SqliteStore($this->path());
+        $session = $store->create('/workspace', 'test-model');
+        $call = new ToolCall('call-2', 'shell', ['command' => 'deploy']);
+        $execution = $store->start($session, $call);
+
+        $found = $store->recover($session);
+
+        self::assertCount(1, $found);
+        self::assertSame($execution, $found[0]->id);
+        self::assertSame('unknown', $found[0]->status);
+        self::assertFalse($found[0]->ok);
+    }
+
     public function testEntriesAreDurableAndOrdered(): void
     {
         $path = $this->path();

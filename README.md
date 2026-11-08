@@ -38,8 +38,10 @@ bia "find why the login test fails and fix it"
 - **Clean subprocesses:** commands run in their own process group, so nothing
   a command starts in the background outlives it.
 - **Resumable sessions** stored in SQLite as an append-only log, with fork,
-  listing and JSONL export. A session cut off mid-turn by a crash is repaired
-  when resumed.
+  listing and JSONL export. Tool executions are journaled before they start and
+  recorded after their result is saved, so a crash replays a saved result or
+  tells the model that side effects may be uncertain instead of losing the
+  boundary.
 - **Safe project settings:** a repository's `.agents/bia.json` is read as data,
   never run, and cannot redirect the model or its API key.
 - **Scriptable:** `--json` emits every event as a JSON line.
@@ -593,8 +595,11 @@ and how to use its tools. Your `prompt.system` leads it.
 Sessions live in `~/.bia/bia.sqlite` as an append-only log: each
 entry (a message, a tool result, a compaction) points at the one before it,
 and a session is the path from its newest entry back. Bia stores completed
-messages and tool results, not each streamed token. Messages are kept in no
-provider's format, so the same session works with any adapter.
+messages and tool results, not each streamed token. A separate execution
+journal writes a tool's start before it runs and marks it recorded only after
+the result joins the session; resuming repairs a saved result and marks an
+interrupted call uncertain. Messages are kept in no provider's format, so the
+same session works with any adapter.
 
 ```sh
 bia sessions                           # id, last used, entries, model, first prompt
