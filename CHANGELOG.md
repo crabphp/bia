@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- One line installs Bia: `curl -fsSL
+  https://raw.githubusercontent.com/crabphp/bia/main/install.sh | sh` finds
+  the system's build, checks it against `SHA256SUMS`, and says if its folder
+  is not on PATH.
 - A stream that fails midway is tried again: any answer text already shown
   is closed under a notice and the answer starts over. Before, one mid-stream
   failure ended the turn.

@@ -65,47 +65,14 @@ bia "find why the login test fails and fix it"
 
 ## Install
 
-Each [release](https://github.com/crabphp/bia/releases/latest) has Bia as
-one file with PHP inside, for `linux-x86_64`, `linux-aarch64`,
-`macos-x86_64` and `macos-aarch64`. No PHP or Composer installation needed.
-
-### Linux
-
 ```sh
-mkdir -p "$HOME/.local/bin"
-curl -fsSL https://github.com/crabphp/bia/releases/latest/download/bia-linux-x86_64.tar.gz | tar xz -C "$HOME/.local/bin"
-export PATH="$HOME/.local/bin:$PATH"
-bia doctor
+curl -fsSL https://raw.githubusercontent.com/crabphp/bia/main/install.sh | sh
 ```
 
-For ARM64 Linux, use `bia-linux-aarch64.tar.gz` instead. Add the `export`
-line to your shell's startup file to keep Bia on your PATH.
-
-### macOS
-
-In Terminal, run this to install for Apple Silicon or Intel automatically:
-
-```sh
-mkdir -p "$HOME/.local/bin"
-arch="$(uname -m)"
-[ "$arch" = "arm64" ] && arch="aarch64"
-curl -fsSL "https://github.com/crabphp/bia/releases/latest/download/bia-macos-${arch}.tar.gz" \
-  | tar xz -C "$HOME/.local/bin"
-export PATH="$HOME/.local/bin:$PATH"
-bia doctor
-```
-
-Add this line to `~/.zshrc` (macOS's default shell) so new terminals can
-find Bia too:
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-With [Homebrew](https://brew.sh), install the search tool with
-`brew install ripgrep`. If Git is missing, run `xcode-select --install`.
-Then follow [Quick start](#quick-start) to set your API key and run Bia in
-your project.
+Linux or macOS, Intel or ARM, no PHP needed. It installs the latest release
+to `~/.local/bin` (or `$BIA_INSTALL_DIR`), checked against its
+`SHA256SUMS`, and says if that is not on your PATH. Then run `bia doctor`,
+and follow [Quick start](#quick-start).
 
 ### PHAR
 
