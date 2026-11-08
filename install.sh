@@ -27,8 +27,9 @@ main() {
     trap 'rm -rf "$tmp"' EXIT
 
     echo "Downloading $file..."
-    curl -fsSL -o "$tmp/$file" "$repo/$file" || fail "could not download $repo/$file"
-    curl -fsSL -o "$tmp/SHA256SUMS" "$repo/SHA256SUMS" || fail "could not download SHA256SUMS"
+    # GitHub's downloads fail now and then (a 504): try again before giving up.
+    curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/$file" "$repo/$file" || fail "could not download $repo/$file"
+    curl -fsSL --retry 3 --retry-delay 2 -o "$tmp/SHA256SUMS" "$repo/SHA256SUMS" || fail "could not download SHA256SUMS"
 
     want="$(awk -v f="$file" '$2 == f { print $1 }' "$tmp/SHA256SUMS")"
     if command -v sha256sum > /dev/null; then
