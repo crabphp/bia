@@ -188,6 +188,7 @@ final readonly class Agent
                     'finish_reason' => $result->finishReason,
                     'model' => $result->model !== '' ? $result->model : $this->modelName,
                     'reasoning_field' => $result->reasoningField,
+                    'responses_output' => $result->raw['_bia_responses_output'] ?? null,
                 ]),
             ));
             if ($result->toolCalls === []) {

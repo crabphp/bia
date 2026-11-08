@@ -103,6 +103,7 @@ final class ModelTest extends TestCase
         $body = json_decode((string) $request->getBody(), true);
         self::assertArrayHasKey('input', $body);
         self::assertArrayNotHasKey('messages', $body);
+        self::assertFalse($body['store']);
         self::assertSame(['role' => 'user', 'content' => 'hi'], $body['input'][0]);
         self::assertSame(['effort' => 'high'], $body['reasoning']);
     }
@@ -158,6 +159,61 @@ final class ModelTest extends TestCase
         } finally {
             @unlink($path);
         }
+    }
+
+    public function testResponsesInputReplaysCompletedOutputItemsForReasoningToolTurns(): void
+    {
+        $call = new \Bia\Contracts\ToolCall('call_1', 'look', ['path' => 'a.txt']);
+        $reasoning = [
+            'type' => 'reasoning',
+            'id' => 'rs_1',
+            'summary' => [],
+            'encrypted_content' => 'opaque-reasoning',
+        ];
+        $function = [
+            'type' => 'function_call',
+            'id' => 'fc_1',
+            'call_id' => 'call_1',
+            'name' => 'look',
+            'arguments' => '{"path":"a.txt"}',
+        ];
+
+        $input = OpenAiCompatibleModel::responsesInput([
+            Message::user('look'),
+            new Message('assistant', '', [$call], meta: ['responses_output' => [$reasoning, $function]]),
+            Message::toolResult($call, 'contents', true),
+        ]);
+
+        self::assertSame([$reasoning, $function], [$input[1], $input[2]]);
+        self::assertSame(['type' => 'function_call_output', 'call_id' => 'call_1', 'output' => 'contents'], $input[3]);
+    }
+
+    public function testResponsesJsonWrapperIsUnwrapped(): void
+    {
+        $http = new FakeClient([
+            'POST https://proxy.example/v1/responses' => FakeClient::response(
+                200,
+                json_encode(['response' => [
+                    'status' => 'completed',
+                    'output' => [[
+                        'type' => 'message',
+                        'content' => [['type' => 'output_text', 'text' => 'hello']],
+                    ]],
+                    'usage' => ['input_tokens' => 1, 'output_tokens' => 1, 'total_tokens' => 2],
+                ]], JSON_THROW_ON_ERROR),
+                ['Content-Type' => 'application/json'],
+            ),
+        ]);
+        $model = new OpenAiCompatibleModel($http, 'https://proxy.example/v1', 'key', 'test', wireApi: OpenAiCompatibleModel::RESPONSES);
+
+        $result = Loop::run(static fn ($cancellation) => $model->stream(
+            new ModelRequest('test', [Message::user('hi')]),
+            static function (): void {},
+            $cancellation,
+        ));
+
+        self::assertSame('hello', $result->text);
+        self::assertSame(['input' => 1, 'output' => 1, 'total' => 2], $result->usage);
     }
 
     public function testTheReasoningEffortIsSentWithTheRequest(): void

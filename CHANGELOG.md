@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 (2026-11-09)
 
 - One line installs Bia: `curl -fsSL
   https://raw.githubusercontent.com/crabphp/bia/main/install.sh | sh` finds
@@ -21,6 +21,12 @@
 - Responses function tools explicitly preserve optional MCP fields.
 - Providers may select the OpenAI Responses wire format with `wire_api`;
   tdaproxy is configured that way in the user's global config.
+- Responses tool turns preserve and replay completed output items, including
+  encrypted reasoning, so reasoning models can continue after tool calls.
+- Responses requests use stateless mode and accept wrapped JSON responses and
+  custom `chat/completions` endpoint prefixes.
+
+## Unreleased
 
 ## 0.1.1 (2026-11-06)
 

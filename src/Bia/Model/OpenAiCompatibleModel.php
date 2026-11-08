@@ -187,9 +187,11 @@ final readonly class OpenAiCompatibleModel implements Model
      */
     private function requestEndpoint(): string
     {
-        return $this->wireApi === self::RESPONSES && rtrim($this->endpoint, '/') === 'chat/completions'
-            ? 'responses'
-            : $this->endpoint;
+        $endpoint = rtrim($this->endpoint, '/');
+        if ($this->wireApi === self::RESPONSES && ($endpoint === 'chat/completions' || str_ends_with($endpoint, '/chat/completions'))) {
+            return substr($endpoint, 0, -strlen('chat/completions')) . 'responses';
+        }
+        return $this->endpoint;
     }
 
     /**
@@ -203,6 +205,11 @@ final readonly class OpenAiCompatibleModel implements Model
             'model' => $request->model !== '' ? $request->model : $defaultModel,
             'input' => self::responsesInput($request->messages),
             'stream' => true,
+            // Bia replays its own conversation history. Stateless Responses
+            // calls return encrypted reasoning items that can safely be
+            // replayed on the next tool turn instead of relying on a remote
+            // previous_response_id.
+            'store' => false,
         ];
         if ($request->tools !== []) {
             $payload['tools'] = array_map(static function (ToolDefinition $tool): array {
@@ -253,6 +260,20 @@ final readonly class OpenAiCompatibleModel implements Model
                 continue;
             }
 
+            // Responses reasoning and function-call items must be replayed in
+            // the exact order returned by the provider. The encrypted
+            // reasoning item is what makes a subsequent tool turn valid for
+            // Codex and other reasoning models.
+            if ($message->role === 'assistant' && is_array($message->meta['responses_output'] ?? null)) {
+                $output = array_values(array_filter($message->meta['responses_output'], 'is_array'));
+                if ($output !== []) {
+                    foreach ($output as $item) {
+                        $input[] = $item;
+                    }
+                    continue;
+                }
+            }
+
             if ($message->role === 'assistant' && $message->toolCalls !== []) {
                 if ($message->text !== '') {
                     $input[] = ['role' => 'assistant', 'content' => $message->text];
@@ -292,24 +313,33 @@ final readonly class OpenAiCompatibleModel implements Model
      */
     private function responseJson(array $data, callable $emit): ModelResult
     {
-        $text = self::responsesText($data);
+        // Some compatible gateways wrap a non-streaming response in a
+        // top-level `response` object, just as they do for a completed SSE
+        // event. Normalize against the inner response while retaining the
+        // original body as the raw result.
+        $body = is_array($data['response'] ?? null) ? $data['response'] : $data;
+        $text = self::responsesText($body);
         if ($text !== '') {
             $emit(ModelEvent::text($text));
         }
-        [$reasoning, $field] = self::responsesReasoning($data);
+        [$reasoning, $field] = self::responsesReasoning($body);
         if ($reasoning !== '') {
             $emit(ModelEvent::reasoning($reasoning));
         }
-        $usage = self::usage($data['usage'] ?? $data['response']['usage'] ?? null);
+        $usage = self::usage($body['usage'] ?? $data['usage'] ?? null);
         if ($usage !== []) {
             $emit(ModelEvent::usage($usage));
         }
-        $toolCalls = self::responsesToolCalls($data);
+        $toolCalls = self::responsesToolCalls($body);
         foreach ($toolCalls as $toolCall) {
             $emit(ModelEvent::toolCall($toolCall->toArray()));
         }
-        $finishReason = self::responsesFinishReason($data);
+        $finishReason = self::responsesFinishReason($body);
         $emit(ModelEvent::completed(['finish_reason' => $finishReason, 'usage' => $usage]));
+        $output = self::responsesOutput($body);
+        if ($output !== []) {
+            $data['_bia_responses_output'] = $output;
+        }
         return new ModelResult($text, $finishReason, $usage, $toolCalls, $data, $reasoning, reasoningField: $field);
     }
 
@@ -334,6 +364,8 @@ final readonly class OpenAiCompatibleModel implements Model
         $usage = [];
         $finishReason = 'stop';
         $raw = [];
+        /** @var array<string, array<string, mixed>> $outputItems */
+        $outputItems = [];
         /** @var array<string, array{id: string, name: string, arguments: string}> $toolBuffers */
         $toolBuffers = [];
         foreach ($response->events() as $event) {
@@ -373,6 +405,7 @@ final readonly class OpenAiCompatibleModel implements Model
             self::collectResponsesTool($data, $type, $toolBuffers);
             if (isset($data['response']) && is_array($data['response'])) {
                 self::collectResponsesOutput($data['response'], $toolBuffers);
+                self::collectResponsesItems(self::responsesOutput($data['response']), $outputItems);
                 $responseData = $data['response'];
                 if ($usage === []) {
                     $usage = self::usage($responseData['usage'] ?? null);
@@ -387,6 +420,9 @@ final readonly class OpenAiCompatibleModel implements Model
                     $emit(ModelEvent::reasoning($completeReasoning));
                 }
                 $finishReason = self::responsesFinishReason($responseData);
+            }
+            if ($type === 'response.output_item.done' && is_array($data['item'] ?? null)) {
+                self::collectResponsesItems([$data['item']], $outputItems);
             }
             if (isset($data['usage']) && is_array($data['usage'])) {
                 $usage = self::usage($data['usage']);
@@ -411,6 +447,9 @@ final readonly class OpenAiCompatibleModel implements Model
             $emit(ModelEvent::usage($usage));
         }
         $emit(ModelEvent::completed(['finish_reason' => $finishReason, 'usage' => $usage]));
+        if ($outputItems !== []) {
+            $raw['_bia_responses_output'] = array_values($outputItems);
+        }
         return new ModelResult($text, $finishReason, $usage, $toolCalls, $raw, $reasoning, reasoningField: $field);
     }
 
@@ -458,6 +497,41 @@ final readonly class OpenAiCompatibleModel implements Model
             }
         }
         return $text;
+    }
+
+    /**
+     * Returns complete Responses output items from either a response object or
+     * a proxy wrapper around one.
+     *
+     * @param array<string, mixed> $data
+     * @return list<array<string, mixed>>
+     */
+    private static function responsesOutput(array $data): array
+    {
+        $output = $data['output'] ?? null;
+        if (!is_array($output) || $output === []) {
+            $output = $data['response']['output'] ?? [];
+        }
+        if (!is_array($output)) {
+            return [];
+        }
+        return array_values(array_filter($output, 'is_array'));
+    }
+
+    /**
+     * Keeps the completed form of each output item. Streaming Responses emits
+     * an incomplete `added` item before its completed `done` item, so the item
+     * id is used to replace the earlier form while retaining output order.
+     *
+     * @param list<array<string, mixed>> $items
+     * @param array<string, array<string, mixed>> $outputItems
+     */
+    private static function collectResponsesItems(array $items, array &$outputItems): void
+    {
+        foreach ($items as $index => $item) {
+            $key = (string) ($item['id'] ?? count($outputItems) . ':' . $index);
+            $outputItems[$key] = $item;
+        }
     }
 
     /**
