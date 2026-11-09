@@ -1,11 +1,14 @@
 # Changelog
 
-## Unreleased
+## 0.1.3 (2026-11-10)
 
 - Commands run in the user's own shell (`$SHELL`, bash or zsh) with their
   aliases and functions, as at their prompt: `ssh.work` from `~/.zshrc`
   works. They are taken once a session (and again by `/reload`) from an
   interactive shell, which sees `BIA=1`, not read on every call.
+- Tool calls are journaled before they run and once their result is saved:
+  a session cut off by a crash resumes with a finished call's saved result,
+  or tells the model a call that was running may have had side effects.
 
 ## 0.1.2 (2026-11-09)
 
