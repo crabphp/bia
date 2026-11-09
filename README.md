@@ -101,14 +101,11 @@ is updated with `git pull` and `composer install` instead.
 
 ### From source with Composer
 
-This option needs Git, Composer, PHP 8.4, and a checkout of Crab beside Bia;
-Bia's `composer.json` loads the framework by path.
+This option needs Git, Composer and PHP 8.4. Composer installs Crab from
+Packagist at the version `composer.lock` pins.
 
 ```sh
-mkdir -p crabphp && cd crabphp
-git clone https://github.com/crabphp/framework.git
 git clone https://github.com/crabphp/bia.git
-cd framework && composer install && cd ..
 cd bia && composer install
 
 # Put it on your PATH

@@ -12,17 +12,6 @@
     "require-dev": {
         "phpunit/phpunit": "^13.4"
     },
-    "repositories": [
-        {
-            "type": "path",
-            "url": "../framework",
-            "options": {
-                "symlink": true
-            }
-        }
-    ],
-    "minimum-stability": "dev",
-    "prefer-stable": true,
     "bin": [
         "bin/bia"
     ],

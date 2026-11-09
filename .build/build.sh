@@ -24,11 +24,10 @@ spc="${SPC:-spc}"
 
 phar() {
     rm -rf "$dist/install" && mkdir -p "$dist/install"
-    cp -R "$root/bin" "$root/src" "$root/composer.json" "$dist/install/"
+    cp -R "$root/bin" "$root/src" "$root/composer.json" "$root/composer.lock" "$dist/install/"
     cd "$dist/install"
-    # The framework from Packagist, at the version composer.json asks for, not a local checkout.
-    composer config --unset repositories
-    composer update --no-dev --prefer-dist --classmap-authoritative --no-interaction --no-progress --quiet
+    # The versions composer.lock pins, the ones the tests ran against.
+    composer install --no-dev --prefer-dist --classmap-authoritative --no-interaction --no-progress --quiet
     composer show crabphp/framework | grep -E '^versions'
     cd "$root"
     php -d phar.readonly=0 .build/build.php "$dist/install" "$dist/bia.phar"

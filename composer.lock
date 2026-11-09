@@ -4,15 +4,21 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "31500fa738f23979edccd23c011b3178",
+    "content-hash": "b5f10effb525cbc7420a582489b5dd75",
     "packages": [
         {
             "name": "crabphp/framework",
-            "version": "dev-main",
+            "version": "v0.6.4",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/crabphp/framework.git",
+                "reference": "7d40a73964ff0d29eb5d01a009e735e6bee689e7"
+            },
             "dist": {
-                "type": "path",
-                "url": "../framework",
-                "reference": "ce7e6fa7c6ee4d13fef7204ffc706c292454efdd"
+                "type": "zip",
+                "url": "https://api.github.com/repos/crabphp/framework/zipball/7d40a73964ff0d29eb5d01a009e735e6bee689e7",
+                "reference": "7d40a73964ff0d29eb5d01a009e735e6bee689e7",
+                "shasum": ""
             },
             "require": {
                 "ext-mbstring": "*",
@@ -51,47 +57,15 @@
                 }
             },
             "autoload": {
-                "psr-4": {
-                    "Crab\\": "src/"
-                },
                 "files": [
                     "src/Config/helpers.php",
                     "src/helpers.php"
-                ]
-            },
-            "autoload-dev": {
+                ],
                 "psr-4": {
-                    "Crab\\Engine\\Tests\\": "tests/Engine/",
-                    "Crab\\Tests\\": "tests/"
+                    "Crab\\": "src/"
                 }
             },
-            "scripts": {
-                "test": [
-                    "@php vendor/bin/phpunit"
-                ],
-                "test:linux": [
-                    "tests/linux/run.sh"
-                ],
-                "soak": [
-                    "python3 benchmarks/soak.py"
-                ],
-                "docs": [
-                    "Composer\\Config::disableProcessTimeout",
-                    "@php .claude/skills/sync-docs/scripts/serve.php"
-                ],
-                "docs:check": [
-                    "@php .claude/skills/sync-docs/scripts/check.php"
-                ],
-                "format": [
-                    "@php vendor/bin/mago fmt"
-                ],
-                "format:check": [
-                    "@php vendor/bin/mago fmt --check"
-                ],
-                "lint": [
-                    "@php vendor/bin/mago lint"
-                ]
-            },
+            "notification-url": "https://packagist.org/downloads/",
             "license": [
                 "MIT"
             ],
@@ -102,10 +76,11 @@
                 }
             ],
             "description": "A minimal PHP 8.4 web framework on the Crab networking engine",
-            "transport-options": {
-                "symlink": true,
-                "relative": true
-            }
+            "support": {
+                "issues": "https://github.com/crabphp/framework/issues",
+                "source": "https://github.com/crabphp/framework/tree/v0.6.4"
+            },
+            "time": "2026-11-09T21:31:26+00:00"
         },
         {
             "name": "psr/clock",
@@ -2575,9 +2550,9 @@
         }
     ],
     "aliases": [],
-    "minimum-stability": "dev",
+    "minimum-stability": "stable",
     "stability-flags": {},
-    "prefer-stable": true,
+    "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
         "php": "^8.4",

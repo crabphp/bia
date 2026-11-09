@@ -46,11 +46,9 @@ jobs:
           coverage: none
       - name: Install ripgrep, which the search tool runs
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends ripgrep
-      - name: Install, with the framework from Packagist
+      - name: Install what composer.lock pins
         run: |
-          # composer.json also points at a local ../framework checkout, which CI has not got.
-          composer config --unset repositories
-          composer update crabphp/framework --no-interaction --no-progress
+          composer install --no-interaction --no-progress
           composer show crabphp/framework | grep -E '^versions'
       - run: composer test
 
