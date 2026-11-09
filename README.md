@@ -52,9 +52,9 @@ bia "find why the login test fails and fix it"
 
 - Linux or macOS. On Windows, run Bia in
   [WSL](https://learn.microsoft.com/windows/wsl/install).
-- From source or the PHAR, PHP 8.4 with `pdo_sqlite` and `mbstring`; `pcntl`
-  and `posix` are recommended (Ctrl-C handling and process groups), and
-  `readline` gives line editing and history. The binary has its own PHP.
+- The prebuilt binary includes PHP 8.4. A source checkout needs PHP 8.4 with
+  `pdo_sqlite` and `mbstring`; `pcntl` and `posix` are recommended (Ctrl-C
+  handling and process groups), and `readline` gives line editing and history.
 - `git` for `apply_patch` and `git_diff`.
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for `search`;
   `list_files` falls back to PHP without it.
@@ -67,42 +67,54 @@ bia "find why the login test fails and fix it"
 
 ## Install
 
+### Recommended: prebuilt binary
+
+No PHP or Composer is needed:
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/crabphp/bia/main/install.sh | sh
 ```
 
-Linux or macOS, Intel or ARM, no PHP needed. It installs the latest release
-to `~/.local/bin` (or `$BIA_INSTALL_DIR`), checked against its
-`SHA256SUMS`, and says if that is not on your PATH. Then run `bia doctor`,
-and follow [Quick start](#quick-start).
+The installer supports Linux and macOS on Intel or ARM. It installs the latest
+release to `~/.local/bin` (or `$BIA_INSTALL_DIR`) and checks it against the
+release's `SHA256SUMS`. If it says that directory is not on your `PATH`, run
+this once in the current shell and add the same line to your shell's startup
+file:
 
-### PHAR
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+```
 
-Each release also has `bia.phar`, for a PHP 8.4 of your own: `php bia.phar`.
+Check the installation, then follow [Quick start](#quick-start):
+
+```sh
+bia doctor
+```
 
 ### Updating
 
-`bia update` replaces either with the latest release's, checked against its
-`SHA256SUMS` and run once before it takes the old one's place. A
-conversation says when one is out, `· Bia 0.2.0 is out · bia update`: it asks
-GitHub in the background once its first screen is drawn, at most once a
-day, and never makes Bia wait. `update.check => false` turns that off; Bia
-run from source never asks.
+For an installed binary, `bia update` downloads the latest release, checks its
+`SHA256SUMS`, tests it once, and then replaces the old file. Bia can also check
+GitHub in the background once a day and show the update command when a release
+is available; set `update.check => false` to turn that off. A source checkout
+is updated with `git pull` and `composer install` instead.
 
-### From source
+### From source with Composer
 
-A checkout sits beside the framework, which its `composer.json` loads by
-path.
+This option needs Git, Composer, PHP 8.4, and a checkout of Crab beside Bia;
+Bia's `composer.json` loads the framework by path.
 
 ```sh
-mkdir crabphp && cd crabphp
-git clone git@github.com:crabphp/framework.git
-git clone git@github.com:crabphp/bia.git
+mkdir -p crabphp && cd crabphp
+git clone https://github.com/crabphp/framework.git
+git clone https://github.com/crabphp/bia.git
 cd framework && composer install && cd ..
 cd bia && composer install
 
 # Put it on your PATH
-ln -s "$PWD/bin/bia" ~/.local/bin/bia
+mkdir -p ~/.local/bin
+ln -sfn "$PWD/bin/bia" ~/.local/bin/bia
+export PATH="$HOME/.local/bin:$PATH"
 
 bia doctor
 ```
@@ -151,7 +163,7 @@ bia config [--json]                 Show the merged configuration, secrets redac
 bia doctor                          Check PHP, tools, the model and MCP servers
 bia init                            Create .agents/bia.json in this directory
 bia init --global                   Create ~/.bia/config.php with every setting
-bia update                          Install the latest release, for the binary and bia.phar
+bia update                          Install the latest release
 ```
 
 | Option | Effect |
