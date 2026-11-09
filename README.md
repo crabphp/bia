@@ -26,6 +26,9 @@ bia "find why the login test fails and fix it"
   are exact text replacements, the format models get right most often.
 - **Project instructions:** `AGENTS.md` (or `CLAUDE.md`) files from the
   repository root down to where you are are put in the system prompt.
+- **Memory:** Bia keeps a diary and what it learns about you across every
+  project, and each project's own memories, as plain files; a rule you lay
+  down ("always …", "never …") is written into the project's `AGENTS.md`.
 - **Long sessions:** before a request would overflow the model's context
   window, older history is summarized automatically; `/compact` does it on
   demand.
@@ -212,6 +215,7 @@ completes.
 | `/resume <id>` | Continue that session; the start of its id is enough |
 | `/new`, `/clear` | Start a new session |
 | `/compact` | Summarize the conversation so far now |
+| `/memory` | What Bia keeps between sessions, and where: the facts about you, the diary's days, this project's memories, and the file its rules go in |
 | `/reload` | Read the config, instructions (`AGENTS.md`) and MCP servers again, on the same session, model and effort, without restarting. Background commands go on. A config with an error leaves everything as it was. For new Bia code, quit and `bia resume` |
 | `/stats` | Show or hide live stats at the top right: drawing (fps, ms a frame), first token and tokens a second, tokens in and out, memory |
 | `/render [normal\|smooth\|power]` | How answers appear: `normal` as the text arrives; `smooth` evened out to a steady flow of characters; `power` each character dropping into place and landing with a flash (fullscreen). `tui.render` in your config sets the default |
@@ -320,6 +324,7 @@ whose permission is `ask` is declined unless `--yes` is given.
 | `write_file` | write | Creates a file or replaces a whole one, atomically, keeping an existing file's mode |
 | `apply_patch` | write | Checks, then applies, a unified diff with `git apply` |
 | `shell` | shell | Runs `/bin/sh -c` in the workspace, with a timeout (default 120 s) |
+| `memory` | write | Keeps and recalls what is worth knowing later: a diary entry, a fact about you, a project memory, a rule for the project's `AGENTS.md`; see [Memory](#memory) |
 
 Every path is resolved inside the workspace, the directory Bia was started
 in; `..` and absolute paths are refused. Commands get your environment minus
@@ -598,6 +603,39 @@ Bia puts instruction files in its system prompt, general first:
 Together they are capped at 32 KB. `bia doctor` lists the files that apply.
 The prompt also says where Bia runs (directory, platform, date, git branch)
 and how to use its tools. Your `prompt.system` leads it.
+
+## Memory
+
+Bia keeps what is worth knowing in a later session, as it comes up and
+without asking. All of it is plain text under `~/.bia` that you can read,
+edit or delete; nothing of it is in your repository.
+
+- **A diary**, shared by every project: `~/.bia/diary/2026-11-10.md`, a page
+  a day, one line an entry with the time and the project. Entries are only
+  ever added.
+- **About you**: `~/.bia/diary/ABOUT.md`, the standing facts drawn from the
+  diary, one line each: how you like answers, what you prefer. A fact is
+  replaced in place when it changes.
+- **A project's memories**: `~/.bia/projects/<project>/memory/`, a file a
+  memory and a `MEMORY.md` index of them: decisions and why, constraints,
+  where things outside the code live. One repository has one memory, shared
+  by its folders and worktrees. A memory no longer true or needed is
+  replaced or forgotten.
+- **Rules**: say "always run the tests before a commit", "never push to
+  main" or "you must …" and Bia writes the rule into the project's
+  `AGENTS.md` (or its `CLAUDE.md`), under `## Rules`. It is then an
+  instruction, read in every session like the rest of that file, and yours
+  to commit. Bia is told to do so beside any message with such a word in it;
+  it leaves alone what only concerns the task at hand.
+
+Each session starts with `ABOUT.md`, the diary's last two pages and the
+project's index in the prompt, a few KB at most. A memory's text and older
+pages are read, or searched, when they are needed. Subagents get none of it.
+What is kept is sent to the model you use, as the conversation is: Bia is
+told never to keep a secret or a key.
+
+`/memory` lists what is kept and where. Set `'memory' => ['enabled' => false]`
+in your config to turn it all off: no tool, nothing in the prompt.
 
 ## Sessions and compaction
 

@@ -8,6 +8,8 @@ use Bia\Agent\Agent;
 use Bia\Agent\Inspection;
 use Bia\Agent\AgentTool;
 use Bia\Agent\Subagents;
+use Bia\Memory\Memory;
+use Bia\Memory\MemoryTool;
 use Bia\Session\MemoryStore;
 use Bia\Terminal\Watched;
 use Bia\Tui\Transcript;
@@ -505,10 +507,13 @@ final class Application
             // which keeps the process, the session, the screen and the background commands.
             $setup = static function (Config $config) use (&$reads, $options, $ask, $choose, $workspace, $outputs, $shells, $subagents, $http, $store, $renderer, $inspection, $record): array {
                 $runner = new ProcessRunner($config->secrets());
-                $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
+                $memory = self::memory($config, $workspace);
+                // Subagents get the instructions alone: memory is the main agent's to read and keep.
+                $instructions = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
+                $system = $memory === null ? $instructions : $instructions . "\n\n" . $memory->prompt();
                 $mcp = self::mcp($config, $runner, $http, $workspace->root());
                 $shells->use($runner);
-                $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs, $shells, $choose);
+                $tools = self::tools($config, $options, $ask, true, $workspace, $runner, $outputs, $shells, $choose, $memory);
                 if ($mcp['manager'] !== null) {
                     $tools->from($mcp['manager']->tools(...));
                 }
@@ -519,11 +524,12 @@ final class Application
                     ->add(new ListFilesTool($workspace, $runner))
                     ->add(new SearchTool($workspace, $runner))
                     ->add(new GitDiffTool($workspace, $runner));
-                $subagents->system($system);
+                $subagents->system($instructions);
                 return [
                     'system' => $system,
                     'mcp' => $mcp,
-                    'agent' => static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection, $record),
+                    'memory' => $memory,
+                    'agent' => static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection, $record, $memory !== null),
                 ];
             };
             $built = $setup($config);
@@ -547,6 +553,7 @@ final class Application
                 images: new \Bia\Terminal\Images($runner, dirname($config->databasePath()) . '/images', $workspace->root()),
                 inspection: $inspection,
                 subagents: $subagents,
+                memory: $built['memory'],
                 update: self::updates($config),
                 reload: static function (Config $current) use ($overrides, $setup): array {
                     // Read again as at the start, on the model and effort chosen since.
@@ -563,7 +570,9 @@ final class Application
             $loop->execute($chat->run(...));
             return 0;
         }
-        $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory());
+        $memory = self::memory($config, $workspace);
+        $system = SystemPrompt::build((string) $config->get('prompt.system', ''), $workspace->root(), $config->configDirectory())
+            . ($memory === null ? '' : "\n\n" . $memory->prompt());
         $mcp = self::mcp($config, $runner, $http, $workspace->root());
         if ($resume === '') {
             throw new \RuntimeException('Give bia resume a session id; bia sessions lists them.');
@@ -603,8 +612,8 @@ final class Application
             $answer = trim((string) $prompt->ask(($list !== '' ? $list . "\n" : '') . 'Number, your own answer, or Enter to skip: '));
             return ctype_digit($answer) ? ($choices[(int) $answer - 1]['label'] ?? null) : ($answer === '' ? null : $answer);
         };
-        $tools = self::tools($config, $options, $ask, $canPrompt, $workspace, $runner, $outputs, choose: $choose);
-        $agent = self::agent($config, $http, $tools, $store, new AnsiRenderer($json), $workspace, $outputs, record: $record);
+        $tools = self::tools($config, $options, $ask, $canPrompt, $workspace, $runner, $outputs, choose: $choose, memory: $memory);
+        $agent = self::agent($config, $http, $tools, $store, new AnsiRenderer($json), $workspace, $outputs, record: $record, reminds: $memory !== null);
         $manager = $mcp['manager'];
         if ($manager !== null) {
             $tools->from($manager->tools(...));
@@ -710,9 +719,9 @@ final class Application
      * @param array<string, string|bool> $options
      * @param \Closure(string): bool $ask Asks the user a yes/no question.
      */
-    private static function tools(Config $config, array $options, \Closure $ask, bool $canPrompt, Workspace $workspace, ProcessRunner $runner, string $outputs, ?Shells $shells = null, ?\Closure $choose = null): Registry
+    private static function tools(Config $config, array $options, \Closure $ask, bool $canPrompt, Workspace $workspace, ProcessRunner $runner, string $outputs, ?Shells $shells = null, ?\Closure $choose = null, ?Memory $memory = null): Registry
     {
-        return (new Registry(self::approval($config, $options, $ask, $canPrompt)))
+        $registry = (new Registry(self::approval($config, $options, $ask, $canPrompt)))
             ->add(new AskTool($choose ?? static fn (): ?string => null))
             ->add(new ReadFileTool($workspace, outputs: $outputs))
             ->add(new ListFilesTool($workspace, $runner))
@@ -728,12 +737,21 @@ final class Application
                 $skills = Catalog::for((string) getenv('HOME'), $workspace->root())->all();
                 return $skills === [] ? [] : [new SkillTool($skills)];
             });
+        return $memory === null ? $registry : $registry->add(new MemoryTool($memory));
+    }
+
+    /**
+     * Bia's memory for this project, or null when memory.enabled is false.
+     */
+    private static function memory(Config $config, Workspace $workspace): ?Memory
+    {
+        return $config->get('memory.enabled') === false ? null : new Memory($config->configDirectory(), $workspace->root());
     }
 
     /**
      * The agent for the configured model; /model builds another.
      */
-    private static function agent(Config $config, Client $http, Registry $tools, \Bia\Contracts\SessionStore $store, Renderer $renderer, Workspace $workspace, string $outputs, ?Inspection $inspection = null, ?\Closure $record = null): Agent
+    private static function agent(Config $config, Client $http, Registry $tools, \Bia\Contracts\SessionStore $store, Renderer $renderer, Workspace $workspace, string $outputs, ?Inspection $inspection = null, ?\Closure $record = null, bool $reminds = false): Agent
     {
         $metered = static fn (Config $config): Model => self::model($config, $http, $record);
         // Shown as it happens, and kept for /inspect.
@@ -782,6 +800,8 @@ final class Application
             inspection: $inspection,
             recap: new Recap($model, $modelName, $light),
             executions: $store instanceof ExecutionStore ? $store : null,
+            // A rule the user lays down is to be kept: the model is told so beside their message.
+            remind: $reminds ? Memory::reminder(...) : null,
         );
     }
 

@@ -297,6 +297,10 @@ final readonly class Config
                 // How answers appear: normal, as they arrive; smooth, a steady flow; power, dropping into place.
                 'render' => 'normal',
             ],
+            'memory' => [
+                // What Bia keeps between sessions: a diary and facts about you, and each project's memories.
+                'enabled' => true,
+            ],
             'update' => [
                 // A release's Bia says when a newer one is out, asking GitHub at most once a day.
                 'check' => true,
@@ -524,6 +528,23 @@ final readonly class Config
                 // 'recap' => [
                 //     'auto' => true,
                 //     'idle' => 1800,
+                // ],
+
+                /*
+                |--------------------------------------------------------------------------
+                | Memory
+                |--------------------------------------------------------------------------
+                |
+                | Bia keeps what is worth knowing later: a diary, a page a day, and the
+                | standing facts about you in diary/ABOUT.md, shared by every project;
+                | and each project's memories under projects/. All beside this file, as
+                | plain text you can edit or delete; /memory lists them. A rule you lay
+                | down for a project ("always …") goes into its AGENTS.md instead.
+                |
+                */
+
+                // 'memory' => [
+                //     'enabled' => true,
                 // ],
 
                 /*
@@ -838,6 +859,10 @@ final readonly class Config
         }
         if (isset($recap['idle']) && (!is_int($recap['idle']) && !is_float($recap['idle']) || $recap['idle'] <= 0)) {
             throw new \InvalidArgumentException('recap.idle must be a positive number of seconds.');
+        }
+        $memory = $values['memory'] ?? [];
+        if (!is_array($memory) || (isset($memory['enabled']) && !is_bool($memory['enabled']))) {
+            throw new \InvalidArgumentException('memory.enabled must be true or false.');
         }
         $permissions = $values['permissions'] ?? [];
         if (!is_array($permissions)) {

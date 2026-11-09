@@ -359,6 +359,7 @@ final class TuiRenderer implements Renderer
             $call->name === 'apply_patch' => ($running ? 'Patching' : 'Patched') . self::patched($data),
             $call->name === 'git_diff' => $running ? 'Reading the diff' : 'Read the diff',
             $call->name === 'skill' => 'Used the skill ' . ($arguments['name'] ?? ''),
+            $call->name === 'memory' => self::remembered($arguments, $data, $running),
             $call->name === 'ask' => ($running ? 'Asking ' : 'Asked ') . (strtok((string) ($arguments['question'] ?? ''), "\n") ?: ''),
             $call->name === 'agent' => ($running ? 'Asking ' : 'Asked ') . \Bia\Agent\Subagents::name((string) ($arguments['name'] ?? ''))
                 . ' · ' . (strtok((string) ($arguments['task'] ?? ''), "\n") ?: ''),
@@ -370,6 +371,28 @@ final class TuiRenderer implements Renderer
             $title .= ' ' . self::counts($diff);
         }
         return Style::truncate(self::printable($title), 160);
+    }
+
+    /**
+     * What a memory call did: "Noted …", "Remembered crab-install",
+     * "Added a rule to AGENTS.md".
+     *
+     * @param array<string, mixed> $arguments
+     * @param array<string, mixed> $data
+     */
+    private static function remembered(array $arguments, array $data, bool $running): string
+    {
+        $name = (string) ($arguments['name'] ?? '');
+        $text = strtok((string) ($arguments['text'] ?? ''), "\n") ?: '';
+        return match ((string) ($arguments['action'] ?? '')) {
+            'note' => ($running ? 'Noting ' : 'Noted ') . $text,
+            'save' => ($running ? 'Remembering ' : 'Remembered ') . $name,
+            'rule' => $running ? 'Adding a rule' : (is_string($data['path'] ?? null) ? 'Added a rule to ' . $data['path'] : 'Kept the rule ' . $text),
+            'forget' => ($running ? 'Forgetting ' : 'Forgot ') . $name,
+            'read' => ($running ? 'Recalling ' : 'Recalled ') . $name,
+            'search' => ($running ? 'Searching memory for "' : 'Searched memory for "') . ($arguments['query'] ?? '') . '"',
+            default => 'Used memory',
+        };
     }
 
     /**

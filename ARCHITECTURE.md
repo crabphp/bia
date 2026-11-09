@@ -115,6 +115,29 @@ alone. The registry asks for it each step, so skills come and go with their
 folders, and with none there is no tool. A project's settings are in
 `.agents/bia.json`, beside its skills.
 
+## Memory
+
+`Memory\Memory` is what Bia keeps between sessions, as files under its home:
+`diary/<date>.md`, a page a day added to in one locked write, and
+`diary/ABOUT.md`, a line a fact, for the user in any project; and
+`projects/<project>/memory`, a file a memory and a `MEMORY.md` index, for
+one repository, keyed by its root (a worktree's is the checkout it came
+from). `prompt()` is the system prompt's last part: how to keep memory, then
+`ABOUT.md`, the diary's last two pages (their end, when long) and the index,
+each capped. It is last so that what comes before it stays the same from
+one session to the next, and it is not given to subagents.
+
+`Memory\MemoryTool` is the only way in: the file tools stay inside the
+workspace, and it names no path. `note`, `save`, `forget`, `read` and
+`search` work on the files above; `rule` writes a line under `## Rules` in
+the project's `AGENTS.md`, where it is an instruction and no longer a
+memory, and gives the change as a diff for the row.
+
+`Memory::reminder()` reads a user's message for a rule laid down ("must",
+"always", "never"). The agent keeps what it returns in the message's `meta`,
+and `Context` sends it after the text: the model reads it at every step and
+on resume, the stored text stays the user's, and nothing shows it.
+
 ## Images
 
 A user message may carry images (`Contracts\Image`: a file and its type).
@@ -156,7 +179,8 @@ cache directory, where `read_file` may read it.
 `Agent\SystemPrompt` builds the system prompt per run: the configured
 identity, tool guidance, the environment, and the `AGENTS.md` / `CLAUDE.md`
 files from the user's config directory and from the repository root down to
-the working directory, capped at 32 KB.
+the working directory, capped at 32 KB. The main agent's prompt then ends
+with [memory](#memory).
 
 ## Updates
 

@@ -21,6 +21,7 @@ final class Summary
     public static function line(array $calls): string
     {
         $commands = $shells = $searches = $lists = $tools = $agents = $questions = $failed = $added = $removed = 0;
+        $saved = $rules = $forgot = $recalled = 0;
         $read = $edited = $skills = [];
         $diff = false;
         foreach ($calls as [$call, $result]) {
@@ -55,6 +56,17 @@ final class Summary
                     break;
                 case 'skill':
                     $skills[(string) ($call->arguments['name'] ?? '')] = true;
+                    break;
+                case 'memory':
+                    if (!$result->ok) {
+                        break;
+                    }
+                    match ((string) ($call->arguments['action'] ?? '')) {
+                        'note', 'save' => $saved++,
+                        'rule' => $rules++,
+                        'forget' => $forgot++,
+                        default => $recalled++,
+                    };
                     break;
                 case 'edit':
                 case 'write_file':
@@ -94,6 +106,10 @@ final class Summary
             $lists > 0 ? 'listed ' . self::count($lists, 'folder') : '',
             $diff ? 'read the diff' : '',
             $shells > 0 ? 'checked ' . self::count($shells, 'background shell') : '',
+            $rules > 0 ? 'added ' . self::count($rules, 'rule') : '',
+            $saved > 0 ? 'saved ' . self::count($saved, 'memory') : '',
+            $forgot > 0 ? 'forgot ' . self::count($forgot, 'memory') : '',
+            $recalled > 0 ? 'recalled ' . ($recalled === 1 ? 'once' : "{$recalled} times") : '',
             count($skills) === 1 ? 'used the skill ' . array_key_first($skills) : (count($skills) > 1 ? 'used ' . count($skills) . ' skills' : ''),
             $tools > 0 ? 'called ' . self::count($tools, 'tool') : '',
         ]);
@@ -106,6 +122,6 @@ final class Summary
 
     private static function count(int $count, string $noun): string
     {
-        return $count . ' ' . $noun . ($count === 1 ? '' : 's');
+        return $count . ' ' . ($count === 1 ? $noun : (str_ends_with($noun, 'y') ? substr($noun, 0, -1) . 'ies' : $noun . 's'));
     }
 }

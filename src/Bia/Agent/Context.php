@@ -63,7 +63,7 @@ final readonly class Context
             foreach (array_slice($entries, 0, $last) as $entry) {
                 $kept = $kept || $entry->id === $compaction->firstKeptId;
                 if ($kept && $entry->payload instanceof Message) {
-                    $items[] = [$entry->id, $entry->payload];
+                    $items[] = [$entry->id, self::reminded($entry->payload)];
                 }
             }
             $since = count($items);
@@ -71,10 +71,24 @@ final readonly class Context
         }
         foreach ($entries as $entry) {
             if ($entry->payload instanceof Message) {
-                $items[] = [$entry->id, $entry->payload];
+                $items[] = [$entry->id, self::reminded($entry->payload)];
             }
         }
         return new self(self::repair($items), $since, $compaction);
+    }
+
+    /**
+     * A user's message as the model reads it: with what Bia reminded it of
+     * then, kept beside the text, after it. The same at every step and on
+     * resume, so the conversation sent never changes behind the model.
+     */
+    private static function reminded(Message $message): Message
+    {
+        $reminder = $message->role === 'user' ? ($message->meta['reminder'] ?? null) : null;
+        if (!is_string($reminder) || $reminder === '') {
+            return $message;
+        }
+        return new Message('user', $message->text . "\n\n" . $reminder, meta: $message->meta, images: $message->images);
     }
 
     /**

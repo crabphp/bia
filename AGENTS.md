@@ -9,6 +9,10 @@ or load a terminal UI framework just to print help or stream a model reply.
 - `Bia\Contracts` contains stable, provider-neutral contracts and value objects.
 - `Bia\Model` contains model adapters. The agent loop never names a provider.
 - `Bia\Session` owns SQLite persistence. The database is opened lazily.
+- `Bia\Memory` owns what is kept between sessions, as plain files under Bia's
+  home, read when a prompt is built and written only through its `memory`
+  tool. It is never loaded into a subagent, and only a rule the user lays
+  down is written into a project (its `AGENTS.md`).
 - `Bia\Terminal` renders events; the agent loop never writes directly to a TTY.
 - Use Crab's event loop and HTTP client for network streaming and cancellation.
 - Keep model, tool, and session operations cancellable and bounded.
@@ -116,6 +120,20 @@ the rule here first, with the user's agreement.
   these same rules, its task shaded as a user's message; the input steers
   it while it works, and Esc returns to the conversation. Inline, viewing
   one prints its run so far under `· agent · readme`.
+
+**Memory**
+- A memory call's row says what was kept, never the tool: `• Noted Chose
+  SQLite over files`, `• Remembered crab-install`, `• Forgot crab-install`,
+  `• Recalled crab-install`, `• Searched memory for "sqlite"`, and a rule
+  as an edit, `• Added a rule to AGENTS.md (+1 −0)` with its diff. Under
+  each, what was written or found.
+- A run of them collapses to counts: `added 1 rule, saved 2 memories,
+  forgot 1 memory, recalled once`.
+- What Bia reminds the model of beside a message (a rule laid down with
+  "must", "always", "never") is sent and kept with it, and never shown.
+- `/memory` is `· Memory` dim and under it, set in two columns, a row for
+  each of `About you`, `Diary`, `Project` and `Rules`: a count and the
+  path, and under `Project` each memory's name and, dim, what it holds.
 
 **Recap**
 - `· Recap` dim, and under it, set in two columns, a few sentences of where

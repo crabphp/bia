@@ -159,6 +159,7 @@ final class Chat
         private readonly ?Images $images = null,
         private readonly ?Inspection $inspection = null,
         private readonly ?Subagents $subagents = null,
+        private ?\Bia\Memory\Memory $memory = null,
         private readonly ?\Closure $reload = null,
         private readonly ?\Closure $update = null,
     ) {
@@ -207,6 +208,7 @@ final class Chat
             })
             ->add('recap', 'Where things stand', $this->recap(...))
             ->add('inspect', 'What the last request sent and got', $this->inspect(...))
+            ->add('memory', 'What Bia keeps between sessions', $this->showMemory(...))
             ->add('usage', 'Tokens and speed by day, model and provider', $this->usage(...), '[day|models|providers]')
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout|restart <server>]')
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
@@ -399,6 +401,7 @@ final class Chat
         $this->makeAgent = $built['agent'];
         $this->agent = $agent;
         $this->system = $built['system'];
+        $this->memory = $built['memory'] ?? null;
         $this->mcp = $built['mcp'];
         $this->contextTokens = null;
         $this->note('Reloaded · ' . $this->modelShown());
@@ -1586,6 +1589,38 @@ final class Chat
             foreach (Style::wrap($text, $room) as $index => $part) {
                 $lines[] = '  ' . ($index === 0 ? Style::dim(str_pad($name, $label)) : str_repeat(' ', $label)) . $part;
             }
+        }
+        $this->region->gap();
+        $this->region->print(implode("\n", $lines) . "\n");
+    }
+
+    /**
+     * What is kept between sessions and where: the facts about the user,
+     * the diary's days, the project's memories by name, and its rules' file.
+     */
+    private function showMemory(string $_): void
+    {
+        if ($this->memory === null) {
+            $this->note('Memory is off');
+            return;
+        }
+        $home = (string) getenv('HOME');
+        $short = static fn (string $path): string => $home !== '' && str_starts_with($path, $home . '/') ? '~' . substr($path, strlen($home)) : $path;
+        $count = static fn (int $count, string $one, string $many): string => $count . ' ' . ($count === 1 ? $one : $many);
+        $memories = $this->memory->memories();
+        $rows = [
+            ['About you', $count(count($this->memory->about()), 'fact', 'facts') . ' · ' . $short($this->memory->aboutPath())],
+            ['Diary', $count(count($this->memory->days()), 'day', 'days') . ' · ' . $short($this->memory->diaryDirectory())],
+            ['Project', $count(count($memories), 'memory', 'memories') . ' · ' . $short($this->memory->projectDirectory())],
+        ];
+        foreach ($memories as $name => $description) {
+            $rows[] = ['', $name . ' ' . Style::dim($description)];
+        }
+        $rows[] = ['Rules', $short($this->memory->rulesPath())];
+        $room = max(10, $this->region->width() - 2 - 11);
+        $lines = [Style::dim('· Memory')];
+        foreach ($rows as [$label, $text]) {
+            $lines[] = '  ' . Style::dim(str_pad($label, 11)) . Style::truncate($text, $room);
         }
         $this->region->gap();
         $this->region->print(implode("\n", $lines) . "\n");

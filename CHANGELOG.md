@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Memory: Bia keeps a diary, a page a day, and standing facts about you,
+  shared by every project, and each project's own memories, as plain files
+  under `~/.bia`; it reads the latest of them at the start of a session
+  and the rest when needed. `/memory` lists them; `memory.enabled` turns
+  it off.
+- A rule you lay down ("always …", "never …", "you must …") is written into
+  the project's `AGENTS.md`, and followed from then on.
+- Crab is installed from Packagist: a source checkout no longer needs the
+  framework beside it.
+
 ## 0.1.3 (2026-11-10)
 
 - Commands run in the user's own shell (`$SHELL`, bash or zsh) with their

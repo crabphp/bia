@@ -78,6 +78,8 @@ final readonly class Agent
         private ?Recap $recap = null,
         private float $patience = self::PATIENCE,
         private ?ExecutionStore $executions = null,
+        /** @var (\Closure(string): ?string)|null What a user's message asks beyond its words: sent with it, never shown. */
+        private ?\Closure $remind = null,
     ) {
         if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
@@ -95,7 +97,7 @@ final readonly class Agent
         $this->recoverExecutions($sessionId, $entries);
         // How long the conversation rested before this prompt: past the cache's life, compacting is nearly free.
         $idle = $this->compactor?->idle($entries) ?? 0.0;
-        $entries[] = $this->sessions->append($sessionId, Message::user(self::clean($prompt), $images));
+        $entries[] = $this->sessions->append($sessionId, $this->user(self::clean($prompt), $images));
         return $this->loop($sessionId, $entries, $idle, $system, $cancellation, $steer, $images, continued: false);
     }
 
@@ -141,8 +143,8 @@ final readonly class Agent
                 foreach ($steer() as $message) {
                     $repeats = []; // a word from the user is a new direction: nothing repeats it
                     $user = $message instanceof Message
-                        ? Message::user(self::clean($message->text), $message->images)
-                        : Message::user(self::clean($message));
+                        ? $this->user(self::clean($message->text), $message->images)
+                        : $this->user(self::clean($message));
                     if ($user->images !== []) {
                         $attachments = $user->images;
                     }
@@ -230,6 +232,19 @@ final readonly class Agent
         }
 
         throw new \RuntimeException("The agent reached its {$this->maxTurns}-turn limit.");
+    }
+
+    /**
+     * The user's message as it is stored: what they wrote, and beside it
+     * what Bia reminds the model of on reading it, which Context sends
+     * after the text and no one is shown.
+     *
+     * @param list<\Bia\Contracts\Image> $images
+     */
+    private function user(string $text, array $images = []): Message
+    {
+        $reminder = $this->remind !== null ? ($this->remind)($text) : null;
+        return new Message('user', $text, meta: $reminder !== null ? ['reminder' => $reminder] : [], images: $images);
     }
 
     /**
