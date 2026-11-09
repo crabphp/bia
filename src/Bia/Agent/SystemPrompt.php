@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Bia\Agent;
 
+use Bia\Tool\ShellTool;
+
 /**
  * Builds the system prompt: who Bia is, how to use its tools, where it is
  * running, and the project's own instructions from AGENTS.md files.
@@ -116,7 +118,7 @@ final class SystemPrompt
             '',
             "- Working directory: {$workspace}",
             '- Platform: ' . PHP_OS_FAMILY . ' (' . php_uname('r') . ')',
-            '- Shell: /bin/sh',
+            '- Shell: ' . basename(ShellTool::userShell()),
             '- Date: ' . date('Y-m-d'),
         ];
         $branch = self::branch($workspace);

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Commands run in the user's own shell (`$SHELL`, bash or zsh) with their
+  aliases and functions, as at their prompt: `ssh.work` from `~/.zshrc`
+  works. They are taken once a session (and again by `/reload`) from an
+  interactive shell, which sees `BIA=1`, not read on every call.
+
 ## 0.1.2 (2026-11-09)
 
 - One line installs Bia: `curl -fsSL

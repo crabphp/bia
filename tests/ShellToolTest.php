@@ -8,6 +8,7 @@ use Bia\Contracts\ToolContext;
 use Bia\Contracts\ToolResult;
 use Bia\Tool\ProcessRunner;
 use Bia\Tool\ShellOutputTool;
+use Bia\Tool\ShellSnapshot;
 use Bia\Tool\Shells;
 use Bia\Tool\ShellTool;
 use Bia\Tool\Workspace;
@@ -96,6 +97,60 @@ final class ShellToolTest extends TestCase
         $this->call(['command' => 'sleep 30', 'background' => true]);
         self::assertStringEndsWith('[shell 2 was stopped]', $this->read(['id' => 2, 'kill' => true])->text);
         self::assertFalse($this->read(['id' => 9])->ok, 'No such shell.');
+    }
+
+    /**
+     * @return iterable<string, array{string}>
+     */
+    public static function shells(): iterable
+    {
+        foreach (['bash', 'zsh'] as $name) {
+            $path = trim((string) shell_exec('command -v ' . $name));
+            if ($path !== '') {
+                yield $name => [$path];
+            }
+        }
+    }
+
+    #[\PHPUnit\Framework\Attributes\DataProvider('shells')]
+    public function testTheUsersAliasesAndFunctionsAreThere(string $path): void
+    {
+        $home = $this->root . '/home';
+        mkdir($home);
+        $rc = "alias ssh.work='echo ssh to work'\ngreet() { echo \"hi \$1\"; }\n_completion() { echo no; }\necho noise\n";
+        file_put_contents($home . '/' . (basename($path) === 'zsh' ? '.zshrc' : '.bashrc'), $rc);
+        $runner = new ProcessRunner();
+        $shells = new Shells($runner);
+        $snapshot = new ShellSnapshot($path, $runner, ['HOME' => $home, 'ZDOTDIR' => $home]);
+        $tool = new ShellTool(new Workspace($this->root), $runner, 10.0, $shells, $path, $snapshot);
+        $call = fn (array $arguments): ToolResult => Task::spawn(EventLoop::current(), fn (): ToolResult => $tool->execute($arguments, new ToolContext($this->root, 'test')))->await();
+
+        self::assertSame("ssh to work box\nhi 'you'\n", $call(['command' => "ssh.work box; greet \"'you'\""])->text, 'An alias with a dot and a function, quotes kept.');
+        self::assertFalse($call(['command' => '_completion'])->ok, 'Completion functions are left out.');
+        self::assertSame("[exit code 3]", $call(['command' => 'exit 3'])->text);
+        self::assertStringContainsString("aliases and functions from their " . basename($path), $tool->definition()->description);
+
+        $id = $call(['command' => 'ssh.work bg', 'background' => true])->data['background'];
+        $text = '';
+        do {
+            $read = Task::spawn(EventLoop::current(), fn (): ToolResult => (new ShellOutputTool($shells))->execute(['id' => $id, 'wait' => 5], new ToolContext($this->root, 'test')))->await();
+            $text .= $read->text;
+        } while (str_contains($read->text, 'still running'));
+        self::assertStringContainsString('ssh to work bg', $text, 'In the background too.');
+
+        $file = $snapshot->file();
+        self::assertIsString($file);
+        unset($call, $tool, $snapshot);
+        self::assertFileDoesNotExist($file, 'The snapshot goes with it.');
+    }
+
+    public function testAShellThatCannotStartGivesNoSnapshot(): void
+    {
+        $runner = new ProcessRunner();
+        self::assertNull((new ShellSnapshot('/bin/sh', $runner))->file(), 'Not bash or zsh.');
+        self::assertNull((new ShellSnapshot($this->root . '/bash', $runner))->file(), 'Not there.');
+        $tool = new ShellTool(new Workspace($this->root), $runner, 10.0, null, null, new ShellSnapshot($this->root . '/zsh', $runner));
+        self::assertSame("ok\n", Task::spawn(EventLoop::current(), fn (): ToolResult => $tool->execute(['command' => 'echo ok'], new ToolContext($this->root, 'test')))->await()->text, 'Commands run without it.');
     }
 
     /**

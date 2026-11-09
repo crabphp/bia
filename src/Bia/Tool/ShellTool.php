@@ -11,13 +11,15 @@ use Bia\Contracts\ToolResult;
 use Crab\Engine\Async\Cancellation;
 
 /**
- * Runs a command in bash (sh where there is none) in the workspace.
+ * Runs a command in the user's shell (bash or zsh; bash, or sh, otherwise)
+ * in the workspace.
  *
  * Each call is a fresh, non-interactive shell: at the workspace root, or a
  * workdir inside it; stdin empty; pagers, editors and git's prompts turned
- * off, so nothing waits for a terminal that is not there. Not a login
- * shell: the user's profile costs tens of milliseconds a call and varies by
- * machine. Nothing carries over between calls, so calls stay independent.
+ * off, so nothing waits for a terminal that is not there. The user's
+ * aliases and functions are there, from a ShellSnapshot taken once, rather
+ * than their profile read on every call, which costs tens of milliseconds
+ * or more. Nothing carries over between calls, so calls stay independent.
  *
  * Output is standard output and error together, as a terminal shows them,
  * without colour codes or progress redrawn over itself. The agent cuts what
@@ -49,6 +51,7 @@ final readonly class ShellTool implements Tool
         private float $defaultTimeout = 120.0,
         private ?Shells $shells = null,
         ?string $shell = null,
+        private ?ShellSnapshot $snapshot = null,
     ) {
         $this->shell = $shell ?? self::findShell();
     }
@@ -60,10 +63,13 @@ final readonly class ShellTool implements Tool
         $background = $this->shells !== null
             ? ' Anything meant to keep running (a server, a watcher) goes in the background: background: true starts it and returns at once with its number, and shell_output reads what it prints or stops it.'
             : '';
+        $aliases = $this->snapshot !== null
+            ? " The user's aliases and functions from their {$shell} config are there, as at their prompt: use one they name."
+            : '';
         return new ToolDefinition('shell', <<<TEXT
             Run a command in {$shell} in the workspace, for builds, tests, git and other programs. Returns its output (standard output and error together) and, when it fails, its exit code.
 
-            Each call is a fresh, non-interactive shell: it starts at the workspace root, or at workdir, with stdin empty; a cd, variables and aliases do not carry over to the next call, so give workdir instead of cd. Use read_file, search and list_files rather than cat, grep and ls. Pass non-interactive flags: nothing can answer a prompt. Long output is cut, and the note says where it was saved whole.
+            Each call is a fresh, non-interactive shell: it starts at the workspace root, or at workdir, with stdin empty; a cd and variables do not carry over to the next call, so give workdir instead of cd.{$aliases} Use read_file, search and list_files rather than cat, grep and ls. Pass non-interactive flags: nothing can answer a prompt. Long output is cut, and the note says where it was saved whole.
 
             A command is stopped after timeout seconds (default {$timeout}, at most 600).{$background}
             TEXT, [
@@ -96,12 +102,12 @@ final readonly class ShellTool implements Tool
         }
         if (($arguments['background'] ?? false) === true && $this->shells !== null) {
             // Its stdin empty from the start, as a command in the foreground has it.
-            $id = $this->shells->start([$this->shell, '-c', "exec </dev/null\n" . $command], $command, $directory, self::ENVIRONMENT);
+            $id = $this->shells->start($this->argv("exec </dev/null\n", $command, $cancellation), $command, $directory, self::ENVIRONMENT);
             return new ToolResult("Started in the background as shell {$id}. Read its output with shell_output (id {$id}); stop it with kill: true.", true, ['background' => $id]);
         }
         $timeout = max(1.0, min(self::MOST_SECONDS, (float) ($arguments['timeout'] ?? $this->defaultTimeout)));
         $result = $this->process->run(
-            [$this->shell, '-c', $command],
+            $this->argv('', $command, $cancellation),
             $directory,
             $timeout,
             self::MOST_BYTES,
@@ -141,6 +147,33 @@ final readonly class ShellTool implements Tool
             }, explode("\n", $output)));
         }
         return $output;
+    }
+
+    /**
+     * The shell and its arguments to run $command, after $before: in the
+     * snapshot's aliases and functions when there is one, the command read
+     * after it is sourced (by eval) so that they apply to it.
+     *
+     * @return list<string>
+     */
+    private function argv(string $before, string $command, ?Cancellation $cancellation): array
+    {
+        $file = $this->snapshot?->file($cancellation);
+        if ($file === null) {
+            return [$this->shell, '-c', $before . $command];
+        }
+        $quote = static fn (string $text): string => "'" . str_replace("'", "'\\''", $text) . "'";
+        return [$this->shell, '-c', $before . '. ' . $quote($file) . " 2>/dev/null\neval " . $quote($command)];
+    }
+
+    /**
+     * The user's shell, from SHELL, where a snapshot can be taken in it
+     * (bash or zsh); bash, or sh, otherwise.
+     */
+    public static function userShell(): string
+    {
+        $shell = (string) getenv('SHELL');
+        return str_starts_with($shell, '/') && ShellSnapshot::supports($shell) && is_executable($shell) ? $shell : self::findShell();
     }
 
     /**

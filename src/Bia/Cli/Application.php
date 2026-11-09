@@ -48,6 +48,7 @@ use Bia\Tool\ReadFileTool;
 use Bia\Tool\Registry;
 use Bia\Tool\SearchTool;
 use Bia\Tool\ShellOutputTool;
+use Bia\Tool\ShellSnapshot;
 use Bia\Tool\ShellTool;
 use Bia\Tool\Shells;
 use Bia\Tool\Workspace;
@@ -719,7 +720,7 @@ final class Application
             ->add(new EditTool($workspace))
             ->add(new WriteFileTool($workspace))
             ->add(new ApplyPatchTool($workspace, $runner))
-            ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout'), $shells ??= new Shells($runner)))
+            ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout'), $shells ??= new Shells($runner), $shell = ShellTool::userShell(), new ShellSnapshot($shell, $runner)))
             ->add(new ShellOutputTool($shells))
             ->add(new GitDiffTool($workspace, $runner))
             // Skills, read again each step; no tool at all while there are none.
