@@ -43,12 +43,22 @@ final class Terminal
     public function write(string $bytes): void
     {
         $length = strlen($bytes);
-        for ($written = 0; $written < $length;) {
+        // Raw mode leaves the input non-blocking, and on a tty the output is
+        // the same open file: a frame larger than the tty's buffer (small on
+        // macOS) is written in part, the rest refused until it drains. Wait
+        // for it; only a terminal that takes nothing for 2s has gone away.
+        for ($written = 0, $waits = 0; $written < $length;) {
             $count = @fwrite($this->output, $written === 0 ? $bytes : substr($bytes, $written));
             if ($count === false || $count === 0) {
-                return; // The terminal went away; there is no one to show it to.
+                $read = $except = null;
+                $write = [$this->output];
+                if (++$waits > 40 || @stream_select($read, $write, $except, 0, 50_000) === false) {
+                    return; // The terminal went away; there is no one to show it to.
+                }
+                continue;
             }
             $written += $count;
+            $waits = 0;
         }
     }
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.6 (2026-11-10)
+
+- The footer is drawn on macOS again: a frame larger than the terminal's
+  buffer was cut short, and the rest of it, the footer with it, dropped.
+  Bia now waits for the terminal to take it.
+
 ## 0.1.5 (2026-11-10)
 
 - Plugins: extend Bia itself from `~/.bia/plugins/<name>/`, a folder with

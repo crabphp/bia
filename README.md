@@ -1,7 +1,7 @@
 # Bia
 
 ```text
-▙▄▄▄▄▄▟   bia 0.1.5 · provider/model
+▙▄▄▄▄▄▟   bia 0.1.6 · provider/model
 █▙███▟█   ~/code/my-project
 ```
 
@@ -813,7 +813,7 @@ provider.
 
 ## Status and limits
 
-Bia is at 0.1.5. Not yet built:
+Bia is at 0.1.6. Not yet built:
 - **Only OpenAI-compatible wire formats.** Native Anthropic Messages and
   Gemini adapters are planned.
 - **No native Windows.** Bia runs in WSL there.
