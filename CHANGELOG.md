@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.4 (2026-11-10)
+
+- No agent turn limit: long tasks no longer stop after 100 model/tool steps.
+  Fresh and resumed turns keep working until the model finishes, you stop
+  them, or an error ends the turn. Cancellation, request timeouts and
+  repeated-call warnings still apply.
 - Memory: Bia keeps a diary, a page a day, and standing facts about you,
   shared by every project, and each project's own memories, as plain files
   under `~/.bia`; it reads the latest of them at the start of a session
@@ -47,8 +53,6 @@
   encrypted reasoning, so reasoning models can continue after tool calls.
 - Responses requests use stateless mode and accept wrapped JSON responses and
   custom `chat/completions` endpoint prefixes.
-
-## Unreleased
 
 ## 0.1.1 (2026-11-06)
 

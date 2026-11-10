@@ -68,7 +68,6 @@ final readonly class Agent
         private Renderer $renderer,
         private string $workspace,
         private ?Compactor $compactor = null,
-        private int $maxTurns = 100,
         private int $maxOutputBytes = 51_200,
         private int $maxOutputLines = 2000,
         private ?string $outputs = null,
@@ -81,8 +80,8 @@ final readonly class Agent
         /** @var (\Closure(string): ?string)|null What a user's message asks beyond its words: sent with it, never shown. */
         private ?\Closure $remind = null,
     ) {
-        if ($this->maxTurns < 1 || $this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
-            throw new \InvalidArgumentException('An agent needs a positive turn limit and room for tool output.');
+        if ($this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
+            throw new \InvalidArgumentException('An agent needs room for tool output.');
         }
     }
 
@@ -134,7 +133,8 @@ final readonly class Agent
         /** @var array<string, int> How often each call has given each result, this turn. */
         $repeats = [];
 
-        for ($turn = 0; $turn < $this->maxTurns; $turn++) {
+        // No step cap: keep working until the model finishes, cancellation or an error.
+        for ($turn = 0; ; $turn++) {
             $cancellation?->throwIfCancelled();
             // Asked each step: an MCP server that connected meanwhile brings its tools to the next one.
             $definitions = $this->tools->definitions();
@@ -230,8 +230,6 @@ final readonly class Agent
             }
             $stepped = true;
         }
-
-        throw new \RuntimeException("The agent reached its {$this->maxTurns}-turn limit.");
     }
 
     /**

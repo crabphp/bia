@@ -28,6 +28,60 @@ use PHPUnit\Framework\TestCase;
 
 final class AgentTest extends TestCase
 {
+    public function testATurnCanFinishBeyondOneHundredSteps(): void
+    {
+        foreach ([false, true] as $resume) {
+            [$store, $session] = $this->session();
+            $model = new ScriptedModel(array_map(
+                static fn (int $step): array => [self::call("call-{$step}", 'echo', ['value' => (string) $step])],
+                range(1, 105),
+            ));
+            $tool = new EchoTool();
+            $agent = new Agent($model, 'fake', (new Registry())->add($tool), $store, new FakeRenderer(), '/workspace');
+
+            if ($resume) {
+                $store->append($session, Message::user('finish the task'));
+                $result = $agent->resume($session);
+            } else {
+                $result = $agent->run($session, 'finish the task');
+            }
+
+            self::assertSame('done', $result->text);
+            self::assertSame(106, $model->calls, 'Both fresh and resumed work continue until the model finishes.');
+            self::assertSame(105, $tool->runs);
+            $messages = self::messages($store, $session);
+            self::assertCount(212, $messages, 'The prompt, every tool boundary and the final answer are kept.');
+            self::assertSame('done', $messages[array_key_last($messages)]->text);
+        }
+    }
+
+    public function testATurnCanStillBeCancelledBeyondOneHundredSteps(): void
+    {
+        [$store, $session] = $this->session();
+        $cancellation = new Cancellation();
+        $turns = array_map(
+            static fn (int $step): array => [self::call("call-{$step}", 'echo', ['value' => (string) $step])],
+            range(1, 105),
+        );
+        $turns[] = [self::call('cancel-after-progress', 'cancel', [])];
+        $model = new ScriptedModel($turns);
+        $tool = new EchoTool();
+        $registry = (new Registry())->add($tool)->add(new CancellingTool($cancellation));
+        $agent = new Agent($model, 'fake', $registry, $store, new FakeRenderer(), '/workspace');
+
+        try {
+            $agent->run($session, 'keep working', cancellation: $cancellation);
+            self::fail('A cancelled run returned.');
+        } catch (\Crab\Engine\Async\CancelledException) {
+        }
+
+        self::assertSame(106, $model->calls, 'Cancellation stops the loop before another model request.');
+        self::assertSame(105, $tool->runs);
+        $messages = self::messages($store, $session);
+        self::assertSame('cancel-after-progress', $messages[array_key_last($messages)]->toolCallId);
+        self::assertSame('done', $agent->resume($session)->text, 'Cancelled work can still be resumed.');
+    }
+
     public function testTheUserSteersBetweenSteps(): void
     {
         [$store, $session] = $this->session();

@@ -1,7 +1,7 @@
 # Bia
 
 ```text
-▙▄▄▄▄▄▟   bia 0.1.3 · provider/model
+▙▄▄▄▄▄▟   bia 0.1.4 · provider/model
 █▙███▟█   ~/code/my-project
 ```
 
@@ -241,6 +241,10 @@ the highlighted one.
 A tool whose permission is `ask` asks in the same place, Yes or No (`y` and
 `n` answer too). A failed turn, such as a rate limit or a dropped connection,
 prints the error and keeps the conversation open.
+
+There is no limit on the number of model/tool steps in a turn. Bia keeps
+working until the model finishes, you stop it, or an error ends the turn;
+request timeouts and repeated-call warnings still apply.
 
 A session begins with its first message, so opening Bia and leaving creates
 nothing. When you leave one that has messages, Bia says how to come back:
@@ -723,7 +727,7 @@ provider.
 
 ## Status and limits
 
-Bia is at 0.1.3. Not yet built:
+Bia is at 0.1.4. Not yet built:
 - **Only OpenAI-compatible wire formats.** Native Anthropic Messages and
   Gemini adapters are planned.
 - **No native Windows.** Bia runs in WSL there.
