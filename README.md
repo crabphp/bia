@@ -17,8 +17,8 @@ bia "find why the login test fails and fix it"
 ## Features
 
 - **Streaming replies** over Crab's HTTP client, from OpenAI-compatible Chat
-  Completions or Responses APIs: OpenAI, OpenRouter, vLLM, Ollama, LM Studio,
-  tdaproxy and others.
+  Completions or Responses APIs: OpenAI, OpenRouter, vLLM, Ollama, LM Studio
+  and others.
 - **Fallback:** a provider limited or down hands the request straight to
   your next model, and gets it back after a cooldown.
 - **Coding tools:** read, list, search, edit, write, patch, shell and git
@@ -124,34 +124,41 @@ bia doctor
 
 ## Quick start
 
+Write your global config, `~/.bia/config.php`:
+
 ```sh
-export OPENAI_API_KEY=sk-...
+bia init --global
+```
+
+Then set your provider's key and the model in it:
+
+```php
+'providers' => [
+    'openai' => ['api_key' => 'sk-...'],   // or env('OPENAI_API_KEY')
+],
+'model' => ['name' => 'openai/gpt-5'],
+```
+
+Any other OpenAI-compatible server is a provider of your own:
+
+```php
+'providers' => [
+    'openrouter' => [
+        'base_url' => 'https://openrouter.ai/api/v1',
+        'api_key' => 'sk-or-...',
+    ],
+],
+'model' => ['name' => 'openrouter/<provider/model-name>'],
+```
+
+Then, in your project:
+
+```sh
 cd ~/code/my-project
 bia "explain the structure of this repository"
 ```
 
-Through tdaproxy (tested with `gpt-6-astra` and `gpt-6-sol`, which have a
-272,000-token window):
-
-```sh
-export BIA_PROVIDER=tdaproxy
-export TDAPROXY_API_KEY=...
-export BIA_BASE_URL=<tdaproxy base URL>/v1
-export BIA_WIRE_API=responses
-export BIA_MODEL=gpt-6-astra
-bia
-```
-
-and in `~/.bia/config.php`, `'model' => ['context_window' => 272000]`.
-
-Any other OpenAI-compatible server:
-
-```sh
-export BIA_BASE_URL=https://openrouter.ai/api/v1
-export BIA_API_KEY=sk-or-...
-export BIA_MODEL=<provider/model-name>
-bia
-```
+See [Configuration](#configuration) for every setting.
 
 ## Usage
 
@@ -202,7 +209,7 @@ Fixed: add() subtracted.
 ────────────────────────────────────────────────────────────────
 › Ask anything · / commands · @ files
 ────────────────────────────────────────────────────────────────
-~/code/my-app (main)                 tdaproxy/gpt-6-astra · 9k/272k (3%)
+~/code/my-app (main)                   openai/gpt-5 · 9k/1050k (1%)
 ```
 
 The status line shows the workspace and its git branch, the model, and how
@@ -601,16 +608,16 @@ under `models`:
 ```php
 'providers' => [
     'cliproxyapi' => ['api_key' => 'sk-...'],
-    'tdaproxy' => [
-        'base_url' => 'https://tdaproxy.example/v1',
+    'myproxy' => [
+        'base_url' => 'https://llm.example.com/v1',
         'wire_api' => 'responses',
         'endpoint' => 'responses',
-        'api_key' => env('TDA_TOKEN'),
+        'api_key' => env('MYPROXY_API_KEY'),
         'context_window' => 272000,
-        'models' => ['gpt-6-mini' => ['context_window' => 128000]],
+        'models' => ['small-model' => ['context_window' => 128000]],
     ],
 ],
-'model' => ['name' => 'tdaproxy/gpt-6-astra'],
+'model' => ['name' => 'myproxy/large-model'],
 ```
 
 A provider takes any `model` setting (`base_url`, `api_key`, `endpoint`,
