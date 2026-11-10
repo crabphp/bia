@@ -8,6 +8,8 @@ namespace Bia\Skill;
  * The skills there are: each a folder with a SKILL.md, in the user's
  * `~/.agents/skills` and the project's `.agents/skills`, the format other
  * agents share. A project's skill takes the place of the user's of its name.
+ * Before them come Bia's own, on writing a plugin, and each installed
+ * plugin's, in its `skills` folder: the user's and a project's replace those.
  *
  * Read again each time it is asked, which is each step: a skill added
  * during a session is there at the next. It costs a directory listing and
@@ -21,11 +23,14 @@ final readonly class Catalog
     /**
      * @param list<string> $directories Where skills are looked for, the later taking the place of the earlier.
      */
-    public function __construct(private array $directories) {}
+    public function __construct(private array $directories, private ?string $plugins = null) {}
 
-    public static function for(string $home, string $workspace): self
+    /**
+     * @param string|null $plugins Where plugins are installed, `~/.bia/plugins`, for their skills and Bia's own.
+     */
+    public static function for(string $home, string $workspace, ?string $plugins = null): self
     {
-        return new self([rtrim($home, '/') . '/.agents/skills', rtrim($workspace, '/') . '/.agents/skills']);
+        return new self([rtrim($home, '/') . '/.agents/skills', rtrim($workspace, '/') . '/.agents/skills'], $plugins);
     }
 
     /**
@@ -34,7 +39,17 @@ final readonly class Catalog
     public function all(): array
     {
         $skills = [];
-        foreach ($this->directories as $directory) {
+        $directories = $this->directories;
+        if ($this->plugins !== null) {
+            $plugins = [];
+            foreach (is_dir($this->plugins) ? (scandir($this->plugins) ?: []) : [] as $plugin) {
+                if ($plugin[0] !== '.') {
+                    $plugins[] = "{$this->plugins}/{$plugin}/skills";
+                }
+            }
+            $directories = [dirname(__DIR__) . '/Plugin/skills', ...$plugins, ...$directories];
+        }
+        foreach ($directories as $directory) {
             foreach (is_dir($directory) ? (scandir($directory) ?: []) : [] as $entry) {
                 $file = "{$directory}/{$entry}/SKILL.md";
                 if ($entry[0] === '.' || !is_file($file)) {

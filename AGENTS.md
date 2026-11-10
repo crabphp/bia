@@ -13,6 +13,11 @@ or load a terminal UI framework just to print help or stream a model reply.
   home, read when a prompt is built and written only through its `memory`
   tool. It is never loaded into a subagent, and only a rule the user lays
   down is written into a project (its `AGENTS.md`).
+- `Bia\Plugin` loads the user's own code from `~/.bia/plugins`, installed
+  by them alone and never read from a project. A plugin reaches Bia through
+  `Plugin\Host` and nothing else; widen `Host` one call at a time, for a
+  plugin that needs it. It is loaded for a conversation only, never into a
+  subagent, and one that throws is turned off: it never ends the chat.
 - `Bia\Terminal` renders events; the agent loop never writes directly to a TTY.
 - Use Crab's event loop and HTTP client for network streaming and cancellation.
 - Keep model, tool, and session operations cancellable and bounded.
@@ -134,6 +139,16 @@ the rule here first, with the user's agreement.
 - `/memory` is `· Memory` dim and under it, set in two columns, a row for
   each of `About you`, `Diary`, `Project` and `Rules`: a count and the
   path, and under `Project` each memory's name and, dim, what it holds.
+
+**Plugins**
+- A plugin's tool is a call as an MCP server's is: `• Called standup ·
+  word_count`. A plugin's note is a `·` note, dim, as Bia's own are.
+- One that fails is a line in red, `bia: plugin standup: …`, under the
+  banner when it failed as it loaded; during a turn it is a note among the
+  tool calls, `· Plugin standup failed: …`.
+- `/plugins` is `· Plugins` dim and under it, set in two columns, a row for
+  each: its name, and dim what it adds, `/standup · 1 tool · tool.result ·
+  2 skills · 1 MCP server`, or in red why it is off.
 
 **Recap**
 - `· Recap` dim, and under it, set in two columns, a few sentences of where

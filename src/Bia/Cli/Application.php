@@ -29,6 +29,9 @@ use Bia\Model\Lenient;
 use Bia\Model\Metered;
 use Bia\Model\ModelCatalog;
 use Bia\Model\OpenAiCompatibleModel;
+use Bia\Plugin\Installer;
+use Bia\Plugin\Observed;
+use Bia\Plugin\Plugins;
 use Bia\Session\SqliteStore;
 use Bia\Skill\Catalog;
 use Bia\Skill\SkillTool;
@@ -116,6 +119,10 @@ final class Application
                 array_shift($words);
                 return self::fork($words);
             }
+            if ($command === 'plugin' || $command === 'plugins') {
+                array_shift($words);
+                return self::plugin($words);
+            }
             if ($command === 'init') {
                 return ($options['global'] ?? false) === true ? self::initGlobal() : self::init();
             }
@@ -149,6 +156,9 @@ final class Application
               bia fork <session-id>
               bia export <session-id>
               bia init [--global]
+              bia plugin add <git-url or folder> [name]
+              bia plugin rm <name>
+              bia plugin list
               bia update
 
             Options:
@@ -176,7 +186,7 @@ final class Application
 
             Files:
               ~/.bia, or $BIA_HOME     (config.php, AGENTS.md, mcp.json,
-                                        bia.sqlite, cache/)
+                                        plugins/, bia.sqlite, cache/)
             TEXT . PHP_EOL);
     }
 
@@ -331,8 +341,70 @@ final class Application
     }
 
     /**
-     * @param array<string, string|bool> $options
+     * `bia plugin add|rm|list`: the only way a plugin comes to be installed,
+     * under Bia's home and never in a project.
+     *
+     * @param list<string> $words
      */
+    private static function plugin(array $words): int
+    {
+        $config = Config::load();
+        $directory = $config->configDirectory() . '/plugins';
+        $action = $words[0] ?? 'list';
+        $root = realpath((string) getcwd()) ?: (string) getcwd();
+        if ($action === 'add' || $action === 'install') {
+            $source = $words[1] ?? throw new \InvalidArgumentException('bia plugin add needs a git address or a folder.');
+            $installer = new Installer($directory, new ProcessRunner($config->secrets()));
+            $name = Loop::run(static fn (Cancellation $cancellation): string => $installer->add($source, $words[2] ?? null, $cancellation));
+            fwrite(STDOUT, "Installed {$name}: {$directory}/{$name}" . PHP_EOL);
+            $plugin = (new Plugins($directory, $root))->load()->all()[$name] ?? null;
+            if ($plugin !== null) {
+                fwrite(STDOUT, '  ' . self::pluginLine($plugin) . PHP_EOL);
+            }
+            return ($plugin['error'] ?? null) === null ? 0 : 1;
+        }
+        if ($action === 'rm' || $action === 'remove') {
+            $name = $words[1] ?? throw new \InvalidArgumentException('bia plugin rm needs a plugin\'s name.');
+            (new Installer($directory, new ProcessRunner()))->remove($name);
+            fwrite(STDOUT, "Removed {$name}" . PHP_EOL);
+            return 0;
+        }
+        if ($action !== 'list') {
+            throw new \InvalidArgumentException('bia plugin add <git-url or folder> [name], bia plugin rm <name>, or bia plugin list.');
+        }
+        $plugins = (new Plugins($directory, $root))->load()->all();
+        if ($plugins === []) {
+            fwrite(STDOUT, "No plugins in {$directory}; bia plugin add <git-url or folder> installs one." . PHP_EOL);
+            return 0;
+        }
+        $width = max(array_map(strlen(...), array_keys($plugins)));
+        foreach ($plugins as $name => $plugin) {
+            fwrite(STDOUT, str_pad((string) $name, $width + 2) . self::pluginLine($plugin) . PHP_EOL);
+        }
+        return 0;
+    }
+
+    /**
+     * What a plugin adds, in a line: `/standup · 1 tool · tool.result · 2 skills`.
+     *
+     * @param array{commands: array<string, string>, tools: list<string>, events: list<string>, skills: list<string>, servers: list<string>, error: ?string} $plugin
+     */
+    public static function pluginLine(array $plugin): string
+    {
+        if ($plugin['error'] !== null) {
+            return 'failed: ' . $plugin['error'];
+        }
+        $count = static fn (int $count, string $noun): string => $count === 0 ? '' : "{$count} {$noun}" . ($count === 1 ? '' : 's');
+        $parts = array_filter([
+            implode(' ', array_map(static fn (string $name): string => '/' . $name, array_keys($plugin['commands']))),
+            $count(count($plugin['tools']), 'tool'),
+            implode(' ', $plugin['events']),
+            $count(count($plugin['skills']), 'skill'),
+            $count(count($plugin['servers']), 'MCP server'),
+        ], static fn (string $part): bool => $part !== '');
+        return $parts === [] ? 'adds nothing' : implode(' · ', $parts);
+    }
+
     /**
      * @param array<string, string|bool> $options
      */
@@ -476,6 +548,8 @@ final class Application
             };
             $shells = new Shells($runner);
             $inspection = new Inspection();
+            // The user's own plugins, loaded for a conversation alone, and again by /reload.
+            $plugins = (new Plugins($config->configDirectory() . '/plugins', $workspace->root()))->load();
             $reads = null;
             $subagents = new Subagents(
                 static function (string $name, \Closure $doing, \Closure $called) use (&$chat, &$reads, $config, $terminal, $region, $http, $workspace, $outputs, $record): array {
@@ -505,7 +579,7 @@ final class Application
             );
             // What the config and instructions make: built at the start, and again by /reload,
             // which keeps the process, the session, the screen and the background commands.
-            $setup = static function (Config $config) use (&$reads, $options, $ask, $choose, $workspace, $outputs, $shells, $subagents, $http, $store, $renderer, $inspection, $record): array {
+            $setup = static function (Config $config) use (&$reads, $options, $ask, $choose, $workspace, $outputs, $shells, $subagents, $http, $store, $renderer, $inspection, $record, $plugins): array {
                 $runner = new ProcessRunner($config->secrets());
                 $memory = self::memory($config, $workspace);
                 // Subagents get the instructions alone: memory is the main agent's to read and keep.
@@ -517,7 +591,10 @@ final class Application
                 if ($mcp['manager'] !== null) {
                     $tools->from($mcp['manager']->tools(...));
                 }
+                $tools->from($plugins->tools(...));
                 $tools->add(new AgentTool($subagents));
+                // Told of each tool call only when a plugin listens: otherwise the renderer as it is.
+                $shown = $plugins->listening() ? new Observed($renderer, $plugins) : $renderer;
                 // Subagents only read: what they find goes back to the main agent, which does the work.
                 $reads = (new Registry())
                     ->add(new ReadFileTool($workspace, outputs: $outputs))
@@ -529,7 +606,7 @@ final class Application
                     'system' => $system,
                     'mcp' => $mcp,
                     'memory' => $memory,
-                    'agent' => static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $renderer, $workspace, $outputs, $inspection, $record, $memory !== null),
+                    'agent' => static fn (Config $config): Agent => self::agent($config, $http, $tools, $store, $shown, $workspace, $outputs, $inspection, $record, $memory !== null),
                 ];
             };
             $built = $setup($config);
@@ -549,13 +626,14 @@ final class Application
                 self::VERSION,
                 pickSession: $resume === '',
                 mcp: $built['mcp'],
-                skills: Catalog::for((string) getenv('HOME'), $workspace->root()),
+                skills: Catalog::for((string) getenv('HOME'), $workspace->root(), $config->configDirectory() . '/plugins'),
                 images: new \Bia\Terminal\Images($runner, dirname($config->databasePath()) . '/images', $workspace->root()),
                 inspection: $inspection,
                 subagents: $subagents,
                 memory: $built['memory'],
                 update: self::updates($config),
-                reload: static function (Config $current) use ($overrides, $setup): array {
+                plugins: $plugins,
+                reload: static function (Config $current) use ($overrides, $setup, $plugins): array {
                     // Read again as at the start, on the model and effort chosen since.
                     $config = Config::load(overrides: $overrides);
                     try {
@@ -564,6 +642,7 @@ final class Application
                         // That model is no longer configured: the config's own is used.
                     }
                     $config = $config->withEffort((string) $current->get('model.reasoning_effort', 'default'));
+                    $plugins->load();
                     return ['config' => $config, ...$setup($config)];
                 },
             );
@@ -685,6 +764,11 @@ final class Application
     {
         $environment = getenv();
         $user = Server::load($config->configDirectory() . '/mcp.json', false, $environment);
+        // Each plugin's own servers, the user's as theirs are: `${BIA_PLUGIN}` is the plugin's folder.
+        foreach (Plugins::folders($config->configDirectory() . '/plugins') as $folder) {
+            $plugin = Server::load($folder . '/mcp.json', false, [...$environment, 'BIA_PLUGIN' => $folder]);
+            $user = ['servers' => [...$user['servers'], ...$plugin['servers']], 'errors' => [...$user['errors'], ...$plugin['errors']]];
+        }
         $projectFile = $root . '/.mcp.json';
         $project = Server::load($projectFile, true, $environment);
         $trust = new Trust(dirname($config->databasePath()) . '/mcp-trust.json');
@@ -732,9 +816,9 @@ final class Application
             ->add(new ShellTool($workspace, $runner, (float) $config->get('tools.shell_timeout'), $shells ??= new Shells($runner), $shell = ShellTool::userShell(), new ShellSnapshot($shell, $runner)))
             ->add(new ShellOutputTool($shells))
             ->add(new GitDiffTool($workspace, $runner))
-            // Skills, read again each step; no tool at all while there are none.
-            ->from(static function () use ($workspace): array {
-                $skills = Catalog::for((string) getenv('HOME'), $workspace->root())->all();
+            // Skills, read again each step: the user's, a project's, each plugin's and Bia's own.
+            ->from(static function () use ($workspace, $config): array {
+                $skills = Catalog::for((string) getenv('HOME'), $workspace->root(), $config->configDirectory() . '/plugins')->all();
                 return $skills === [] ? [] : [new SkillTool($skills)];
             });
         return $memory === null ? $registry : $registry->add(new MemoryTool($memory));

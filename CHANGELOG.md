@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Plugins: extend Bia itself from `~/.bia/plugins/<name>/`, a folder with
+  any of a `plugin.php` (slash commands, tools run inside Bia, and listeners
+  to turns and tool calls), `skills/` and an `mcp.json`. Ask Bia to write
+  one and `/reload` loads it; `bia plugin add <git-url or folder>`, `bia
+  plugin rm` and `bia plugin list` manage them, and `/plugins` shows what
+  each adds. A project never brings one.
 ## 0.1.4 (2026-11-10)
 
 - No agent turn limit: long tasks no longer stop after 100 model/tool steps.

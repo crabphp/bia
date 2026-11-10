@@ -363,7 +363,7 @@ final class TuiRenderer implements Renderer
             $call->name === 'ask' => ($running ? 'Asking ' : 'Asked ') . (strtok((string) ($arguments['question'] ?? ''), "\n") ?: ''),
             $call->name === 'agent' => ($running ? 'Asking ' : 'Asked ') . \Bia\Agent\Subagents::name((string) ($arguments['name'] ?? ''))
                 . ' · ' . (strtok((string) ($arguments['task'] ?? ''), "\n") ?: ''),
-            preg_match('/^mcp__(.+?)__(.+)$/', $call->name, $m) === 1 => "Called {$m[1]} · {$m[2]}" . self::subjectOf($arguments),
+            preg_match('/^(?:mcp|plugin)__(.+?)__(.+)$/', $call->name, $m) === 1 => "Called {$m[1]} · {$m[2]}" . self::subjectOf($arguments),
             default => $call->name . self::subjectOf($arguments),
         };
         $diff = $data['diff'] ?? null;

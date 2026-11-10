@@ -162,6 +162,7 @@ final class Chat
         private ?\Bia\Memory\Memory $memory = null,
         private readonly ?\Closure $reload = null,
         private readonly ?\Closure $update = null,
+        private readonly ?\Bia\Plugin\Plugins $plugins = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
         $this->away = new RecapSchedule(microtime(true));
@@ -211,9 +212,10 @@ final class Chat
             ->add('memory', 'What Bia keeps between sessions', $this->showMemory(...))
             ->add('usage', 'Tokens and speed by day, model and provider', $this->usage(...), '[day|models|providers]')
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout|restart <server>]')
+            ->add('plugins', 'Plugins installed', $this->showPlugins(...))
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
-            ->add('reload', 'Read config, instructions and MCP servers again', $this->reloadConfig(...))
+            ->add('reload', 'Read config, instructions, plugins and MCP servers again', $this->reloadConfig(...))
             ->add('exit', 'Leave Bia', function (string $_): void {
                 $this->running = false;
             }, aliases: ['quit']);
@@ -335,6 +337,21 @@ final class Chat
             })
             : null;
         $this->greet();
+        // A plugin that failed as it loaded is told now, under the banner.
+        $this->plugins?->attach(
+            $this->note(...),
+            function (string $text): void {
+                $this->turn !== null ? $this->steering[] = $text : $this->ask($text);
+            },
+            function (string $plugin, string $message): void {
+                if ($this->turn !== null) {
+                    $this->renderer->notice("Plugin {$plugin} failed: {$message}");
+                    return;
+                }
+                $this->region->gap();
+                $this->region->print(Style::error("bia: plugin {$plugin}: {$message}") . "\n");
+            },
+        );
         if ($this->sessionId !== null) {
             $this->replay($this->sessionId);
         } elseif ($this->pickSession) {
@@ -843,6 +860,10 @@ final class Chat
                 $this->turn !== null ? $this->steering[] = $text : $this->ask($text);
                 return;
             }
+            // A plugin's command: Bia's own of that name comes first.
+            if (!$this->commands->has($name) && $this->plugins?->run($name, trim((string) substr($text, strlen($name) + 1))) === true) {
+                return;
+            }
             // A model or effort chosen while Bia works is for the next message: the turn running ends on its own.
             if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp', 'model', 'effort'], true)) {
                 $this->say("Busy · Esc to stop");
@@ -885,8 +906,10 @@ final class Chat
         $this->echo($text);
         $images = $this->imagesIn($text);
         $this->work('Thinking', function (Cancellation $cancellation) use ($sessionId, $text, $images): void {
-            $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images);
+            $this->plugins?->emit('turn.start', ['text' => $text]);
+            $result = $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images);
             $this->away->turnDone();
+            $this->plugins?->emit('turn.done', ['text' => (string) $result?->text]);
         });
     }
 
@@ -1627,6 +1650,29 @@ final class Chat
     }
 
     /**
+     * The plugins installed and what each adds: its commands, tools, events,
+     * skills and MCP servers, or why it is off.
+     */
+    private function showPlugins(string $_): void
+    {
+        $plugins = $this->plugins?->all() ?? [];
+        if ($plugins === []) {
+            $this->note('No plugins · bia plugin add <git-url or folder>');
+            return;
+        }
+        $width = min(24, max(array_map(strlen(...), array_keys($plugins)))) + 2;
+        $room = max(10, $this->region->width() - 2 - $width);
+        $lines = [Style::dim('· Plugins')];
+        foreach ($plugins as $name => $plugin) {
+            $text = \Bia\Cli\Application::pluginLine($plugin);
+            $lines[] = '  ' . str_pad(Style::truncate((string) $name, $width - 2), $width)
+                . ($plugin['error'] !== null ? Style::error(Style::truncate($text, $room)) : Style::dim(Style::truncate($text, $room)));
+        }
+        $this->region->gap();
+        $this->region->print(implode("\n", $lines) . "\n");
+    }
+
+    /**
      * Opens the usage panel in the input's place: nothing of it joins the
      * conversation, and Esc closes it.
      */
@@ -1833,6 +1879,11 @@ final class Chat
             foreach ($this->skills?->all() ?? [] as $skill) {
                 if (!$this->commands->has($skill->name) && str_starts_with(strtolower($skill->name), strtolower(ltrim($text, '/')))) {
                     $items[] = ['value' => '/' . $skill->name, 'label' => '/' . $skill->name, 'hint' => Style::truncate($skill->description, 60)];
+                }
+            }
+            foreach ($this->plugins?->commands() ?? [] as $name => $description) {
+                if (!$this->commands->has($name) && str_starts_with($name, strtolower(ltrim($text, '/')))) {
+                    $items[] = ['value' => '/' . $name, 'label' => '/' . $name, 'hint' => Style::truncate($description, 60)];
                 }
             }
             if ($items === [] || ($items[0]['value'] === $text && count($items) === 1 && !$this->commands->takesArguments($text))) {

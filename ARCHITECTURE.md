@@ -112,8 +112,38 @@ frontmatter, a project's skill taking the place of the user's of its name.
 `Skill\SkillTool` offers them as one `skill` tool whose description lists each
 skill in a line; it gives a skill's instructions, or a file from its folder
 alone. The registry asks for it each step, so skills come and go with their
-folders, and with none there is no tool. A project's settings are in
+folders. A project's settings are in
 `.agents/bia.json`, beside its skills.
+
+## Plugins
+
+A plugin is a folder under Bia's home, `~/.bia/plugins/<name>`, holding any
+of a `plugin.php`, a `skills` folder and an `mcp.json`. Only the user puts
+one there, with `bia plugin add` (`Plugin\Installer`: a folder copied or a
+repository cloned beside its place and moved in whole) or by asking Bia to
+write it; nothing is read from a project.
+
+`Plugin\Plugins` loads each `plugin.php` for a conversation, and again on
+`/reload`: the file returns a closure, called with a `Plugin\Host`, the
+whole of Bia a plugin reaches. Through it a plugin adds slash commands,
+which the chat runs after its own; tools (`Plugin\PluginTool`, named
+`plugin__<plugin>__<tool>`, so none takes a built-in tool's place), which
+the registry asks for each step as it does MCP's; and listeners, told of
+tool calls by `Plugin\Observed`, a renderer around the main agent's that is
+only there when something listens, and of turns by the chat. A note or a
+message goes back through closures the chat gives, so a plugin never
+touches the `Surface`. Whatever throws turns its plugin off until the next
+load; a tool that throws fails its call alone.
+
+PHP cannot run a file that declares a class or a function twice, so a file
+is run again only when it changed, and one that changed and declares a name
+is left off with a line saying to start a new Bia. A changed file is dropped
+from the opcache first: a process that stays up never rechecks a file's time.
+
+The other two parts need no loading: `Skill\Catalog` reads each plugin's
+`skills` before the user's own, after Bia's one built-in skill,
+`bia-plugin`, which tells the model how to write a plugin; and each
+`mcp.json` joins the user's servers, with `${BIA_PLUGIN}` as its folder.
 
 ## Memory
 

@@ -216,7 +216,7 @@ completes.
 | `/new`, `/clear` | Start a new session |
 | `/compact` | Summarize the conversation so far now |
 | `/memory` | What Bia keeps between sessions, and where: the facts about you, the diary's days, this project's memories, and the file its rules go in |
-| `/reload` | Read the config, instructions (`AGENTS.md`) and MCP servers again, on the same session, model and effort, without restarting. Background commands go on. A config with an error leaves everything as it was. For new Bia code, quit and `bia resume` |
+| `/reload` | Read the config, instructions (`AGENTS.md`), plugins and MCP servers again, on the same session, model and effort, without restarting. Background commands go on. A config with an error leaves everything as it was. For new Bia code, quit and `bia resume` |
 | `/stats` | Show or hide live stats at the top right: drawing (fps, ms a frame), first token and tokens a second, tokens in and out, memory |
 | `/render [normal\|smooth\|power]` | How answers appear: `normal` as the text arrives; `smooth` evened out to a steady flow of characters; `power` each character dropping into place and landing with a flash (fullscreen). `tui.render` in your config sets the default |
 | `/help` | List commands and keys |
@@ -422,7 +422,80 @@ Run `git log` since the last tag, group the changes, and follow template.md.
 - `/release-notes` runs a skill by its name, with anything you write after
   it; skills show in the `/` menu with the commands.
 - The folders are read again at each step, so a skill added during a
-  session can be used at the next one. With none, there is nothing to load.
+  session can be used at the next one.
+- Bia has one skill of its own, `bia-plugin`, on writing a plugin, and
+  reads each installed plugin's skills too; yours and a project's take the
+  place of those of the same name.
+
+## Plugins
+
+A plugin extends Bia itself: a slash command, a tool, something done on
+each tool call or turn, with skills and MCP servers to go with it. Ask Bia
+for one ("add a /standup command that summarizes today's commits"): it
+writes the plugin, and `/reload` loads it into the conversation you are in.
+
+A plugin is a folder in `~/.bia/plugins/` (or `$BIA_HOME/plugins/`), and
+nowhere else: a project never brings one, and nothing installs one but you.
+It holds any of:
+
+```
+~/.bia/plugins/standup/
+  plugin.php     code run inside Bia
+  skills/        skills, each a folder with a SKILL.md
+  mcp.json       MCP servers, as in ~/.bia/mcp.json
+```
+
+`plugin.php` returns a closure, given the one object a plugin reaches Bia
+through:
+
+```php
+<?php
+
+return function (Bia\Plugin\Host $bia): void {
+    $bia->command('standup', 'What I did today', function (string $rest) use ($bia): void {
+        $bia->ask('Summarize my commits of today. ' . $rest);
+    });
+
+    $bia->tool('word_count', 'Counts the words of a text.', function (array $arguments): string {
+        return (string) str_word_count($arguments['text']);
+    }, ['type' => 'object', 'properties' => ['text' => ['type' => 'string']], 'required' => ['text']]);
+
+    $bia->on('tool.result', function (array $event) use ($bia): void {
+        if ($event['tool'] === 'shell' && !$event['ok']) {
+            $bia->note('A command failed');
+        }
+    });
+};
+```
+
+| Call | What it adds |
+| --- | --- |
+| `command(name, description, fn (string $rest))` | A slash command, in the `/` menu with Bia's own; one of Bia's of the same name comes first |
+| `tool(name, description, fn (array $arguments), schema)` | A tool the model can call, run inside Bia. A string returned is its result, anything else is sent as JSON, an exception fails the call |
+| `on(event, fn (array $event))` | A listener, told and changing nothing: `turn.start` (`text`), `tool.call` (`tool`, `arguments`), `tool.result` (`tool`, `arguments`, `output`, `ok`), `turn.done` (`text`) |
+| `note(text)` | A dim line in the conversation |
+| `ask(text)` | A message to the model, as if you wrote it |
+
+`$bia->name`, `$bia->directory` (the plugin's folder) and `$bia->workspace`
+(the project) say where it is.
+
+- `bia plugin add <git-url or folder> [name]` installs one and says what it
+  adds, `bia plugin rm <name>` removes one, `bia plugin list` and `/plugins`
+  list them.
+- `plugin.php` is loaded for a conversation only, not for `bia "prompt"`,
+  `--help` or `doctor`; a plugin's skills and MCP servers work everywhere
+  yours do. In `mcp.json`, `${BIA_PLUGIN}` is the plugin's folder.
+- A plugin that throws is turned off, with a line saying why, until
+  `/reload` or the next Bia; the conversation goes on. A tool that throws
+  only fails its call.
+- It runs inside Bia: a tool or a listener that waits holds Bia, so what is
+  slow or heavy belongs in the plugin's `mcp.json`, a process of its own.
+  Subagents get none of it.
+- `/reload` loads an edited `plugin.php` again, unless it declares a named
+  class or function, which PHP cannot load twice: keep it to the closure, or
+  start a new `bia`.
+- What `Host` offers may change between versions: a plugin is your own
+  code, and Bia can mend it.
 
 ## Configuration
 
