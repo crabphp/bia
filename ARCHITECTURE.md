@@ -123,8 +123,8 @@ one there, with `bia plugin add` (`Plugin\Installer`: a folder copied or a
 repository cloned beside its place and moved in whole) or by asking Bia to
 write it; nothing is read from a project.
 
-`Plugin\Plugins` loads each `plugin.php` for a conversation, and again on
-`/reload`: the file returns a closure, called with a `Plugin\Host`, the
+`Plugin\Plugins` loads each `plugin.php` for a conversation, and again
+when it changed: the file returns a closure, called with a `Plugin\Host`, the
 whole of Bia a plugin reaches. Through it a plugin adds slash commands,
 which the chat runs after its own; tools (`Plugin\PluginTool`, named
 `plugin__<plugin>__<tool>`, so none takes a built-in tool's place), which
@@ -134,6 +134,19 @@ only there when something listens, and of turns by the chat. A note or a
 message goes back through closures the chat gives, so a plugin never
 touches the `Surface`. Whatever throws turns its plugin off until the next
 load; a tool that throws fails its call alone.
+
+Plugins are read again by themselves. `Plugins::changed()` compares each
+plugin.php and mcp.json with what was read, a few small files hashed; the
+tools' source asks at every step of a turn and reloads the code, so a
+plugin the model has just written is callable at its next step, and the
+chat asks at a turn's end and before saying a command is unknown. A changed
+mcp.json is left to the turn's end, where everything is read again as
+`/reload` does, since servers are started there.
+
+`Host::run()` runs a command through the conversation's `ProcessRunner`:
+without Bia's credentials, bounded, and suspended in its fiber rather than
+holding the process. A plugin's command runs in a task of its own for that,
+stopped by Esc, or with the turn when one is running.
 
 PHP cannot run a file that declares a class or a function twice, so a file
 is run again only when it changed, and one that changed and declares a name

@@ -49,6 +49,12 @@ return function (Bia\Plugin\Host $bia): void {
 - `$bia->on(event, fn (array $event))`, the events being `turn.start`
   (`text`), `tool.call` (`tool`, `arguments`), `tool.result` (`tool`,
   `arguments`, `output`, `ok`) and `turn.done` (`text`).
+- `$bia->run(['git', 'log', '--oneline', '-5'])`: runs a command without
+  holding Bia, in the project unless a folder is given second, for 30
+  seconds unless a timeout is given third. It returns `ok`, `code`,
+  `output`, `stdout`, `stderr` and `timed_out`. It is a list of arguments,
+  not a shell line: `['sh', '-c', '…']` for one. Only inside a command, a
+  tool or a listener, never as the plugin loads.
 - `$bia->note(text)`: a dim line in the conversation.
 - `$bia->ask(text)`: sends the model a message as the user would.
 - `$bia->name`, `$bia->directory` (the plugin's folder, for its own files)
@@ -61,7 +67,10 @@ Rules:
   `require_once __DIR__ . '/…'`; a file that declares one cannot be loaded
   again in a running Bia.
 - It runs in Bia's process: never `exit`, never write to the terminal
-  (`echo`, `print`), and do not wait long in a command, a tool or a listener.
+  (`echo`, `print`), and never `shell_exec`, `exec`, `system` or
+  `proc_open`, which hold Bia while they run: `$bia->run()` does not.
+  Whatever else waits long (a slow request, a big file) belongs in an
+  `mcp.json` server.
 - An exception turns the plugin off until the next load, with a line saying why.
 
 ## After writing it
@@ -70,7 +79,9 @@ Check it before saying it is done: `php -l` on each PHP file, then
 `bia plugin list`, which loads every plugin and shows what each adds, or
 `failed:` and why. Mend what failed and check again.
 
-Then tell the user to run `/reload`: it loads the plugin in the running
-Bia, and you cannot run it for them. Say what was added and how to use it.
+Bia loads it by itself once it is written, and says `Plugins reloaded`:
+a tool it adds can be called from your next step on, as
+`plugin__<plugin>__<tool>`, so call it once to see it work. A command is
+the user's to run. Say what was added and how to use it.
 `/plugins` lists what each plugin adds, or why it is off. `bia plugin rm
 <name>` removes one, `bia plugin add <git-url or folder>` installs one.

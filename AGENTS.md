@@ -18,6 +18,8 @@ or load a terminal UI framework just to print help or stream a model reply.
   `Plugin\Host` and nothing else; widen `Host` one call at a time, for a
   plugin that needs it. It is loaded for a conversation only, never into a
   subagent, and one that throws is turned off: it never ends the chat.
+  A plugin's commands go through `Host::run()`, which is `ProcessRunner`.
+  Bia's own skills live in `src/Bia/Plugin/skills`, which the PHAR keeps.
 - `Bia\Terminal` renders events; the agent loop never writes directly to a TTY.
 - Use Crab's event loop and HTTP client for network streaming and cancellation.
 - Keep model, tool, and session operations cancellable and bounded.
@@ -146,6 +148,10 @@ the rule here first, with the user's agreement.
 - One that fails is a line in red, `bia: plugin standup: …`, under the
   banner when it failed as it loaded; during a turn it is a note among the
   tool calls, `· Plugin standup failed: …`.
+- Read again because their files changed: `· Plugins reloaded · standup`,
+  a note, among the tool calls when it happens during a turn.
+- A plugin's command at work for a second or more, with no turn running,
+  takes the status line, dim: `Running /standup · Esc to stop`.
 - `/plugins` is `· Plugins` dim and under it, set in two columns, a row for
   each: its name, and dim what it adds, `/standup · 1 tool · tool.result ·
   2 skills · 1 MCP server`, or in red why it is off.

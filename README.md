@@ -1,7 +1,7 @@
 # Bia
 
 ```text
-▙▄▄▄▄▄▟   bia 0.1.4 · provider/model
+▙▄▄▄▄▄▟   bia 0.1.5 · provider/model
 █▙███▟█   ~/code/my-project
 ```
 
@@ -29,6 +29,9 @@ bia "find why the login test fails and fix it"
 - **Memory:** Bia keeps a diary and what it learns about you across every
   project, and each project's own memories, as plain files; a rule you lay
   down ("always …", "never …") is written into the project's `AGENTS.md`.
+- **Plugins:** ask Bia for a new slash command or tool of its own, and it
+  writes a plugin and loads it into the conversation you are in; or write
+  one yourself, in `~/.bia/plugins`, with skills and MCP servers to go with it.
 - **Long sessions:** before a request would overflow the model's context
   window, older history is summarized automatically; `/compact` does it on
   demand.
@@ -432,7 +435,8 @@ Run `git log` since the last tag, group the changes, and follow template.md.
 A plugin extends Bia itself: a slash command, a tool, something done on
 each tool call or turn, with skills and MCP servers to go with it. Ask Bia
 for one ("add a /standup command that summarizes today's commits"): it
-writes the plugin, and `/reload` loads it into the conversation you are in.
+writes the plugin, and Bia loads it into the conversation you are in as
+soon as it is written, with a `Plugins reloaded` line.
 
 A plugin is a folder in `~/.bia/plugins/` (or `$BIA_HOME/plugins/`), and
 nowhere else: a project never brings one, and nothing installs one but you.
@@ -473,6 +477,7 @@ return function (Bia\Plugin\Host $bia): void {
 | `command(name, description, fn (string $rest))` | A slash command, in the `/` menu with Bia's own; one of Bia's of the same name comes first |
 | `tool(name, description, fn (array $arguments), schema)` | A tool the model can call, run inside Bia. A string returned is its result, anything else is sent as JSON, an exception fails the call |
 | `on(event, fn (array $event))` | A listener, told and changing nothing: `turn.start` (`text`), `tool.call` (`tool`, `arguments`), `tool.result` (`tool`, `arguments`, `output`, `ok`), `turn.done` (`text`) |
+| `run(command, directory, timeout)` | Runs a command, a list of arguments, without holding Bia: in the project and for 30 seconds unless told otherwise. Gives `ok`, `code`, `output`, `stdout`, `stderr`, `timed_out`. Esc stops it, and it sees none of Bia's credentials |
 | `note(text)` | A dim line in the conversation |
 | `ask(text)` | A message to the model, as if you wrote it |
 
@@ -481,18 +486,26 @@ return function (Bia\Plugin\Host $bia): void {
 
 - `bia plugin add <git-url or folder> [name]` installs one and says what it
   adds, `bia plugin rm <name>` removes one, `bia plugin list` and `/plugins`
-  list them.
+  list them. `bia plugin update [name]` brings one installed from git, or
+  all of them, up to date.
+- A plugin written or changed while Bia runs, by Bia or by you, is loaded
+  without `/reload`: at the next step of a turn, so Bia can call a tool it
+  has just written, at a turn's end, and when you run a command Bia does
+  not know yet. A changed `mcp.json` reads everything again, as `/reload`.
+- A command runs beside the conversation: the input stays yours, and once
+  it takes a second the status line says `Running /standup · Esc to stop`.
 - `plugin.php` is loaded for a conversation only, not for `bia "prompt"`,
   `--help` or `doctor`; a plugin's skills and MCP servers work everywhere
   yours do. In `mcp.json`, `${BIA_PLUGIN}` is the plugin's folder.
 - A plugin that throws is turned off, with a line saying why, until
   `/reload` or the next Bia; the conversation goes on. A tool that throws
   only fails its call.
-- It runs inside Bia: a tool or a listener that waits holds Bia, so what is
-  slow or heavy belongs in the plugin's `mcp.json`, a process of its own.
-  Subagents get none of it.
-- `/reload` loads an edited `plugin.php` again, unless it declares a named
-  class or function, which PHP cannot load twice: keep it to the closure, or
+- It runs inside Bia: run commands with `$bia->run()`, never `shell_exec`
+  or `exec`, which hold Bia while they run. Whatever else waits long
+  belongs in the plugin's `mcp.json`, a process of its own. Subagents get
+  none of it.
+- An edited `plugin.php` is loaded again unless it declares a named class
+  or function, which PHP cannot load twice: keep it to the closure, or
   start a new `bia`.
 - What `Host` offers may change between versions: a plugin is your own
   code, and Bia can mend it.
@@ -800,7 +813,7 @@ provider.
 
 ## Status and limits
 
-Bia is at 0.1.4. Not yet built:
+Bia is at 0.1.5. Not yet built:
 - **Only OpenAI-compatible wire formats.** Native Anthropic Messages and
   Gemini adapters are planned.
 - **No native Windows.** Bia runs in WSL there.

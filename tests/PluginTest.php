@@ -243,6 +243,157 @@ final class PluginTest extends TestCase
         self::assertSame(['.', '..', 'bia-hello'], scandir($this->plugins));
     }
 
+    public function testPluginsWrittenDuringAConversationAreReadAgainByThemselves(): void
+    {
+        $command = static fn (string $name): string => "<?php\nreturn function (Bia\\Plugin\\Host \$bia): void {\n    \$bia->command('{$name}', 'A command', fn () => null);\n    \$bia->tool('{$name}', 'A tool.', fn () => '{$name}');\n};\n";
+        $plugins = (new Plugins($this->plugins))->load();
+        $notes = [];
+        $plugins->attach(static function (string $text) use (&$notes): void { $notes[] = $text; }, static fn () => null, static fn () => null);
+        // As the conversation's tools are asked for, at each step.
+        $registry = (new Registry())->from(static function () use ($plugins): array {
+            $plugins->refresh();
+            return $plugins->tools();
+        });
+        self::assertNull($plugins->changed());
+        self::assertSame([], $registry->definitions());
+
+        $this->plugin('first', $command('one'));
+        self::assertSame(['names' => ['first'], 'servers' => false], $plugins->changed());
+        self::assertSame('plugin__first__one', $registry->definitions()[0]->name, 'Written a step ago, its tool is there at the next.');
+        self::assertSame(['Plugins reloaded · first'], $notes);
+        self::assertNull($plugins->changed());
+        $registry->definitions();
+        self::assertCount(1, $notes, 'Nothing changed: nothing is read or said again.');
+
+        $this->plugin('first', $command('uno'));
+        $this->plugin('second', $command('two'));
+        file_put_contents("{$this->plugins}/second/mcp.json", '{"mcpServers": {}}');
+        self::assertSame(['names' => ['first', 'second'], 'servers' => true], $plugins->changed());
+        self::assertTrue($plugins->refresh());
+        self::assertSame(['uno', 'two'], array_keys($plugins->commands()));
+        self::assertSame(['names' => [], 'servers' => true], $plugins->changed(), 'Its code is read; its servers are still to be started, which /reload does.');
+        self::assertFalse($plugins->refresh());
+        self::assertNull($plugins->load()->changed());
+
+        (new Installer($this->plugins, new ProcessRunner()))->remove('second');
+        self::assertSame(['names' => ['second'], 'servers' => true], $plugins->changed(), 'One taken away is a change too.');
+        self::assertTrue($plugins->refresh());
+        self::assertSame(['uno'], array_keys($plugins->commands()));
+    }
+
+    public function testWhatAPluginKeptFromALoadBeforeDoesNoHarm(): void
+    {
+        $this->plugin('gone', <<<'PHP'
+            <?php
+            return function (Bia\Plugin\Host $bia): void {
+                $GLOBALS['bia-test-host'] = $bia;
+                $bia->command('wait', 'Waits, then fails', function () use ($bia): void {
+                    $bia->run(['sleep', '0.3']);
+                    throw new RuntimeException('after it went');
+                });
+            };
+            PHP);
+        $plugins = (new Plugins($this->plugins, $this->root))->load();
+        $failed = [];
+        $plugins->attach(static fn () => null, static fn () => null, static function (string $plugin, string $message) use (&$failed): void { $failed[] = "{$plugin}: {$message}"; });
+        $installer = new Installer($this->plugins, new ProcessRunner());
+
+        // Its command waits on a command of its own while the plugin is taken away and the rest read again.
+        Loop::run(static function () use ($plugins, $installer): void {
+            $loop = \Crab\Engine\EventLoop::current();
+            $command = \Crab\Engine\Async\Task::spawn($loop, static fn () => $plugins->run('wait', ''));
+            $loop->delay(0.05, static function () use ($plugins, $installer): void {
+                $installer->remove('gone');
+                $plugins->refresh();
+            });
+            $command->await();
+        });
+        self::assertSame(['gone: after it went'], $failed, 'What it did then is said,');
+        self::assertSame([], $plugins->all(), 'and nothing of it comes back.');
+
+        try {
+            $GLOBALS['bia-test-host']->command('more', 'Too late', static fn () => null);
+            self::fail('Added to a load that is over.');
+        } catch (\LogicException $error) {
+            self::assertStringContainsString('adds as it loads', $error->getMessage());
+        } finally {
+            unset($GLOBALS['bia-test-host']);
+        }
+        self::assertSame([], $plugins->commands());
+    }
+
+    public function testAPluginRunsCommandsThroughBiaWithoutItsCredentials(): void
+    {
+        $this->plugin('runner', <<<'PHP'
+            <?php
+            return function (Bia\Plugin\Host $bia): void {
+                $bia->tool('run', 'Runs.', fn (array $arguments) => $bia->run($arguments['command'], $arguments['directory'] ?? null, $arguments['timeout'] ?? 30.0));
+            };
+            PHP);
+        $plugins = (new Plugins($this->plugins, $this->root, new ProcessRunner(['s3cret-key'], ['PATH' => (string) getenv('PATH'), 'BIA_API_KEY' => 's3cret-key', 'KEPT' => 'yes'])))->load();
+        $tool = $plugins->tools()[0];
+        $context = new ToolContext($this->root, 'session');
+        $run = static fn (array $arguments): array => Loop::run(static fn ($cancellation): array => (array) json_decode($tool->execute($arguments, $context, $cancellation)->text, true));
+
+        $result = $run(['command' => ['sh', '-c', 'pwd; echo "$KEPT:$BIA_API_KEY"; echo oops >&2; exit 3']]);
+        self::assertSame([false, 3, false], [$result['ok'], $result['code'], $result['timed_out']]);
+        self::assertSame(realpath($this->root) . "\nyes:\n", $result['stdout'], "In the project, with the environment Bia's own commands get: no credentials.");
+        self::assertSame("oops\n", $result['stderr']);
+        self::assertTrue($run(['command' => ['pwd'], 'directory' => $this->plugins])['ok']);
+        self::assertSame(realpath($this->plugins) . "\n", $run(['command' => ['pwd'], 'directory' => $this->plugins])['output']);
+
+        $started = microtime(true);
+        $slow = $run(['command' => ['sleep', '5'], 'timeout' => 0.2]);
+        self::assertSame([false, true], [$slow['ok'], $slow['timed_out']], 'Bounded.');
+        self::assertLessThan(3.0, microtime(true) - $started);
+
+        // Stopped with what it was run for: a turn, or the command alone.
+        $cancellation = new \Crab\Engine\Async\Cancellation();
+        $plugins->attach(static fn () => null, static fn () => null, static fn () => null, static fn () => $cancellation);
+        $started = microtime(true);
+        try {
+            Loop::run(static function () use ($tool, $context, $cancellation): void {
+                \Crab\Engine\EventLoop::current()->delay(0.1, static fn () => $cancellation->cancel());
+                $tool->execute(['command' => ['sleep', '5']], $context);
+            });
+            self::fail('It ran on.');
+        } catch (\Crab\Engine\Async\CancelledException) {
+            self::assertLessThan(3.0, microtime(true) - $started);
+        }
+    }
+
+    public function testAClonedPluginIsUpdated(): void
+    {
+        $repository = "{$this->root}/repo/hello";
+        mkdir($repository, 0777, true);
+        $write = static fn (string $said) => file_put_contents("{$repository}/plugin.php", "<?php\nreturn function (Bia\\Plugin\\Host \$bia): void {\n    \$bia->command('hello', '{$said}', fn () => null);\n};\n");
+        $git = static fn (string ...$command) => exec('git -C ' . escapeshellarg($repository) . ' -c user.name=t -c user.email=t@t ' . implode(' ', array_map(escapeshellarg(...), $command)) . ' 2>&1', $output, $status) !== false && $status === 0;
+        $write('Hi');
+        if (!$git('init', '-q') || !$git('add', '.') || !$git('commit', '-q', '-m', 'A plugin')) {
+            self::markTestSkipped('git is not here.');
+        }
+        $installer = new Installer($this->plugins, new ProcessRunner());
+        Loop::run(static fn ($cancellation): string => $installer->add('file://' . $repository, cancellation: $cancellation));
+        mkdir("{$this->plugins}/copied");
+        file_put_contents("{$this->plugins}/copied/plugin.php", "<?php\nreturn function (): void {};\n");
+        self::assertSame(['hello'], $installer->cloned());
+
+        self::assertFalse(Loop::run(static fn ($cancellation): bool => $installer->update('hello', $cancellation)), 'Nothing new.');
+        $write('Hello again');
+        self::assertTrue($git('commit', '-q', '-am', 'Said again'));
+        self::assertTrue(Loop::run(static fn ($cancellation): bool => $installer->update('hello', $cancellation)));
+        self::assertSame('Hello again', (new Plugins($this->plugins))->load()->commands()['hello']);
+
+        try {
+            Loop::run(static fn ($cancellation): bool => $installer->update('copied', $cancellation));
+            self::fail('Updated what was copied.');
+        } catch (\RuntimeException $error) {
+            self::assertStringContainsString('was not installed from a git repository', $error->getMessage());
+        }
+        $this->expectExceptionMessage('No plugin is named nope');
+        Loop::run(static fn ($cancellation): bool => $installer->update('nope', $cancellation));
+    }
+
     private function plugin(string $name, string $code): void
     {
         $folder = "{$this->plugins}/{$name}";

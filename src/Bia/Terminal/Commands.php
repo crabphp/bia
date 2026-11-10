@@ -96,9 +96,13 @@ final class Commands
         return ($this->commands[$this->aliases[$name] ?? $name]['usage'] ?? '') !== '';
     }
 
-    public function help(): string
+    /**
+     * @param array<string, string> $more Commands from elsewhere, as plugins', each with its description: listed after these, unless one here has the name.
+     */
+    public function help(array $more = []): string
     {
-        $width = 0;
+        $more = array_filter($more, fn (string $name): bool => !$this->has($name), ARRAY_FILTER_USE_KEY);
+        $width = $more === [] ? 0 : max(array_map(strlen(...), array_keys($more))) + 1;
         foreach ($this->commands as $name => $command) {
             $width = max($width, strlen($name . ' ' . $command['usage']));
         }
@@ -107,6 +111,9 @@ final class Commands
             $aliases = array_keys($this->aliases, $name, true);
             $lines[] = str_pad('/' . trim($name . ' ' . $command['usage']), $width + 3) . $command['description']
                 . ($aliases !== [] ? ' (also /' . implode(', /', $aliases) . ')' : '');
+        }
+        foreach ($more as $name => $description) {
+            $lines[] = str_pad('/' . $name, $width + 3) . $description;
         }
         return implode("\n", $lines);
     }

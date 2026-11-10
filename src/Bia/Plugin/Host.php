@@ -78,6 +78,25 @@ final readonly class Host
     }
 
     /**
+     * Runs a command and waits for it without holding Bia: the conversation
+     * goes on, Esc stops it, and it sees none of Bia's credentials. Use it
+     * in place of `shell_exec`, `exec` and `proc_open`, inside a command, a
+     * tool or a listener, not as the plugin loads.
+     *
+     *     $log = $bia->run(['git', 'log', '--oneline', '-5']);
+     *     if ($log['ok']) { $bia->note(strtok($log['output'], "\n")); }
+     *
+     * @param list<string> $command The program and its arguments, not a shell line: `['sh', '-c', '…']` for one.
+     * @param string|null $directory Where it runs: the project, unless given.
+     * @param float $timeout Seconds it may take, 600 at most.
+     * @return array{ok: bool, code: ?int, output: string, stdout: string, stderr: string, timed_out: bool}
+     */
+    public function run(array $command, ?string $directory = null, float $timeout = 30.0): array
+    {
+        return $this->plugins->execute($command, $directory, $timeout);
+    }
+
+    /**
      * Shows a dim line in the conversation.
      */
     public function note(string $text): void

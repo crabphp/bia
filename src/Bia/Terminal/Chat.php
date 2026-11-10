@@ -119,6 +119,13 @@ final class Chat
     private int $agentRows = 0;
     private ?string $statsTicker = null;
 
+    /** A plugin's command at work with no turn running; Esc stops it. */
+    private ?Cancellation $pluginRun = null;
+    private int $pluginRuns = 0;
+    /** The command of a plugin at work alone, and since when: the status line says so once it takes a second. */
+    private string $pluginRunName = '';
+    private float $pluginRunSince = 0.0;
+
     /** When a recap is due while the user is away. */
     private readonly RecapSchedule $away;
     /** @var array{summary: string, next: ?string}|null The session's last recap, shown again while nothing happened since. */
@@ -215,7 +222,7 @@ final class Chat
             ->add('plugins', 'Plugins installed', $this->showPlugins(...))
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
-            ->add('reload', 'Read config, instructions, plugins and MCP servers again', $this->reloadConfig(...))
+            ->add('reload', 'Read config, instructions, plugins and MCP again', $this->reloadConfig(...))
             ->add('exit', 'Leave Bia', function (string $_): void {
                 $this->running = false;
             }, aliases: ['quit']);
@@ -351,6 +358,7 @@ final class Chat
                 $this->region->gap();
                 $this->region->print(Style::error("bia: plugin {$plugin}: {$message}") . "\n");
             },
+            fn (): ?Cancellation => $this->turn ?? $this->pluginRun,
         );
         if ($this->sessionId !== null) {
             $this->replay($this->sessionId);
@@ -376,6 +384,7 @@ final class Chat
         } finally {
             $checking?->cancel();
             $this->turn?->cancel();
+            $this->pluginRun?->cancel();
             $this->confirming?->resume(false);
             $this->stopBlinking();
             if ($resize !== null) {
@@ -525,6 +534,8 @@ final class Chat
                 $this->view(null);
             } elseif ($this->turn !== null) {
                 $this->turn->cancel();
+            } elseif ($this->pluginRun !== null) {
+                $this->pluginRun->cancel();
             }
             return;
         }
@@ -819,6 +830,10 @@ final class Chat
             $this->turn->cancel();
             return;
         }
+        if ($this->pluginRun !== null) {
+            $this->pluginRun->cancel();
+            return;
+        }
         if (microtime(true) - $this->exitArmed < 2.0) {
             $this->running = false;
             return;
@@ -861,8 +876,14 @@ final class Chat
                 return;
             }
             // A plugin's command: Bia's own of that name comes first.
-            if (!$this->commands->has($name) && $this->plugins?->run($name, trim((string) substr($text, strlen($name) + 1))) === true) {
-                return;
+            if (!$this->commands->has($name) && $this->plugins !== null) {
+                if (!isset($this->plugins->commands()[$name])) {
+                    $this->loadPlugins(); // one just written, by Bia or by hand
+                }
+                if (isset($this->plugins->commands()[$name])) {
+                    $this->runPlugin($name, trim((string) substr($text, strlen($name) + 1)));
+                    return;
+                }
             }
             // A model or effort chosen while Bia works is for the next message: the turn running ends on its own.
             if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp', 'model', 'effort'], true)) {
@@ -1025,6 +1046,7 @@ final class Chat
                 $this->files->changed();
                 $this->stopTicker();
                 $this->lineStart();
+                $this->loadPlugins(); // a plugin Bia wrote or mended in this turn works from here on
                 $left = implode("\n\n", $this->steering);
                 $this->steering = [];
                 if ($left !== '' && $this->running) {
@@ -1650,6 +1672,61 @@ final class Chat
     }
 
     /**
+     * Runs a plugin's command in a task of its own, so one that waits, on a
+     * command it runs, holds nothing: the input stays the user's, and Esc
+     * stops it.
+     */
+    private function runPlugin(string $name, string $arguments): void
+    {
+        $plugins = $this->plugins;
+        if ($plugins === null) {
+            return;
+        }
+        // During a turn it is stopped with the turn; alone, on its own.
+        if ($this->turn === null) {
+            $this->pluginRun ??= new Cancellation();
+        }
+        if ($this->pluginRuns++ === 0) {
+            $this->pluginRunName = $name;
+            $this->pluginRunSince = microtime(true);
+            EventLoop::current()->delay(1.05, fn () => $this->draw());
+        }
+        Task::spawn(EventLoop::current(), function () use ($plugins, $name, $arguments): void {
+            try {
+                $plugins->run($name, $arguments);
+            } catch (CancelledException) {
+                $this->note("/{$name} stopped");
+            } finally {
+                if (--$this->pluginRuns === 0) {
+                    $this->pluginRun = null;
+                }
+                $this->draw();
+            }
+        });
+    }
+
+    /**
+     * Reads the plugins again when their files changed since they were
+     * read, and says which: Bia wrote one, or the user did. During a turn
+     * the tools' registry does it at each step; this is for its end, and
+     * for a plugin's MCP servers, which changed means everything is read
+     * again, as /reload does.
+     */
+    private function loadPlugins(): void
+    {
+        $changed = $this->plugins?->changed();
+        if ($changed === null) {
+            return;
+        }
+        // Not under a running turn, whose agent that would replace: its end asks again.
+        if ($changed['servers'] && $this->reload !== null && $this->turn === null) {
+            $this->reloadConfig('');
+            return;
+        }
+        $this->plugins?->refresh();
+    }
+
+    /**
      * The plugins installed and what each adds: its commands, tools, events,
      * skills and MCP servers, or why it is off.
      */
@@ -1859,7 +1936,7 @@ final class Chat
             $keys .= "\nWheel or PageUp/PageDown scroll · drag to select and copy · click a tool call to open it, Ctrl-O all";
         }
         $this->region->gap();
-        $this->region->print(Style::dim($this->commands->help() . "\n\n" . $keys) . "\n");
+        $this->region->print(Style::dim($this->commands->help($this->plugins?->commands() ?? []) . "\n\n" . $keys) . "\n");
     }
 
     /**
@@ -2113,6 +2190,9 @@ final class Chat
     {
         if ($this->notice !== '' && microtime(true) < $this->noticeUntil) {
             return Style::warn(Style::truncate($this->notice, $width));
+        }
+        if ($this->pluginRun !== null && $this->turn === null && microtime(true) - $this->pluginRunSince >= 1.0) {
+            return Style::dim(Style::truncate("Running /{$this->pluginRunName} · Esc to stop", $width));
         }
         $right = $this->modelShown();
         $window = (int) $this->config->get('model.context_window');

@@ -76,7 +76,7 @@ use Crab\HttpClient\Client;
  */
 final class Application
 {
-    public const VERSION = '0.1.4';
+    public const VERSION = '0.1.5';
 
     /**
      * @param list<string> $arguments
@@ -157,6 +157,7 @@ final class Application
               bia export <session-id>
               bia init [--global]
               bia plugin add <git-url or folder> [name]
+              bia plugin update [name]
               bia plugin rm <name>
               bia plugin list
               bia update
@@ -341,7 +342,7 @@ final class Application
     }
 
     /**
-     * `bia plugin add|rm|list`: the only way a plugin comes to be installed,
+     * `bia plugin add|update|rm|list`: the only way a plugin comes to be installed,
      * under Bia's home and never in a project.
      *
      * @param list<string> $words
@@ -363,6 +364,34 @@ final class Application
             }
             return ($plugin['error'] ?? null) === null ? 0 : 1;
         }
+        if ($action === 'update') {
+            $installer = new Installer($directory, new ProcessRunner($config->secrets()));
+            $names = isset($words[1]) ? [$words[1]] : $installer->cloned();
+            if ($names === []) {
+                fwrite(STDOUT, 'No plugin was installed from a git repository: nothing to update.' . PHP_EOL);
+                return 0;
+            }
+            $status = 0;
+            foreach ($names as $name) {
+                try {
+                    $changed = Loop::run(static fn (Cancellation $cancellation): bool => $installer->update($name, $cancellation));
+                } catch (CancelledException $cancelled) {
+                    throw $cancelled;
+                } catch (\RuntimeException $error) {
+                    if (isset($words[1])) {
+                        throw $error;
+                    }
+                    // One that cannot be updated does not keep the others from it.
+                    fwrite(STDERR, 'bia: ' . $error->getMessage() . PHP_EOL);
+                    $status = 1;
+                    continue;
+                }
+                $plugin = (new Plugins($directory, $root))->load()->all()[$name] ?? null;
+                fwrite(STDOUT, ($changed ? "Updated {$name}" : "{$name} is up to date") . ($plugin !== null ? ' · ' . self::pluginLine($plugin) : '') . PHP_EOL);
+                $status = ($plugin['error'] ?? null) === null ? $status : 1;
+            }
+            return $status;
+        }
         if ($action === 'rm' || $action === 'remove') {
             $name = $words[1] ?? throw new \InvalidArgumentException('bia plugin rm needs a plugin\'s name.');
             (new Installer($directory, new ProcessRunner()))->remove($name);
@@ -370,7 +399,7 @@ final class Application
             return 0;
         }
         if ($action !== 'list') {
-            throw new \InvalidArgumentException('bia plugin add <git-url or folder> [name], bia plugin rm <name>, or bia plugin list.');
+            throw new \InvalidArgumentException('bia plugin add <git-url or folder> [name], bia plugin update [name], bia plugin rm <name>, or bia plugin list.');
         }
         $plugins = (new Plugins($directory, $root))->load()->all();
         if ($plugins === []) {
@@ -549,7 +578,7 @@ final class Application
             $shells = new Shells($runner);
             $inspection = new Inspection();
             // The user's own plugins, loaded for a conversation alone, and again by /reload.
-            $plugins = (new Plugins($config->configDirectory() . '/plugins', $workspace->root()))->load();
+            $plugins = (new Plugins($config->configDirectory() . '/plugins', $workspace->root(), $runner))->load();
             $reads = null;
             $subagents = new Subagents(
                 static function (string $name, \Closure $doing, \Closure $called) use (&$chat, &$reads, $config, $terminal, $region, $http, $workspace, $outputs, $record): array {
@@ -591,10 +620,14 @@ final class Application
                 if ($mcp['manager'] !== null) {
                     $tools->from($mcp['manager']->tools(...));
                 }
-                $tools->from($plugins->tools(...));
+                // Read again at each step when their code changed: a plugin Bia has just written works at its next one.
+                $tools->from(static function () use ($plugins): array {
+                    $plugins->refresh();
+                    return $plugins->tools();
+                });
                 $tools->add(new AgentTool($subagents));
-                // Told of each tool call only when a plugin listens: otherwise the renderer as it is.
-                $shown = $plugins->listening() ? new Observed($renderer, $plugins) : $renderer;
+                // Plugins are told of each tool call: one written during the conversation listens from its next turn.
+                $shown = new Observed($renderer, $plugins);
                 // Subagents only read: what they find goes back to the main agent, which does the work.
                 $reads = (new Registry())
                     ->add(new ReadFileTool($workspace, outputs: $outputs))

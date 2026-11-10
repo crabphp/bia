@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Bia\Plugin;
 
+use Bia\Tool\ProcessRunner;
+use Crab\Engine\Async\Cancellation;
 use Crab\Engine\Async\CancelledException;
 
 /**
@@ -42,6 +44,10 @@ final class Plugins
     private ?\Closure $note = null;
     private ?\Closure $ask = null;
     private ?\Closure $fail = null;
+    /** @var (\Closure(): ?Cancellation)|null What stops the work a plugin is run for, now. */
+    private ?\Closure $cancellation = null;
+    /** @var array{code: array<string, string>, servers: array<string, string>} The files as they were when read. */
+    private array $seen = ['code' => [], 'servers' => []];
 
     /**
      * @param string $directory Where plugins are installed.
@@ -50,6 +56,7 @@ final class Plugins
     public function __construct(
         private readonly string $directory,
         private readonly string $workspace = '',
+        private readonly ?ProcessRunner $runner = null,
     ) {}
 
     /**
@@ -58,6 +65,7 @@ final class Plugins
     public function load(): self
     {
         $this->plugins = $this->commands = $this->listeners = $this->tools = [];
+        $this->seen = self::files($this->directory);
         foreach (self::folders($this->directory) as $name => $folder) {
             $skills = [];
             foreach (is_dir("{$folder}/skills") ? (scandir("{$folder}/skills") ?: []) : [] as $skill) {
@@ -84,6 +92,68 @@ final class Plugins
             }
         }
         return $this;
+    }
+
+    /**
+     * What changed on disk since the plugins were read, as when Bia has just
+     * written one: null for nothing, else the plugins whose code changed,
+     * came or went, and whether any MCP server's file did.
+     *
+     * @return array{names: list<string>, servers: bool}|null
+     */
+    public function changed(): ?array
+    {
+        $now = self::files($this->directory);
+        if ($now === $this->seen) {
+            return null;
+        }
+        $names = [];
+        foreach ($now['code'] + $this->seen['code'] as $name => $_) {
+            if (($now['code'][$name] ?? null) !== ($this->seen['code'][$name] ?? null)) {
+                $names[] = (string) $name;
+            }
+        }
+        sort($names);
+        return ['names' => $names, 'servers' => $now['servers'] !== $this->seen['servers']];
+    }
+
+    /**
+     * Reads the plugins again when their code changed on disk, and says so
+     * in the conversation: asked at each step of a turn, so a plugin Bia
+     * has just written works at its next one. A change to an MCP server's
+     * file is left for `changed()` to tell: that takes more than this.
+     *
+     * @return bool Whether they were read again.
+     */
+    public function refresh(): bool
+    {
+        $changed = $this->changed();
+        if ($changed === null || $changed['names'] === []) {
+            return false;
+        }
+        $servers = $this->seen['servers'];
+        $this->load();
+        $this->seen['servers'] = $servers;
+        $this->say('Plugins reloaded · ' . implode(', ', $changed['names']));
+        return true;
+    }
+
+    /**
+     * Each plugin's plugin.php and mcp.json, by what they hold: a plugin
+     * without a plugin.php has an empty entry, so one coming or going shows.
+     *
+     * @return array{code: array<string, string>, servers: array<string, string>}
+     */
+    private static function files(string $directory): array
+    {
+        $files = ['code' => [], 'servers' => []];
+        foreach (self::folders($directory) as $name => $folder) {
+            $files['code'][$name] = is_file("{$folder}/plugin.php") ? hash('xxh3', (string) file_get_contents("{$folder}/plugin.php")) : '';
+            if (is_file("{$folder}/mcp.json")) {
+                $files['servers'][$name] = hash('xxh3', (string) file_get_contents("{$folder}/mcp.json"));
+            }
+        }
+        return $files;
     }
 
     /**
@@ -119,10 +189,11 @@ final class Plugins
      * @param \Closure(string): void $note
      * @param \Closure(string): void $ask
      * @param \Closure(string, string): void $fail Given the plugin's name and what went wrong.
+     * @param (\Closure(): ?Cancellation)|null $cancellation What stops the work a plugin is run for, now: a command it runs ends with it.
      */
-    public function attach(\Closure $note, \Closure $ask, \Closure $fail): void
+    public function attach(\Closure $note, \Closure $ask, \Closure $fail, ?\Closure $cancellation = null): void
     {
-        [$this->note, $this->ask, $this->fail] = [$note, $ask, $fail];
+        [$this->note, $this->ask, $this->fail, $this->cancellation] = [$note, $ask, $fail, $cancellation];
         $this->told();
     }
 
@@ -156,14 +227,6 @@ final class Plugins
     public function tools(): array
     {
         return array_values($this->tools);
-    }
-
-    /**
-     * Whether any plugin listens: without one, nothing needs telling.
-     */
-    public function listening(): bool
-    {
-        return $this->listeners !== [];
     }
 
     /**
@@ -215,6 +278,7 @@ final class Plugins
      */
     public function register(string $plugin, string $name, string $description, \Closure $handler): void
     {
+        $this->current($plugin);
         $name = strtolower(ltrim($name, '/'));
         if (preg_match('/^[a-z][\w-]*$/', $name) !== 1) {
             throw new \InvalidArgumentException("/{$name} is not a command's name.");
@@ -233,6 +297,7 @@ final class Plugins
      */
     public function tool(string $plugin, string $name, string $description, \Closure $handler, array $schema): void
     {
+        $this->current($plugin);
         $tool = new PluginTool($plugin, $name, $description, $handler, $schema);
         $called = $tool->definition()->name;
         if (isset($this->tools[$called])) {
@@ -247,6 +312,7 @@ final class Plugins
      */
     public function listen(string $plugin, string $event, \Closure $listener): void
     {
+        $this->current($plugin);
         if (!in_array($event, self::EVENTS, true)) {
             throw new \InvalidArgumentException("There is no event {$event}: one of " . implode(', ', self::EVENTS) . '.');
         }
@@ -277,6 +343,44 @@ final class Plugins
         }
     }
 
+    /**
+     * @internal A plugin's, through its Host: a command run as Bia's own
+     * tools run theirs, without Bia's credentials, bounded, and stopped
+     * with what it was run for.
+     *
+     * @param list<string> $command
+     * @return array{ok: bool, code: ?int, output: string, stdout: string, stderr: string, timed_out: bool}
+     */
+    public function execute(array $command, ?string $directory, float $timeout): array
+    {
+        $runner = $this->runner ?? new ProcessRunner();
+        $result = $runner->run(
+            array_map(strval(...), array_values($command)),
+            $directory ?? ($this->workspace !== '' ? $this->workspace : (string) getcwd()),
+            max(0.1, min($timeout, 600.0)),
+            cancellation: $this->cancellation !== null ? ($this->cancellation)() : null,
+        );
+        return [
+            'ok' => $result->exitCode === 0 && !$result->timedOut,
+            'code' => $result->exitCode,
+            'output' => $result->output,
+            'stdout' => $result->stdout,
+            'stderr' => $result->stderr,
+            'timed_out' => $result->timedOut,
+        ];
+    }
+
+    /**
+     * A plugin adds what it adds as it loads: a closure kept from a load
+     * before this one has nothing here to add to.
+     */
+    private function current(string $plugin): void
+    {
+        if (!isset($this->plugins[$plugin])) {
+            throw new \LogicException("{$plugin} was read again since: what it adds, it adds as it loads.");
+        }
+    }
+
     private function guarded(string $plugin, \Closure $run): void
     {
         try {
@@ -294,6 +398,12 @@ final class Plugins
     private function disable(string $plugin, string $message): void
     {
         $message = trim((string) preg_replace('/\s+/', ' ', $message)) ?: 'it failed';
+        if (!isset($this->plugins[$plugin])) {
+            // Taken away since it started what failed: said, and nothing more to turn off.
+            $this->failed[] = [$plugin, $message];
+            $this->told();
+            return;
+        }
         $this->plugins[$plugin]['error'] = $message;
         foreach ($this->plugins[$plugin]['commands'] as $name => $_) {
             unset($this->commands[$name]);

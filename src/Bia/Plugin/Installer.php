@@ -8,8 +8,9 @@ use Bia\Tool\ProcessRunner;
 use Crab\Engine\Async\Cancellation;
 
 /**
- * `bia plugin add|rm`: puts a plugin under Bia's home, from a folder or a
- * git repository, and takes one away. Nothing is installed any other way.
+ * `bia plugin add|rm|update`: puts a plugin under Bia's home, from a
+ * folder or a git repository, takes one away, and brings one cloned up to
+ * date. Nothing is installed any other way.
  */
 final readonly class Installer
 {
@@ -59,6 +60,40 @@ final readonly class Installer
             self::delete($temporary);
         }
         return $name;
+    }
+
+    /**
+     * The plugins that were cloned, which `update` can bring up to date.
+     *
+     * @return list<string>
+     */
+    public function cloned(): array
+    {
+        return array_keys(array_filter(Plugins::folders($this->directory), static fn (string $folder): bool => is_dir("{$folder}/.git")));
+    }
+
+    /**
+     * Brings a cloned plugin up to its repository's latest commit, when
+     * that is a step forward from what is installed.
+     *
+     * @return bool Whether anything changed.
+     */
+    public function update(string $name, ?Cancellation $cancellation = null): bool
+    {
+        $folder = "{$this->directory}/{$name}";
+        if (preg_match('/^[a-z0-9][\w.-]*$/i', $name) !== 1 || !is_dir($folder)) {
+            throw new \RuntimeException("No plugin is named {$name}; bia plugin list shows them.");
+        }
+        if (!is_dir("{$folder}/.git")) {
+            throw new \RuntimeException("{$name} was not installed from a git repository: bia plugin rm {$name}, then add it again.");
+        }
+        $git = fn (string ...$arguments) => $this->runner->run(['git', ...$arguments], $folder, 120.0, cancellation: $cancellation, environment: ['GIT_TERMINAL_PROMPT' => '0']);
+        $before = trim($git('rev-parse', 'HEAD')->stdout);
+        $pull = $git('pull', '--quiet', '--ff-only');
+        if ($pull->exitCode !== 0) {
+            throw new \RuntimeException("git could not update {$name}: " . (trim($pull->stderr) ?: 'exit ' . $pull->exitCode));
+        }
+        return trim($git('rev-parse', 'HEAD')->stdout) !== $before;
     }
 
     public function remove(string $name): void

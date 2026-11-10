@@ -12,7 +12,8 @@ use Bia\Contracts\ToolResult;
 
 /**
  * The main agent's renderer, telling plugins of each tool call as it
- * starts and ends. Text passes straight through.
+ * starts and ends; with none listening, that is a look in an empty list.
+ * Text passes straight through.
  */
 final readonly class Observed implements Renderer
 {

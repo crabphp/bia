@@ -23,6 +23,9 @@ if ($root === '' || !is_file("{$root}/vendor/autoload.php")) {
 /** Paths kept, relative to the install: what Bia can load and the files that code reads. */
 function kept(string $path): bool
 {
+    if (str_starts_with($path, 'src/Bia/Plugin/skills/')) {
+        return true; // Bia's own skills: the catalog reads them from beside the code
+    }
     if (str_starts_with($path, 'src/') || str_starts_with($path, 'vendor/composer/') || $path === 'vendor/autoload.php') {
         return str_ends_with($path, '.php');
     }
