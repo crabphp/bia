@@ -542,9 +542,9 @@ final class TuiRenderer implements Renderer
             $gutter = Style::dim(str_pad((string) $shown, 4, ' ', STR_PAD_LEFT));
             $lines[] = $gutter . match (true) {
                 !$tint => " {$mark} {$text}",
-                // From the mark to the row's end on a dark green or red: highlighting resets only the foreground.
-                $mark === '+' => "\e[48;5;22m \e[32m+\e[39m {$code}\e[K\e[0m",
-                $mark === '-' => "\e[48;5;52m \e[31m−\e[39m {$code}\e[K\e[0m",
+                // From the mark to the row's end on green or red: highlighting resets only the foreground.
+                $mark === '+' => Style::added($code),
+                $mark === '-' => Style::removed($code),
                 default => "   {$code}\e[0m",
             };
         }

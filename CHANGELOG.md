@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.1.7 (2026-11-11)
+
+- Readable on a light terminal: Bia asks the terminal for its background,
+  and on a light one shades your messages light grey with black text, and
+  a diff's lines light green and light red.
+
 ## 0.1.6 (2026-11-10)
 
 - The footer is drawn on macOS again: a frame larger than the terminal's

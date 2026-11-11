@@ -14,10 +14,34 @@ namespace Bia\Tui;
 final class Style
 {
     private static ?bool $color = null;
+    private static bool $light = false;
 
     public static function enable(bool $color): void
     {
         self::$color = $color;
+    }
+
+    /**
+     * Shades for a light terminal: a light grey behind the user's message,
+     * with black text, and light green and red behind a diff's lines.
+     */
+    public static function light(bool $light): void
+    {
+        self::$light = $light;
+    }
+
+    /**
+     * A diff's line added or removed, on dark (or, on a light terminal,
+     * light) green or red to the row's end.
+     */
+    public static function added(string $code): string
+    {
+        return "\e[48;5;" . (self::$light ? '194' : '22') . "m \e[32m+\e[39m {$code}\e[K\e[0m";
+    }
+
+    public static function removed(string $code): string
+    {
+        return "\e[48;5;" . (self::$light ? '224' : '52') . "m \e[31m−\e[39m {$code}\e[K\e[0m";
     }
 
     public static function dim(string $text): string
@@ -46,14 +70,18 @@ final class Style
     }
 
     /**
-     * A line on a dark grey background, just above a dark terminal's own, as
-     * wide as the terminal: erasing to the end of the row fills it with the
-     * background.
+     * A line on a grey background just off the terminal's own (dark grey on
+     * a dark one, light grey with black text on a light one), as wide as the
+     * terminal: erasing to the end of the row fills it with the background.
      */
     public static function bar(string $text): string
     {
+        if (!self::color()) {
+            return $text;
+        }
+        $shade = self::$light ? "\e[30;48;5;254m" : "\e[48;5;236m";
         // A style inside ends with a reset; the shade is set again after it.
-        return self::color() ? "\e[48;5;236m" . str_replace("\e[0m", "\e[0m\e[48;5;236m", $text) . "\e[K\e[0m" : $text;
+        return $shade . str_replace("\e[0m", "\e[0m{$shade}", $text) . "\e[K\e[0m";
     }
 
     public static function bold(string $text): string

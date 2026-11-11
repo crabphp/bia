@@ -98,6 +98,7 @@ final class Terminal
         $this->saved = $saved;
         shell_exec('stty -icanon -echo -isig -iexten -icrnl -ixon min 1 time 0 < /dev/tty 2>/dev/null');
         stream_set_blocking($this->input, false);
+        Style::light($this->lightBackground());
         // Pasting bracketed; the window's focus told, as focus-in and focus-out keys.
         $this->write("\e[?2004h\e[?1004h");
         register_shutdown_function($this->leave(...));
@@ -189,6 +190,49 @@ final class Terminal
                 }
             }
         }
+    }
+
+    /**
+     * Whether the terminal's background is light, as it answers OSC 11.
+     * Asked with the device attributes (DA1) after it, which every terminal
+     * answers, and in order: one that knows no OSC 11 costs a round trip,
+     * not a timeout. Keys typed meanwhile are kept. Without an answer,
+     * COLORFGBG, else dark.
+     */
+    private function lightBackground(): bool
+    {
+        $this->write("\e]11;?\e\\\e[c");
+        $reply = '';
+        $deadline = microtime(true) + 0.5;
+        while (preg_match('/\e\[\?[\d;]*c/', $reply) !== 1 && ($left = $deadline - microtime(true)) > 0) {
+            $read = [$this->input];
+            $write = $except = null;
+            if (@stream_select($read, $write, $except, 0, (int) ($left * 1_000_000)) < 1) {
+                break;
+            }
+            $chunk = @fread($this->input, 8192);
+            if ($chunk === false || $chunk === '') {
+                break;
+            }
+            $reply .= $chunk;
+        }
+        $light = null;
+        $reply = (string) preg_replace_callback(
+            '/\e\]11;rgb:([0-9a-f]+)\/([0-9a-f]+)\/([0-9a-f]+)[^\e\x07]*(?:\e\\\\|\x07)/i',
+            function (array $m) use (&$light): string {
+                [$r, $g, $b] = array_map(static fn (string $hex): float => hexdec($hex) / (16 ** strlen($hex) - 1), [$m[1], $m[2], $m[3]]);
+                $light = 0.299 * $r + 0.587 * $g + 0.114 * $b > 0.5;
+                return '';
+            },
+            $reply,
+        );
+        $this->buffer .= (string) preg_replace('/\e\[\?[\d;]*c/', '', $reply, 1);
+        if ($light !== null) {
+            return $light;
+        }
+        // "foreground;background", as rxvt and iTerm set it: 7 and 15 are white, 9 to 14 light too.
+        $colors = explode(';', (string) getenv('COLORFGBG'));
+        return in_array(end($colors), ['7', '9', '10', '11', '12', '13', '14', '15'], true);
     }
 
     private function measure(): void

@@ -36,7 +36,8 @@ or load a terminal UI framework just to print help or stream a model reply.
   only the two `Surface`s, `Screen` and `Region`, and `Terminal` do. Keep the
   theme minimal: dim, one accent, green and red, a grey shade behind the
   user's messages, a dark green and a dark red behind a diff's lines added
-  and removed, and nothing else, for code only
+  and removed (on a light terminal, as it answers OSC 11: light grey with
+  black text, light green and light red), and nothing else, for code only
   the accent, yellow and dim, and the spinner's beer in foam white, amber and grey,
   and power mode's landing flash in amber; nothing when `NO_COLOR` is set.
 - Rendering runs on every streamed line: keep `Markdown` and `Highlight` to

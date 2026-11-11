@@ -248,6 +248,21 @@ final class TuiTest extends TestCase
         self::assertSame('abc…', Style::truncate('abcdef', 4));
     }
 
+    public function testALightTerminalShadesLight(): void
+    {
+        Style::enable(true);
+        try {
+            self::assertSame("\e[48;5;236m › hi\e[0m\e[48;5;236m\e[K\e[0m", Style::bar(" › hi\e[0m"));
+            Style::light(true);
+            self::assertSame("\e[30;48;5;254m › hi\e[0m\e[30;48;5;254m\e[K\e[0m", Style::bar(" › hi\e[0m"), 'Black on light grey, set again after a reset.');
+            self::assertStringStartsWith("\e[48;5;194m", Style::added('x'));
+            self::assertStringStartsWith("\e[48;5;224m", Style::removed('x'));
+        } finally {
+            Style::light(false);
+            Style::enable(false);
+        }
+    }
+
     public function testStyledTextWrapsWithItsColourCarriedOver(): void
     {
         self::assertSame(['abcd', 'ef'], Style::wrapAnsi('abcdef', 4), 'A word longer than the row is cut.');
