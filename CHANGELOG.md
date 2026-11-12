@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 0.1.8 (2026-11-13)
+
+- Interactive sessions get a short, agent-written name after the first
+  meaningful completed exchange, in the background without holding input.
+  Greetings stay untitled; once chosen, a name stays put. Naming uses the
+  configured model and fallbacks, counted in `/usage`, and fails quietly.
+- `bia sessions` and `/resume` show an untitled label until a name is
+  written, rather than the first chat message. Existing sessions and forks
+  get their own name when next answered interactively; one-shot and piped
+  runs do not wait for naming.
+- Recap text and its `Next:` line are dim italics, for `/recap`, automatic
+  idle recaps and recaps shown on resume. The heading stays dim without
+  italics; `NO_COLOR` leaves everything plain.
+
 ## 0.1.7 (2026-11-11)
 
 - Readable on a light terminal: Bia asks the terminal for its background,

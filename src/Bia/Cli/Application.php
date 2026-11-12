@@ -77,7 +77,7 @@ use Crab\HttpClient\Client;
  */
 final class Application
 {
-    public const VERSION = '0.1.7';
+    public const VERSION = '0.1.8';
 
     /**
      * @param list<string> $arguments
