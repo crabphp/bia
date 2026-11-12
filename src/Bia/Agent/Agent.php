@@ -79,6 +79,7 @@ final readonly class Agent
         private ?ExecutionStore $executions = null,
         /** @var (\Closure(string): ?string)|null What a user's message asks beyond its words: sent with it, never shown. */
         private ?\Closure $remind = null,
+        private ?Title $title = null,
     ) {
         if ($this->maxOutputBytes < 1024 || $this->maxOutputLines < 10) {
             throw new \InvalidArgumentException('An agent needs room for tool output.');
@@ -373,6 +374,21 @@ final readonly class Agent
     public function recap(string $sessionId, ?Cancellation $cancellation = null): ?array
     {
         return $this->recap?->write($this->sessions->path($sessionId), $cancellation);
+    }
+
+    /** A name for the session, or null until its topic is clear. */
+    public function title(string $sessionId, ?Cancellation $cancellation = null): ?string
+    {
+        $entries = $this->sessions->path($sessionId);
+        // Compaction can follow a stopped turn too: only an answered exchange may be named.
+        foreach (array_reverse($entries) as $entry) {
+            if (($message = $entry->message()) !== null) {
+                return $message->role === 'assistant' && $message->toolCalls === []
+                    ? $this->title?->write($entries, $cancellation)
+                    : null;
+            }
+        }
+        return null;
     }
 
     /**

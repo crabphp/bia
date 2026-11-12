@@ -37,6 +37,17 @@ final class TuiTest extends TestCase
         Style::enable(false);
     }
 
+    public function testDimItalicsAreStyledOnlyWhenColourIsEnabled(): void
+    {
+        self::assertSame('Recap text', Style::dim(Style::italic('Recap text')));
+        Style::enable(true);
+        self::assertSame("\e[3mRecap text\e[0m", Style::italic('Recap text'));
+        self::assertSame("\e[2m\e[3mRecap text\e[0m\e[0m", Style::dim(Style::italic('Recap text')));
+        self::assertSame('', Style::italic(''));
+        self::assertSame(10, Style::width(Style::dim(Style::italic('Recap text'))));
+        Style::enable(false);
+    }
+
     public function testKeysAreReadFromTerminalBytes(): void
     {
         $buffer = "a\e[A\r\x7f\x03\e[1;5D\eb\e\r\e[200~one\r\ntwo\e[201~é\e[99X\x17";

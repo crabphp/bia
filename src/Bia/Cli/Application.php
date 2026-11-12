@@ -15,6 +15,7 @@ use Bia\Terminal\Watched;
 use Bia\Tui\Transcript;
 use Bia\Agent\Compactor;
 use Bia\Agent\Recap;
+use Bia\Agent\Title;
 use Bia\Agent\SystemPrompt;
 use Bia\Config\Config;
 use Bia\Contracts\ExecutionStore;
@@ -472,7 +473,7 @@ final class Application
                 substr((string) $session['updated_at'], 0, 16),
                 $session['entry_count'],
                 $session['model'],
-                mb_strimwidth($title, 0, 60, '…', 'UTF-8'),
+                mb_strimwidth($title !== '' ? $title : '(untitled)', 0, 60, '…', 'UTF-8'),
             ));
         }
         return 0;
@@ -870,25 +871,14 @@ final class Application
      */
     private static function agent(Config $config, Client $http, Registry $tools, \Bia\Contracts\SessionStore $store, Renderer $renderer, Workspace $workspace, string $outputs, ?Inspection $inspection = null, ?\Closure $record = null, bool $reminds = false): Agent
     {
-        $metered = static fn (Config $config): Model => self::model($config, $http, $record);
         // Shown as it happens, and kept for /inspect.
         $notice = static function (string $message) use ($renderer, $inspection): void {
             $inspection?->event($message);
             $renderer->notice($message);
         };
         $modelName = (string) $config->get('model.name');
-        $model = $metered($config);
-        $fallbacks = self::fallbacks($config, $metered);
-        if ($fallbacks !== []) {
-            $model = new Fallback(
-                [['name' => $modelName, 'label' => $config->modelLabel(), 'model' => $model], ...$fallbacks],
-                $notice,
-                (float) $config->get('fallback.cooldown'),
-            );
-        }
+        $model = self::routedModel($config, $http, $notice, $record);
         $effort = $config->effort();
-        // Whatever the provider refuses (an effort, reasoning sent back, or none of it) is mended once.
-        $model = new Lenient($model, $notice);
         // A summary needs no deep thought: at most low, and quicker for it.
         $light = $effort === null ? [] : ['reasoning_effort' => in_array($effort, ['none', 'minimal'], true) ? $effort : 'low'];
         $compactor = $config->get('compaction.enabled') === false ? null : new Compactor(
@@ -919,7 +909,26 @@ final class Application
             executions: $store instanceof ExecutionStore ? $store : null,
             // A rule the user lays down is to be kept: the model is told so beside their message.
             remind: $reminds ? Memory::reminder(...) : null,
+            // Naming is independent and silent: its option handling never touches the live renderer.
+            title: $store instanceof SqliteStore ? new Title(self::routedModel($config, $http, static function (): void {}, $record), $modelName, $light) : null,
         );
+    }
+
+    /** Independent routing and option handling, with the caller's choice of notices. */
+    private static function routedModel(Config $config, Client $http, \Closure $notice, ?\Closure $record): Model
+    {
+        $metered = static fn (Config $config): Model => self::model($config, $http, $record);
+        $model = $metered($config);
+        $fallbacks = self::fallbacks($config, $metered);
+        if ($fallbacks !== []) {
+            $model = new Fallback(
+                [['name' => (string) $config->get('model.name'), 'label' => $config->modelLabel(), 'model' => $model], ...$fallbacks],
+                $notice,
+                (float) $config->get('fallback.cooldown'),
+            );
+        }
+        // Whatever the provider refuses is mended once, independently for each caller.
+        return new Lenient($model, $notice);
     }
 
     private static function model(Config $config, Client $http, ?\Closure $record = null): Model

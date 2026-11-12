@@ -48,6 +48,9 @@ bia "find why the login test fails and fix it"
   recorded after their result is saved, so a crash replays a saved result or
   tells the model that side effects may be uncertain instead of losing the
   boundary.
+- **Automatic session names:** in an interactive conversation, the agent writes
+  a short name in the background after the first meaningful exchange. Greetings
+  stay untitled; once named, a session keeps its name.
 - **Safe project settings:** a repository's `.agents/bia.json` is read as data,
   never run, and cannot redirect the model or its API key.
 - **Scriptable:** `--json` emits every event as a JSON line.
@@ -175,6 +178,14 @@ bia init                            Create .agents/bia.json in this directory
 bia init --global                   Create ~/.bia/config.php with every setting
 bia update                          Install the latest release
 ```
+
+Interactive sessions are named by a small background request to the configured
+model, counted in `/usage`, without adding messages to the conversation or
+blocking input. If there is no clear topic, or naming fails, Bia tries after the
+next completed turn. Existing sessions and forks get their own name when next
+answered interactively. One-shot and piped runs do not wait for naming; until
+named, `bia sessions` and `/resume` show an untitled label rather than the first
+chat message.
 
 | Option | Effect |
 |---|---|

@@ -159,7 +159,8 @@ the rule here first, with the user's agreement.
 
 **Recap**
 - `· Recap` dim, and under it, set in two columns, a few sentences of where
-  things stand and a dim `Next:` line when something is. Written by
+  things stand in dim italics, with a `Next:` line in the same style when
+  something is. Written by
   `/recap`, or on its own after `recap.idle` away (the terminal unfocused,
   or no key where it does not tell focus) once three turns are done and
   two since the last. It is one small request of its own, counted in

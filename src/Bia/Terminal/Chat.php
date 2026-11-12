@@ -137,6 +137,8 @@ final class Chat
     private int $revision = 0;
     /** The revision a failed recap was tried again at, to try it only once. */
     private ?int $recapRetried = null;
+    /** Session names are independent of the foreground turn and away recaps. */
+    private readonly ?\Bia\Session\Naming $naming;
 
     /**
      * @param \Closure(Config): Agent $makeAgent Builds the agent for a model, as /model switches.
@@ -172,6 +174,7 @@ final class Chat
         private readonly ?\Bia\Plugin\Plugins $plugins = null,
     ) {
         $this->agent ??= ($this->makeAgent)($this->config);
+        $this->naming = $sessions instanceof \Bia\Session\SqliteStore ? new \Bia\Session\Naming($sessions) : null;
         $this->away = new RecapSchedule(microtime(true));
         $this->stats = new Stats();
         $this->editor = new Editor($this->history->load());
@@ -382,7 +385,9 @@ final class Chat
                 }
             }
         } finally {
+            $this->running = false;
             $checking?->cancel();
+            $this->naming?->cancel();
             $this->turn?->cancel();
             $this->pluginRun?->cancel();
             $this->confirming?->resume(false);
@@ -422,6 +427,7 @@ final class Chat
             $this->region->print(Style::error('bia: reload: ' . $error->getMessage()) . "\n");
             return;
         }
+        $this->naming?->cancel();
         $old = $this->mcp['manager'] ?? null;
         $this->config = $built['config'];
         $this->makeAgent = $built['agent'];
@@ -1005,6 +1011,9 @@ final class Chat
     {
         $cancellation = new Cancellation();
         $this->turn = $cancellation;
+        if ($label === 'Thinking') {
+            $this->naming?->cancel(); // give a new conversation turn priority over housekeeping
+        }
         $this->revision++;
         $this->recapping?->cancel();
         $this->spinner = new Spinner($label);
@@ -1061,6 +1070,9 @@ final class Chat
                 if ($this->turn === null) {
                     $this->report($state); // unless what was left started another turn
                     $this->scheduleRecap();
+                    if ($finished && !$cancellation->isCancelled() && in_array($label, ['Thinking', 'Compacting'], true) && $this->running && $this->sessionId !== null && $this->agent !== null) {
+                        $this->naming?->start($this->sessionId, $this->agent->title(...));
+                    }
                 }
             }
         });
@@ -1207,6 +1219,7 @@ final class Chat
     private function newSession(string $_): void
     {
         $left = $this->used ? $this->sessionId : null;
+        $this->naming?->cancel();
         $this->renderer->collapse();
         $this->sessionId = null;
         $this->used = false;
@@ -1237,7 +1250,7 @@ final class Chat
             $title = trim((string) preg_replace('/\s+/', ' ', (string) ($session['title'] ?? '')));
             $items[] = [
                 'value' => (string) $session['id'],
-                'label' => $title !== '' ? $title : '(forked, ' . substr((string) $session['id'], 0, 8) . ')',
+                'label' => $title !== '' ? $title : '(untitled, ' . substr((string) $session['id'], 0, 8) . ')',
                 'hint' => self::ago($now - (int) strtotime((string) $session['updated_at'])) . ' · ' . $session['model'],
             ];
         }
@@ -1246,6 +1259,7 @@ final class Chat
 
     private function switchSession(string $id): void
     {
+        $this->naming?->cancel();
         $this->leaving();
         $this->sessionId = $id;
         $this->used = true;
@@ -1595,7 +1609,7 @@ final class Chat
 
     /**
      * A recap, as a block of its own: a dim title, and under it the recap
-     * and what is next.
+     * and what is next, both in dim italics.
      *
      * @param array{summary: string, next: ?string} $recap
      */
@@ -1603,10 +1617,10 @@ final class Chat
     {
         $room = max(20, $this->region->width() - 2);
         $lines = [Style::dim('· Recap')];
-        $text = [$recap['summary'], ...($recap['next'] !== null ? [Style::dim('Next:') . ' ' . $recap['next']] : [])];
+        $text = [$recap['summary'], ...($recap['next'] !== null ? ['Next: ' . $recap['next']] : [])];
         foreach ($text as $paragraph) {
             foreach (Style::wrapAnsi($paragraph, $room) as $line) {
-                $lines[] = '  ' . $line;
+                $lines[] = '  ' . Style::dim(Style::italic($line));
             }
         }
         $this->renderer->catchUp();

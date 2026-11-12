@@ -77,6 +77,7 @@ final class SessionStoreTest extends TestCase
         $store = new SqliteStore($this->path());
         $original = $store->create('/workspace', 'm');
         $store->append($original, Message::user('shared'));
+        $store->saveTitle($original, 'Original topic', (int) $store->head($original));
         $fork = $store->create('/workspace', 'm', fromEntry: $store->head($original));
 
         $store->append($fork, Message::user('only in fork'));
@@ -87,7 +88,8 @@ final class SessionStoreTest extends TestCase
         self::assertSame(['shared', 'only in original'], $texts($original));
 
         $byId = array_column($store->list(), null, 'id');
-        self::assertSame('shared', $byId[$fork]['title']);
+        self::assertNull($byId[$fork]['title'], 'A fork gets its own name, not its original prompt or title.');
+        self::assertSame('Original topic', $byId[$original]['title']);
         self::assertSame(2, $byId[$fork]['entry_count']);
     }
 
@@ -121,7 +123,9 @@ final class SessionStoreTest extends TestCase
 
         $listed = $store->list(workspace: '/work/here');
         self::assertCount(1, $listed);
-        self::assertSame('fix the failing test', $listed[0]['title']);
+        self::assertNull($listed[0]['title'], 'The first prompt is not a session name.');
+        self::assertTrue($store->saveTitle($here, 'Fix failing login test', (int) $store->head($here)));
+        self::assertSame('Fix failing login test', $store->list(workspace: '/work/here')[0]['title']);
         self::assertSame(2, $listed[0]['entry_count']);
         self::assertCount(2, $store->list());
 
@@ -130,6 +134,45 @@ final class SessionStoreTest extends TestCase
         self::assertNull($store->resolve('ab'), 'Two sessions start with it.');
         self::assertNull($store->resolve('a%'), 'A LIKE wildcard is taken literally.');
         self::assertNull($store->resolve(''));
+    }
+
+    public function testNamesAreDurableStableAndDoNotChangeTheConversationOrItsRecency(): void
+    {
+        $path = $this->path();
+        $store = new SqliteStore($path);
+        $id = $store->create('/workspace', 'm');
+        $entry = $store->append($id, Message::user('hi'));
+        self::assertNull($store->title($id));
+        self::assertFalse($store->saveTitle($id, '   ', $entry->id));
+        self::assertFalse($store->saveTitle($id, 'Stale title', $entry->id + 1));
+        $before = $store->list()[0];
+        self::assertTrue($store->saveTitle($id, 'Automatic session naming', $entry->id));
+        self::assertFalse($store->saveTitle($id, 'Replacement name', $entry->id));
+        self::assertSame($entry->id, $store->head($id));
+        self::assertSame($before['updated_at'], $store->list()[0]['updated_at']);
+        self::assertCount(1, $store->path($id));
+        $store->close();
+        $reopened = new SqliteStore($path);
+        self::assertSame('Automatic session naming', $reopened->title($id));
+        self::assertSame('Automatic session naming', $reopened->list()[0]['title']);
+    }
+
+    public function testTheExistingSchemaGainsNamesWithoutChangingMessages(): void
+    {
+        $path = $this->path();
+        $store = new SqliteStore($path);
+        $id = $store->create('/workspace', 'm');
+        $entry = $store->append($id, Message::user('old conversation'));
+        $store->close();
+        $pdo = new \PDO('sqlite:' . $path);
+        $pdo->exec('ALTER TABLE sessions DROP COLUMN title');
+        $pdo->exec('PRAGMA user_version = 5');
+        $pdo = null;
+
+        $store = new SqliteStore($path);
+        self::assertNull($store->title($id));
+        self::assertSame('old conversation', $store->path($id)[0]->message()?->text);
+        self::assertTrue($store->saveTitle($id, 'Name an existing session', $entry->id));
     }
 
     private function path(): string

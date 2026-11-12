@@ -146,6 +146,26 @@ final class SqliteStore implements SessionStore, ExecutionStore
         ]);
     }
 
+    /** The generated name, or null until the conversation has a topic. */
+    public function title(string $sessionId): ?string
+    {
+        $statement = $this->open()->prepare('SELECT title FROM sessions WHERE id = ?');
+        $statement->execute([$sessionId]);
+        $title = $statement->fetchColumn();
+        return is_string($title) ? $title : null;
+    }
+
+    /** Names a session once, only while it is still at the head that was read. */
+    public function saveTitle(string $sessionId, string $title, int $head): bool
+    {
+        if (trim($title) === '') {
+            return false;
+        }
+        $statement = $this->open()->prepare('UPDATE sessions SET title = ? WHERE id = ? AND head = ? AND title IS NULL');
+        $statement->execute([$title, $sessionId, $head]);
+        return $statement->rowCount() === 1;
+    }
+
     public function exists(string $sessionId): bool
     {
         $statement = $this->open()->prepare('SELECT 1 FROM sessions WHERE id = ? LIMIT 1');
@@ -156,13 +176,12 @@ final class SqliteStore implements SessionStore, ExecutionStore
     public function list(int $limit = 50, ?string $workspace = null): array
     {
         $limit = max(1, min(500, $limit));
-        // Walk from each session's head to the root, so a forked session counts
-        // and titles the conversation it branched from.
+        // Walk from each session's head to the root, so a fork counts its shared history.
         $where = $workspace !== null ? ' WHERE s.workspace = ?' : '';
         $statement = $this->open()->prepare(<<<SQL
             WITH RECURSIVE
             listed AS (
-                SELECT id, workspace, model, head, created_at, updated_at
+                SELECT id, workspace, model, head, title, created_at, updated_at
                 FROM sessions s{$where} ORDER BY updated_at DESC LIMIT {$limit}
             ),
             path(session_id, id, parent_id, type, data, depth) AS (
@@ -174,9 +193,7 @@ final class SqliteStore implements SessionStore, ExecutionStore
             )
             SELECT l.id, l.workspace, l.model, l.created_at, l.updated_at,
                 (SELECT COUNT(*) FROM path p WHERE p.session_id = l.id) AS entry_count,
-                (SELECT json_extract(p.data, '$.text') FROM path p
-                    WHERE p.session_id = l.id AND p.type = 'message' AND json_extract(p.data, '$.role') = 'user'
-                    ORDER BY p.depth DESC LIMIT 1) AS title
+                l.title
             FROM listed l ORDER BY l.updated_at DESC
             SQL);
         $statement->execute($workspace !== null ? [$workspace] : []);
@@ -304,6 +321,7 @@ final class SqliteStore implements SessionStore, ExecutionStore
         $this->migrateRequests($pdo);
         $this->migrateRecap($pdo);
         $this->migrateExecutions($pdo);
+        $this->migrateTitle($pdo);
         $pdo->prepare('DELETE FROM requests WHERE at < ?')->execute([time() - self::USAGE_DAYS * 86400]);
         return $this->pdo = $pdo;
     }
@@ -362,6 +380,26 @@ final class SqliteStore implements SessionStore, ExecutionStore
             $pdo->commit();
         } catch (\Throwable $error) {
             $pdo->rollBack();
+            throw $error;
+        }
+    }
+
+    /** Version 6: a generated name, separate from the conversation and its recency. */
+    private function migrateTitle(\PDO $pdo): void
+    {
+        if ((int) $pdo->query('PRAGMA user_version')->fetchColumn() >= 6) {
+            return;
+        }
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            // Another Bia may have upgraded it while this process waited for the write lock.
+            if ((int) $pdo->query('PRAGMA user_version')->fetchColumn() < 6) {
+                $pdo->exec('ALTER TABLE sessions ADD COLUMN title TEXT');
+                $pdo->exec('PRAGMA user_version = 6');
+            }
+            $pdo->exec('COMMIT');
+        } catch (\Throwable $error) {
+            $pdo->exec('ROLLBACK');
             throw $error;
         }
     }

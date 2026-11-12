@@ -89,6 +89,11 @@ final class Style
         return self::paint('1', $text);
     }
 
+    public static function italic(string $text): string
+    {
+        return self::paint('3', $text);
+    }
+
     public static function inverse(string $text): string
     {
         return self::paint('7', $text);

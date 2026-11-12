@@ -33,8 +33,8 @@ interface SessionStore
 
     /**
      * The most recently used sessions first, each with its id, workspace,
-     * model, created_at, updated_at, entry_count, and title: its first
-     * prompt, or null.
+     * model, created_at, updated_at, entry_count, and title: its generated
+     * name, or null until named.
      *
      * @param string|null $workspace Only the sessions of this workspace.
      * @return list<array<string, mixed>>
