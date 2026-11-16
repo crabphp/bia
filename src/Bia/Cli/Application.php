@@ -538,7 +538,8 @@ final class Application
         }
         $config = Config::load(overrides: $overrides);
         $apiKey = (string) ($config->get('model.api_key') ?? '');
-        if ($apiKey === '') {
+        // An interactive guest can /join without a model key; local turns still require one.
+        if ($apiKey === '' && !($words === [] && self::isTty(STDIN) && !($options['json'] ?? false) && Terminal::interactive())) {
             throw new \RuntimeException($config->keyHelp());
         }
         $store = new SqliteStore($config->databasePath());

@@ -42,6 +42,14 @@ final class TuiRenderer implements Renderer
     private \Closure $usage;
     /** @var \Closure(int): void|null */
     private ?\Closure $streamed = null;
+    /** Optional semantic observer; never receives terminal frames or credentials. */
+    private ?\Closure $observer = null;
+
+    public function observe(?\Closure $observer): void
+    {
+        $this->observer = $observer;
+    }
+
     private Markdown $markdown;
     /** Calls that worked in a row, drawn as one line until something else comes. */
     private Gathered $gathered;
@@ -123,6 +131,7 @@ final class TuiRenderer implements Renderer
 
     public function event(ModelEvent $event): void
     {
+        ($this->observer)?->__invoke('event', [$event]);
         switch ($event->type) {
             case 'text_delta':
                 ($this->activity)('Writing');
@@ -147,6 +156,7 @@ final class TuiRenderer implements Renderer
 
     public function running(ToolCall $call, string $output): void
     {
+        ($this->observer)?->__invoke('running', [$call, $output]);
         $this->live();
         if (!isset($this->running[$call->id])) {
             $this->running[$call->id] = ['call' => $call, 'output' => ''];
@@ -158,6 +168,7 @@ final class TuiRenderer implements Renderer
 
     public function tool(ToolCall $call, ToolResult $result): void
     {
+        ($this->observer)?->__invoke('tool', [$call, $result]);
         $this->live();
         unset($this->running[$call->id]);
         if ($this->runs !== []) {
@@ -227,6 +238,7 @@ final class TuiRenderer implements Renderer
 
     public function notice(string $message): void
     {
+        ($this->observer)?->__invoke('notice', [$message]);
         $this->end();
         $this->begin('work');
         $this->region->print(Style::dim("· {$message}") . "\n");
@@ -234,6 +246,7 @@ final class TuiRenderer implements Renderer
 
     public function finish(ModelResult $result): void
     {
+        ($this->observer)?->__invoke('finish', []);
         $this->end();
         $this->lineStart();
         $this->collapse();

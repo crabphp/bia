@@ -29,6 +29,9 @@ function kept(string $path): bool
     if (str_starts_with($path, 'src/') || str_starts_with($path, 'vendor/composer/') || $path === 'vendor/autoload.php') {
         return str_ends_with($path, '.php');
     }
+    if ($path === 'vendor/paragonie/sodium_compat/autoload.php' || str_starts_with($path, 'vendor/paragonie/sodium_compat/lib/')) {
+        return str_ends_with($path, '.php'); // Composer loads the compatibility bootstrap and its function shims
+    }
     if (preg_match('#^vendor/crabphp/framework/src/HttpClient/data/#', $path)) {
         return true; // PublicSuffixes reads its list from beside it
     }

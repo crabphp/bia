@@ -22,6 +22,7 @@ final class Terminal
     private ?int $columns = null;
     private ?int $rows = null;
     private bool $alternate = false;
+    private ?string $title = null;
 
     /**
      * @param resource $input
@@ -128,6 +129,28 @@ final class Terminal
         $this->write("\e]52;c;" . base64_encode($text) . "\e\\");
     }
 
+    /** Sets the window title; null restores the previous one where title stacks are supported. */
+    public function title(?string $text): void
+    {
+        if ($text === null) {
+            if ($this->title !== null) {
+                $this->write("\e[23;2t");
+                $this->title = null;
+            }
+            return;
+        }
+        // Titles can come from saved data: no control may end the OSC or start another one.
+        $text = mb_substr(trim((string) preg_replace('/[\p{Cc}\p{Cf}\p{Z}]+/u', ' ', $text)), 0, 160);
+        if ($this->title === $text) {
+            return;
+        }
+        if ($this->title === null) {
+            $this->write("\e[22;2t");
+        }
+        $this->title = $text;
+        $this->write("\e]2;{$text}\e\\");
+    }
+
     /**
      * Tells the terminal what the program is doing (OSC 7501, the Program
      * Status Protocol): idle, working, done, blocked or error. Terminals that
@@ -148,9 +171,11 @@ final class Terminal
     public function leave(): void
     {
         if ($this->saved === null) {
+            $this->title(null);
             return;
         }
         $this->alternate(false);
+        $this->title(null);
         $this->write("\e[?1004l\e[?2004l\e[?25h");
         shell_exec('stty ' . escapeshellarg($this->saved) . ' < /dev/tty 2>/dev/null');
         stream_set_blocking($this->input, true);

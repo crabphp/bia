@@ -38,6 +38,9 @@ bia "find why the login test fails and fix it"
 - **Long output kept in full:** tool output past 2000 lines or 50 KB is cut
   for the model, and the full output is saved where `read_file` can page
   through it.
+- **Remote collaboration:** `/share` creates an invite another Bia user can
+  `/join`. Approve one guest to share live output and accept debugging messages;
+  the host alone runs the agent and tools, over encrypted Nostr relay traffic.
 - **Concurrent reads:** consecutive read-only tool calls run at the same time.
 - **Cancellable:** Ctrl-C (or Esc) stops the current turn, its model request and any
   running command, and returns to the prompt; a second Ctrl-C quits.
@@ -62,7 +65,8 @@ bia "find why the login test fails and fix it"
 - Linux or macOS. On Windows, run Bia in
   [WSL](https://learn.microsoft.com/windows/wsl/install).
 - The prebuilt binary includes PHP 8.4. A source checkout needs PHP 8.4 with
-  `pdo_sqlite` and `mbstring`; `pcntl` and `posix` are recommended (Ctrl-C
+  `pdo_sqlite`, `mbstring`, `openssl`, `gmp`, `intl`, and `sodium` (the last
+  three are dependencies of sharing's Nostr crypto library); `pcntl` and `posix` are recommended (Ctrl-C
   handling and process groups), and `readline` gives line editing and history.
 - `git` for `apply_patch` and `git_diff`.
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for `search`;
@@ -70,7 +74,8 @@ bia "find why the login test fails and fix it"
 - `setsid` (standard on Linux) or perl (standard on macOS) for process
   groups. Without either Bia still works, but a background child of a
   command may outlive it.
-- An API key for an OpenAI-compatible endpoint.
+- An API key for an OpenAI-compatible endpoint to run a local agent. Joining
+  another host with `/join` does not need a model key.
 
 `bia doctor` checks all of these.
 
@@ -182,7 +187,9 @@ bia update                          Install the latest release
 Interactive sessions are named by a small background request to the configured
 model, counted in `/usage`, without adding messages to the conversation or
 blocking input. If there is no clear topic, or naming fails, Bia tries after the
-next completed turn. Existing sessions and forks get their own name when next
+next completed turn. The terminal tab or window shows the session name once
+it is ready, and the project name until then. Resuming a named session restores
+its title. Existing sessions and forks get their own name when next
 answered interactively. One-shot and piped runs do not wait for naming; until
 named, `bia sessions` and `/resume` show an untitled label rather than the first
 chat message.
@@ -235,6 +242,11 @@ completes.
 | `/resume` | Pick one of this folder's sessions, by its first prompt, and continue it |
 | `/resume <id>` | Continue that session; the start of its id is enough |
 | `/new`, `/clear` | Start a new session |
+| `/share [relay-url ...]` | Create a 12-character invite code; defaults to two public Nostr relays |
+| `/share status` | Show relay connections and participant fingerprints |
+| `/nickname [name]` | Set your sharing nickname; asked once if missing |
+| `/join <code> [relay-url ...]` | Find the host using its 12-character code, then request access |
+| `/share stop` | Disconnect, discard queued guest messages, and cancel a guest-origin turn |
 | `/compact` | Summarize the conversation so far now |
 | `/memory` | What Bia keeps between sessions, and where: the facts about you, the diary's days, this project's memories, and the file its rules go in |
 | `/reload` | Read the config, instructions (`AGENTS.md`), plugins and MCP servers again, on the same session, model and effort, without restarting. Background commands go on. A config with an error leaves everything as it was. For new Bia code, quit and `bia resume` |
@@ -278,6 +290,28 @@ Resuming shows the end of the conversation as it was, then goes on.
 
 Without a terminal, or with `TERM=dumb`, Bia falls back to a plain `>`
 prompt.
+
+### Sharing a session
+
+On the host, run `/share` and send the 12-character code privately. The guest runs
+`/join <code>` in their Bia, for example `/join a7K2m9Q4x8Lp` (codes are
+case-sensitive). Each person is asked for a nickname once if they haven't set one;
+`/nickname billy` changes it later. On the host, **“Billy wants to join”** opens an
+Allow/Deny list: use ↑/↓ and Enter; Esc denies. It waits until you're idle and not
+typing. Nicknames are unverified—compare the fingerprint with your friend
+(`/share status` shows it on their side). Approval shares the last 40 entries and
+live text/tool output, and **allows the guest to steer an agent with your machine's
+tool permissions**. Only approve someone you trust.
+
+A colored sharing row sits above the status bar: green when connected, accent
+while waiting/reconnecting, red when disconnected. Relay details stay out of the
+conversation unless requested with `/share status`.
+
+No Bia server, inbound port, or Nostr account is needed. Both machines must stay
+online. Codes expire after one hour. `/share stop` ends access; `/new`, `/resume`,
+and quitting also end it. With custom relays, send the full `/join` command shown.
+See [the sharing protocol and limits](docs/sharing.md), including relay metadata,
+output that may contain secrets, reconnect behavior, and crypto requirements.
 
 ### Images
 

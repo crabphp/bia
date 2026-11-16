@@ -36,6 +36,16 @@ final class ConfigTest extends TestCase
         self::assertContains($root . '/.agents/bia.json', $config->sources());
     }
 
+    public function testSharingNicknameIsSavedPersonallyAndCannotBeSetByAProject(): void
+    {
+        $root = $this->directory();
+        self::assertSame('', Config::load($root)->get('sharing.nickname'));
+        Config::remember('sharing.nickname', 'Billy');
+        self::assertSame('Billy', Config::load($root)->get('sharing.nickname'));
+        $this->expectException(\InvalidArgumentException::class);
+        Config::load($this->project(['sharing' => ['nickname' => 'Impersonator']]));
+    }
+
     public function testToolsRunWithoutAskingByDefault(): void
     {
         $config = Config::load($this->directory());

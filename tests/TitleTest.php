@@ -78,28 +78,36 @@ final class TitleTest extends TestCase
         [$store, $id] = $this->session();
         $naming = new Naming($store);
         $calls = 0;
+        $notifications = [];
+        $named = static function (string $session, string $title) use ($store, &$notifications): void {
+            $notifications[] = [$session, $title, $store->title($session)];
+        };
         $write = static function () use (&$calls): ?string {
             return ++$calls === 1 ? null : 'Automatic session naming';
         };
-        $naming->start($id, $write);
-        $naming->start($id, $write); // a no-op compaction must not cancel the pending name
+        $naming->start($id, $write, $named);
+        $naming->start($id, $write, $named); // a no-op compaction must not cancel the pending name
         self::assertSame(0, $calls, 'Starting a name never waits for its model.');
+        self::assertSame([], $notifications);
         EventLoop::current()->run();
         self::assertSame(1, $calls);
         self::assertNull($store->title($id), 'A greeting can stay unnamed.');
-        $naming->start($id, $write);
+        self::assertSame([], $notifications, 'A deferred name does not notify the terminal.');
+        $naming->start($id, $write, $named);
         EventLoop::current()->run();
         self::assertSame(1, $calls, 'No repeat requests about the same completed turn.');
 
         $store->append($id, Message::user('Name sessions automatically'));
         $store->append($id, new Message('assistant', 'Yes, in the background.'));
-        $naming->start($id, $write);
+        $naming->start($id, $write, $named);
         EventLoop::current()->run();
         self::assertSame('Automatic session naming', $store->title($id));
+        self::assertSame([[$id, 'Automatic session naming', 'Automatic session naming']], $notifications, 'The callback observes the saved title.');
         $store->append($id, Message::user('Another topic'));
-        $naming->start($id, $write);
+        $naming->start($id, $write, $named);
         EventLoop::current()->run();
         self::assertSame(2, $calls, 'Once named, keep it stable.');
+        self::assertCount(1, $notifications, 'An existing name is not announced again.');
     }
 
     public function testNewWorkCancelsNamingAndADelayedResultCannotOverwriteANewerHead(): void
@@ -107,24 +115,30 @@ final class TitleTest extends TestCase
         [$store, $id] = $this->session();
         $naming = new Naming($store);
         $cancelled = false;
+        $notifications = [];
+        $named = static function (string $session, string $title) use (&$notifications): void {
+            $notifications[] = [$session, $title];
+        };
         $loop = EventLoop::current();
         $naming->start($id, static function (string $_, Cancellation $c) use ($loop, $naming, &$cancelled): string {
             $loop->delay(0.001, static fn () => $naming->cancel());
             Async::sleep($loop, 0.005); // even a writer that ignores cancellation cannot save a result
             $cancelled = $c->isCancelled();
             return 'Too late to save';
-        });
+        }, $named);
         $loop->run();
         self::assertTrue($cancelled);
         self::assertNull($store->title($id));
+        self::assertSame([], $notifications, 'A cancelled writer cannot rename the terminal.');
 
         $store->append($id, new Message('assistant', 'A later turn.'));
         $naming->start($id, static function () use ($store, $id): string {
             $store->append($id, Message::user('A new message while naming'));
             return 'Stale result';
-        });
+        }, $named);
         $loop->run();
         self::assertNull($store->title($id), 'An outdated head is rejected atomically.');
+        self::assertSame([], $notifications, 'A stale name is not announced when saving rejects it.');
     }
 
     public function testCancellationAndFailuresAreSilentAndDoNotPreventTheNextAttempt(): void

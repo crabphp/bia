@@ -22,8 +22,11 @@ final class Naming
         private readonly float $timeout = self::TIMEOUT,
     ) {}
 
-    /** @param \Closure(string, Cancellation): ?string $write */
-    public function start(string $sessionId, \Closure $write): void
+    /**
+     * @param \Closure(string, Cancellation): ?string $write
+     * @param (\Closure(string, string): void)|null $named Told the session id and title only after saving it.
+     */
+    public function start(string $sessionId, \Closure $write, ?\Closure $named = null): void
     {
         $head = $this->sessions->head($sessionId);
         if ($head === null || $this->sessions->title($sessionId) !== null || $this->attempted === [$sessionId, $head]) {
@@ -33,14 +36,14 @@ final class Naming
         $this->attempted = [$sessionId, $head];
         $cancellation = $this->pending = new Cancellation();
         $loop = EventLoop::current();
-        Task::spawn($loop, function () use ($sessionId, $head, $write, $cancellation, $loop): void {
+        Task::spawn($loop, function () use ($sessionId, $head, $write, $named, $cancellation, $loop): void {
             $deadline = $loop->delay($this->timeout, static fn () => $cancellation->cancel());
             try {
                 $cancellation->throwIfCancelled();
                 $title = $write($sessionId, $cancellation);
                 $cancellation->throwIfCancelled();
-                if ($title !== null) {
-                    $this->sessions->saveTitle($sessionId, $title, $head);
+                if ($title !== null && $this->sessions->saveTitle($sessionId, $title, $head)) {
+                    $named?->__invoke($sessionId, $title);
                 }
             } catch (\Throwable) {
                 // Optional housekeeping must never interrupt the conversation. Try after its next turn.

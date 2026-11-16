@@ -90,14 +90,15 @@ final readonly class Agent
      * @param \Closure(): list<string|Message>|null $steer Asked after each tool step for what the user wrote
      *        meanwhile: each message joins the conversation there, before the model's next step.
      * @param list<\Bia\Contracts\Image> $images The prompt's images.
+     * @param bool $inheritImages Whether tools may reuse earlier attachments; kept with the message for resume.
      */
-    public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null, array $images = []): ModelResult
+    public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null, array $images = [], bool $inheritImages = true): ModelResult
     {
         $entries = $this->sessions->path($sessionId);
         $this->recoverExecutions($sessionId, $entries);
         // How long the conversation rested before this prompt: past the cache's life, compacting is nearly free.
         $idle = $this->compactor?->idle($entries) ?? 0.0;
-        $entries[] = $this->sessions->append($sessionId, $this->user(self::clean($prompt), $images));
+        $entries[] = $this->sessions->append($sessionId, $this->user(self::clean($prompt), $images, $inheritImages));
         return $this->loop($sessionId, $entries, $idle, $system, $cancellation, $steer, $images, continued: false);
     }
 
@@ -240,10 +241,12 @@ final readonly class Agent
      *
      * @param list<\Bia\Contracts\Image> $images
      */
-    private function user(string $text, array $images = []): Message
+    private function user(string $text, array $images = [], bool $inheritImages = true): Message
     {
         $reminder = $this->remind !== null ? ($this->remind)($text) : null;
-        return new Message('user', $text, meta: $reminder !== null ? ['reminder' => $reminder] : [], images: $images);
+        $meta = $reminder !== null ? ['reminder' => $reminder] : [];
+        if (!$inheritImages) { $meta['inherit_images'] = false; }
+        return new Message('user', $text, meta: $meta, images: $images);
     }
 
     /**
@@ -577,8 +580,11 @@ final readonly class Agent
     {
         for ($i = count($entries) - 1; $i >= 0; $i--) {
             $message = $entries[$i]->message();
-            if ($message !== null && $message->role === 'user' && $message->images !== []) {
-                return $message->images;
+            if ($message !== null && $message->role === 'user') {
+                if ($message->images !== []) { return $message->images; }
+                // An image-free request from another participant must not inherit the host's uploads,
+                // including after cancellation, resume, or a later image-free follow-up.
+                if (($message->meta['inherit_images'] ?? true) === false) { return []; }
             }
         }
         return [];

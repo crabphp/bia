@@ -37,6 +37,51 @@ final class TuiTest extends TestCase
         Style::enable(false);
     }
 
+    public function testTerminalTitlesPreserveUnicodeWithoutAllowingControlSequences(): void
+    {
+        foreach ([
+            " 日本語\u{00a0}の名前\x07\e]52;c;Zm9v\e\\\r\n\u{009c}\u{202e}end " => '日本語 の名前',
+            str_repeat('界', 200) => str_repeat('界', 160),
+        ] as $title => $expected) {
+            $output = fopen('php://memory', 'w+');
+            $terminal = new Terminal(STDIN, $output, [80, 24]);
+            $terminal->title($title);
+            rewind($output);
+            $bytes = (string) stream_get_contents($output);
+            fclose($output);
+
+            $prefix = "\e[22;2t\e]2;";
+            self::assertStringStartsWith($prefix, $bytes);
+            self::assertStringEndsWith("\e\\", $bytes);
+            $payload = substr($bytes, strlen($prefix), -2);
+            self::assertTrue(mb_check_encoding($payload, 'UTF-8'), 'Truncation preserves complete characters.');
+            self::assertLessThanOrEqual(160, mb_strlen($payload));
+            self::assertStringContainsString($expected, $payload);
+            self::assertSame(0, preg_match('/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u', $payload), 'A stored title cannot terminate its OSC or inject another control.');
+            self::assertSame(1, substr_count($bytes, "\e]"));
+        }
+    }
+
+    public function testTerminalTitleChangesSaveAndRestoreThePreviousTitleOnlyOnce(): void
+    {
+        $output = fopen('php://memory', 'w+');
+        $terminal = new Terminal(STDIN, $output, [80, 24]);
+        $terminal->title(null);
+        self::assertSame(0, ftell($output), 'There is no title to restore before the first change.');
+
+        $terminal->title('First session');
+        $written = ftell($output);
+        $terminal->title('First session');
+        $terminal->title("  First session\n");
+        self::assertSame($written, ftell($output), 'An unchanged title writes nothing, including after normalization.');
+        $terminal->title('Second session');
+        $terminal->leave();
+        $terminal->leave();
+        rewind($output);
+        self::assertSame("\e[22;2t\e]2;First session\e\\\e]2;Second session\e\\\e[23;2t", stream_get_contents($output));
+        fclose($output);
+    }
+
     public function testDimItalicsAreStyledOnlyWhenColourIsEnabled(): void
     {
         self::assertSame('Recap text', Style::dim(Style::italic('Recap text')));

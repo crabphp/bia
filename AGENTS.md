@@ -73,6 +73,22 @@ the rule here first, with the user's agreement.
   (its colour says how it went), `·` a note, `•` a bullet in an answer. Rows a line wraps into hang
   under the text after its marker; a closed tool call's lines do not wrap:
   each takes one row, cut with `…`, and wraps in full once opened.
+- The status line is one row, with ` · ` between the workspace and model,
+  not a wide gap. Too narrow, it shrinks: the context to its percent, each
+  folder of the path but the last to its first character (`~/C/c/bia`),
+  then is cut with `…`. Keep the branch; do not drop it to make room.
+
+**Sharing**
+- While sharing or joining, one extra row sits immediately above the workspace/model
+  status line, in both fullscreen and inline mode. Its dot (`●`) and text are green
+  when connected, the accent while connecting, reconnecting or awaiting approval,
+  and red when disconnected. No background or box; no color with `NO_COLOR`.
+- Relay URLs and connection details appear only on `/share status`, not as automatic
+  conversation notes. The conversation keeps messages and important join/leave events.
+- Join approval uses the existing list picker: the nickname, the access it grants,
+  and Allow/Deny with arrow keys and Enter; Esc denies. Nicknames are unverified
+  display labels; the fingerprint remains secondary. Never interrupt a tool prompt
+  or steal an input being typed to show this picker.
 
 **Space down**
 - Blocks are: the banner, the user's message, the answer's text, a run of

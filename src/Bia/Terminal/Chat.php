@@ -25,11 +25,11 @@ use Bia\Tui\Spinner;
 use Bia\Tui\Screen;
 use Bia\Tui\Style;
 use Bia\Tui\Terminal;
+use Crab\Engine\Async\Async;
 use Crab\Engine\Async\Cancellation;
 use Crab\Engine\Async\CancelledException;
 use Crab\Engine\Async\Task;
 use Crab\Engine\EventLoop;
-use Crab\Engine\Suspension;
 
 /**
  * The interactive conversation: output scrolls, and below it the live
@@ -42,6 +42,8 @@ use Crab\Engine\Suspension;
  */
 final class Chat
 {
+    use Sharing;
+
     /** @var array<int, Image> The images pasted, by the number of their [Image #N] in the input. */
     private array $attached = [];
     /** The last image's number: never used again in a conversation, so a chip always means one image. */
@@ -83,7 +85,7 @@ final class Chat
     private ?Cancellation $turn = null;
     /** @var list<string> */
     private array $steering = [];
-    private ?Suspension $confirming = null;
+    private ?\Closure $confirming = null;
     private string $notice = '';
     private float $noticeUntil = 0.0;
     private float $exitArmed = 0.0;
@@ -105,7 +107,7 @@ final class Chat
     /** Rows scrolled up from the newest, in a table taller than the panel. */
     private int $usageScroll = 0;
     /** The model's question waiting for its answer, and the user's own words for it. */
-    private ?Suspension $choosing = null;
+    private ?\Closure $choosing = null;
     private ?Editor $answer = null;
     /** When the question is skipped for no answer; null once a key was pressed, or with no timeout. */
     private ?float $choiceDeadline = null;
@@ -173,7 +175,9 @@ final class Chat
         private readonly ?\Closure $update = null,
         private readonly ?\Bia\Plugin\Plugins $plugins = null,
     ) {
-        $this->agent ??= ($this->makeAgent)($this->config);
+        if ((string) $this->config->get('model.api_key', '') !== '') {
+            $this->agent ??= ($this->makeAgent)($this->config);
+        }
         $this->naming = $sessions instanceof \Bia\Session\SqliteStore ? new \Bia\Session\Naming($sessions) : null;
         $this->away = new RecapSchedule(microtime(true));
         $this->stats = new Stats();
@@ -193,6 +197,9 @@ final class Chat
             },
         );
         $this->commands = (new Commands())
+            ->add('share', 'Share over Nostr, view status or revoke access', $this->share(...), '[status|stop|relay-url ...]')
+            ->add('join', 'Join a shared Bia session', $this->joinShare(...), '<12-character-code> [relay-url ...]')
+            ->add('nickname', 'Set your sharing nickname', $this->nickname(...), '[name]')
             ->add('model', 'Switch model', $this->model(...), '[provider/model]')
             ->add('effort', 'Reasoning effort', $this->effort(...), '[' . implode('|', Config::EFFORTS) . ']')
             ->add('resume', 'Resume a session', $this->resume(...), '[session-id]')
@@ -244,26 +251,29 @@ final class Chat
     {
         $timeout = (float) $this->config->get('tools.ask_timeout', 120);
         $loop = EventLoop::current();
-        $this->choiceDeadline = $timeout > 0 ? microtime(true) + $timeout : null;
-        $timers = $timeout > 0 ? [
-            $loop->delay($timeout, fn () => $this->choiceDeadline !== null ? $this->choosing?->resume(false) : null),
-            $loop->repeat(1.0, fn () => $this->draw()), // the countdown
-        ] : [];
-        $suspension = EventLoop::current()->getSuspension();
-        $this->choosing = $suspension;
-        $this->answer = new Editor([], '  '); // under the answers, with no marker of its own: the chosen one has it
-        $this->usageBy = null;
-        $this->agentRow = null;
-        $items = [];
-        foreach ($options as $index => $option) {
-            $items[] = ['value' => $option['label'], 'label' => ($index + 1) . ' ' . $option['label'], 'hint' => $option['detail']];
-        }
-        $this->choices = array_column($options, 'label');
-        $this->openMenu('choice', $question, new SelectList($items, filters: false));
-        $this->draw();
-        $this->report('blocked', 'question');
+        $cancellation = $this->turn ?? $this->pluginRun;
+        $timers = [];
         try {
-            $answer = $suspension->suspend();
+            $answer = Async::await($loop, function (\Closure $resume) use ($loop, $timeout, $question, $options, &$timers): void {
+                $this->choosing = $resume;
+                $this->choiceDeadline = $timeout > 0 ? microtime(true) + $timeout : null;
+                $timers = $timeout > 0 ? [
+                    $loop->delay($timeout, fn () => $this->choiceDeadline !== null ? $resume(false) : null),
+                    $loop->repeat(1.0, fn () => $this->draw()), // the countdown
+                ] : [];
+                $this->answer = new Editor([], '  '); // under the answers, with no marker of its own
+                $this->usageBy = null;
+                $this->agentRow = null;
+                $items = [];
+                foreach ($options as $index => $option) {
+                    $items[] = ['value' => $option['label'], 'label' => ($index + 1) . ' ' . $option['label'], 'hint' => $option['detail']];
+                }
+                $this->choices = array_column($options, 'label');
+                $this->openMenu('choice', $question, new SelectList($items, filters: false));
+                $this->draw();
+                $this->report('blocked', 'question');
+            }, $cancellation);
+            $cancellation?->throwIfCancelled();
             return is_string($answer) || $answer === false ? $answer : null;
         } finally {
             foreach ($timers as $timer) {
@@ -286,18 +296,18 @@ final class Chat
         $this->choiceDeadline = null; // someone is there: no more countdown
         $typed = $this->answer !== null && !$this->answer->empty();
         if ($key->is('escape')) {
-            $this->choosing?->resume(null);
+            $this->choosing?->__invoke(null);
             return;
         }
         if ($key->is('enter')) {
-            $this->choosing?->resume($typed ? trim((string) $this->answer?->text()) : ($this->menu?->selected()['value'] ?? null));
+            $this->choosing?->__invoke($typed ? trim((string) $this->answer?->text()) : ($this->menu?->selected()['value'] ?? null));
             return;
         }
         if (!$typed && $key->is('char') && ctype_digit($key->text)) {
             // A number picks that answer at once.
             $chosen = $this->choices[(int) $key->text - 1] ?? null;
             if ($chosen !== null) {
-                $this->choosing?->resume($chosen);
+                $this->choosing?->__invoke($chosen);
             }
             return;
         }
@@ -315,17 +325,20 @@ final class Chat
      */
     public function confirm(string $question): bool
     {
-        $suspension = EventLoop::current()->getSuspension();
-        $this->confirming = $suspension;
-        $this->usageBy = null; // a question waits for an answer: it takes the panel's place
-        $this->openMenu('confirm', $question, new SelectList([
-            ['value' => 'yes', 'label' => 'Yes'],
-            ['value' => 'no', 'label' => 'No'],
-        ], filters: false));
-        $this->draw();
-        $this->report('blocked', 'permission');
+        $cancellation = $this->turn ?? $this->pluginRun;
         try {
-            return (bool) $suspension->suspend();
+            $answer = Async::await(EventLoop::current(), function (\Closure $resume) use ($question): void {
+                $this->confirming = $resume;
+                $this->usageBy = null; // a question waits for an answer: it takes the panel's place
+                $this->openMenu('confirm', $question, new SelectList([
+                    ['value' => 'yes', 'label' => 'Yes'],
+                    ['value' => 'no', 'label' => 'No'],
+                ], filters: false));
+                $this->draw();
+                $this->report('blocked', 'permission');
+            }, $cancellation);
+            $cancellation?->throwIfCancelled();
+            return (bool) $answer;
         } finally {
             $this->confirming = null;
             $this->closeMenu();
@@ -338,6 +351,7 @@ final class Chat
     {
         Style::enable(getenv('NO_COLOR') === false);
         $this->terminal->enter();
+        $this->terminalTitle();
         $loop = EventLoop::current();
         $resize = defined('SIGWINCH') && function_exists('pcntl_signal')
             ? $loop->onSignal(SIGWINCH, function (): void {
@@ -386,11 +400,12 @@ final class Chat
             }
         } finally {
             $this->running = false;
+            $this->endShare();
             $checking?->cancel();
             $this->naming?->cancel();
             $this->turn?->cancel();
             $this->pluginRun?->cancel();
-            $this->confirming?->resume(false);
+            $this->confirming?->__invoke(false);
             $this->stopBlinking();
             if ($resize !== null) {
                 $loop->cancel($resize);
@@ -430,6 +445,7 @@ final class Chat
         $this->naming?->cancel();
         $old = $this->mcp['manager'] ?? null;
         $this->config = $built['config'];
+        $this->shareNickname = null; // Config changes apply to the next share, never rename a pinned peer.
         $this->makeAgent = $built['agent'];
         $this->agent = $agent;
         $this->system = $built['system'];
@@ -476,6 +492,7 @@ final class Chat
         if ($key->is('mouse')) {
             return;
         }
+        if ($this->shareKey($key)) { return; }
         if ($this->usageBy !== null) {
             $tabs = array_keys(UsageReport::TABS);
             $at = (int) array_search($this->usageBy, $tabs, true);
@@ -504,7 +521,7 @@ final class Chat
         }
         if ($this->menuKind === 'choice') {
             if ($key->is('ctrl-c')) {
-                $this->choosing?->resume(null);
+                $this->choosing?->__invoke(null);
                 $this->interrupt();
                 return;
             }
@@ -520,7 +537,7 @@ final class Chat
                 $answer = $action === 'choose' ? ($this->menu?->selected()['value'] ?? 'no') : ($action === 'cancel' ? 'no' : null);
             }
             if ($answer !== null) {
-                $this->confirming?->resume($answer === 'yes');
+                $this->confirming?->__invoke($answer === 'yes');
             }
             return;
         }
@@ -542,6 +559,8 @@ final class Chat
                 $this->turn->cancel();
             } elseif ($this->pluginRun !== null) {
                 $this->pluginRun->cancel();
+            } elseif ($this->joining !== null) {
+                $this->joining->cancel();
             }
             return;
         }
@@ -580,11 +599,11 @@ final class Chat
                 return;
             }
         }
-        if ($this->images !== null && $key->is('ctrl-v')) {
+        if (!$this->guest && $this->images !== null && $key->is('ctrl-v')) {
             $this->pasteImage();
             return;
         }
-        if ($this->images !== null && $key->is('paste') && ($found = $this->images->fromPaste($key->text)) !== null) {
+        if (!$this->guest && $this->images !== null && $key->is('paste') && ($found = $this->images->fromPaste($key->text)) !== null) {
             // An image file dropped on the terminal, or its path pasted: the image, not the path.
             foreach ($found as $image) {
                 $this->attach($image);
@@ -840,6 +859,10 @@ final class Chat
             $this->pluginRun->cancel();
             return;
         }
+        if ($this->joining !== null) {
+            $this->joining->cancel();
+            return;
+        }
         if (microtime(true) - $this->exitArmed < 2.0) {
             $this->running = false;
             return;
@@ -854,7 +877,7 @@ final class Chat
         $this->closeMenu();
         if ($text === '') {
             // Enter on nothing picks an unanswered turn back up, as after a failed request.
-            if ($this->turn === null && $this->viewing === null) {
+            if (!$this->guest && $this->turn === null && $this->viewing === null) {
                 $this->pickUp();
             }
             return;
@@ -867,8 +890,28 @@ final class Chat
             $login->deliver($text);
             return;
         }
-        $this->editor->remember($text);
-        $this->history->add($text);
+        // Invite capabilities and remote-session messages never enter local input history.
+        if (!$this->guest && !preg_match('~^/join(?:\s|$)~i', $text)) {
+            $this->editor->remember($text);
+            $this->history->add($text);
+        }
+        if ($this->guest) {
+            $this->editor->clear();
+            if (in_array(strtolower($text), ['/share stop', '/share status', '/exit', '/quit', '/help'], true)
+                || preg_match('~^/nickname(?:\s|$)~i', $text)) {
+                $this->commands->run($text);
+            } elseif (str_starts_with($text, '/')) {
+                $this->say('Remote session · /share stop to leave · local commands disabled');
+            } elseif ($this->sharing?->ready() !== true) {
+                $this->say('Not connected to host · /share stop to leave');
+            } elseif (strlen($text) > 8000) {
+                $this->say('Guest messages are limited to 8000 bytes');
+            } else {
+                $this->sharing->publish(['type' => 'input', 'text' => $text]);
+                $this->say('Sending to host');
+            }
+            return;
+        }
         $this->editor->clear();
         $this->region->follow();
         if (Commands::looksLikeOne($text)) {
@@ -892,7 +935,7 @@ final class Chat
                 }
             }
             // A model or effort chosen while Bia works is for the next message: the turn running ends on its own.
-            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp', 'model', 'effort'], true)) {
+            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp', 'model', 'effort', 'share', 'nickname'], true)) {
                 $this->say("Busy · Esc to stop");
                 return;
             }
@@ -921,8 +964,16 @@ final class Chat
         $this->ask($text);
     }
 
-    private function ask(string $text): void
+    private function ask(string $text, bool $remote = false): void
     {
+        if ($this->guest) { return; }
+        if ($this->agent === null) {
+            if ((string) $this->config->get('model.api_key', '') === '') {
+                $this->note($this->config->keyHelp());
+                return;
+            }
+            $this->agent = ($this->makeAgent)($this->config);
+        }
         // A session is made by its first message, so starting Bia leaves no empty ones.
         $sessionId = $this->sessionId ??= $this->sessions->create($this->workspace, $this->config->modelLabel());
         $this->used = true;
@@ -930,11 +981,12 @@ final class Chat
         $this->subagents?->forget();
         // A turn stopped or failed is left as it was until the next one starts: then it collapses too.
         $this->renderer->collapse();
-        $this->echo($text);
-        $images = $this->imagesIn($text);
-        $this->work('Thinking', function (Cancellation $cancellation) use ($sessionId, $text, $images): void {
+        $this->remoteTurn = $remote;
+        $this->echo($text, $remote);
+        $images = $remote ? [] : $this->imagesIn($text);
+        $this->work('Thinking', function (Cancellation $cancellation) use ($sessionId, $text, $images, $remote): void {
             $this->plugins?->emit('turn.start', ['text' => $text]);
-            $result = $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images);
+            $result = $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images, inheritImages: !$remote);
             $this->away->turnDone();
             $this->plugins?->emit('turn.done', ['text' => (string) $result?->text]);
         });
@@ -1032,23 +1084,30 @@ final class Chat
                     // A message fully answered: how long Bia worked on it, and when it finished.
                     $this->renderer->catchUp();
                     $this->region->gap();
-                    $this->region->print(Style::dim('· Worked for ' . self::duration(microtime(true) - $started) . ' · ' . date('g:i A')) . "\n");
+                    $worked = 'Worked for ' . self::duration(microtime(true) - $started) . ' · ' . date('g:i A');
+                    $this->region->print(Style::dim('· ' . $worked) . "\n");
+                    $this->sharing?->publish(['type' => 'note', 'text' => $worked]);
                 }
             } catch (CancelledException) {
                 $this->renderer->catchUp();
                 $this->region->gap();
                 $this->region->print(Style::dim('· stopped') . "\n");
+                $this->sharing?->publish(['type' => 'finish']);
+                $this->sharing?->publish(['type' => 'note', 'text' => 'Stopped']);
             } catch (\Throwable $error) {
                 // One failed turn (a 429, a dropped connection) does not end the conversation.
                 $this->renderer->catchUp();
                 $this->region->gap();
                 $this->region->print(Style::error('bia: ' . $error->getMessage()) . "\n");
+                $this->sharing?->publish(['type' => 'finish']);
+                $this->sharing?->publish(['type' => 'note', 'text' => 'Host turn failed · ' . \Bia\Share\Records::clean($error->getMessage())]);
                 if ($this->unanswered()) {
                     $this->region->print(Style::dim('· Enter picks the turn back up') . "\n");
                 }
                 $state = 'error';
             } finally {
                 $this->turn = null;
+                $this->remoteTurn = false;
                 $this->spinner = null;
                 $this->revision++;
                 $this->away->active(microtime(true));
@@ -1066,16 +1125,30 @@ final class Chat
                         $this->editor->set($draft === '' ? $left : $left . "\n\n" . $draft);
                     }
                 }
+                $this->drainGuests();
                 $this->draw();
                 if ($this->turn === null) {
                     $this->report($state); // unless what was left started another turn
                     $this->scheduleRecap();
                     if ($finished && !$cancellation->isCancelled() && in_array($label, ['Thinking', 'Compacting'], true) && $this->running && $this->sessionId !== null && $this->agent !== null) {
-                        $this->naming?->start($this->sessionId, $this->agent->title(...));
+                        $this->naming?->start($this->sessionId, $this->agent->title(...), function (string $id, string $title): void {
+                            if ($this->running && $this->sessionId === $id) {
+                                $this->terminalTitle($title);
+                            }
+                        });
                     }
                 }
             }
         });
+    }
+
+    /** The saved conversation name, or the project until a name is ready. Never polled while drawing. */
+    private function terminalTitle(?string $title = null): void
+    {
+        if ($title === null && $this->sessionId !== null && $this->sessions instanceof \Bia\Session\SqliteStore) {
+            $title = $this->sessions->title($this->sessionId);
+        }
+        $this->terminal->title('bia · ' . ($title ?: (basename($this->workspace) ?: $this->workspace)));
     }
 
     /**
@@ -1086,9 +1159,14 @@ final class Chat
         $this->terminal->status($state, ['app' => 'bia'] + ($kind === null ? [] : ['kind' => $kind]));
     }
 
-    private function echo(string $text): void
+    private function echo(string $text, bool $remote = false): void
     {
-        self::echoOn($this->region, $text);
+        $shown = $this->sharing?->ready() && !$this->guest && !$remote
+            ? '[' . $this->sharing->nickname . " · host]\n" . $text : $text;
+        if (!$this->guest) {
+            $this->sharing?->publish(['type' => 'user', 'text' => \Bia\Share\Records::clean($shown)]);
+        }
+        self::echoOn($this->region, $shown);
     }
 
     /**
@@ -1208,6 +1286,9 @@ final class Chat
      */
     private function modelShown(): string
     {
+        if ($this->guest) {
+            return 'Remote session';
+        }
         $effort = $this->config->effort();
         return $this->config->modelLabel() . ($effort !== null ? " · {$effort}" : '');
     }
@@ -1218,10 +1299,12 @@ final class Chat
      */
     private function newSession(string $_): void
     {
+        $this->endShare();
         $left = $this->used ? $this->sessionId : null;
         $this->naming?->cancel();
         $this->renderer->collapse();
         $this->sessionId = null;
+        $this->terminalTitle();
         $this->used = false;
         $this->contextTokens = null;
         $this->seedRecap(null);
@@ -1259,9 +1342,11 @@ final class Chat
 
     private function switchSession(string $id): void
     {
+        $this->endShare();
         $this->naming?->cancel();
         $this->leaving();
         $this->sessionId = $id;
+        $this->terminalTitle();
         $this->used = true;
         $this->contextTokens = null;
         $this->region->gap();
@@ -1519,7 +1604,7 @@ final class Chat
 
     private function recapDue(): ?float
     {
-        if ($this->config->get('recap.auto') === false || $this->turn !== null || $this->sessionId === null) {
+        if ($this->guest || $this->nicknameEditor !== null || $this->shareApproval !== null || $this->config->get('recap.auto') === false || $this->turn !== null || $this->sessionId === null) {
             return null;
         }
         return $this->away->due((float) $this->config->get('recap.idle', 1800));
@@ -1566,7 +1651,7 @@ final class Chat
     private function recapAway(): void
     {
         $sessionId = $this->sessionId;
-        if ($sessionId === null || $this->recapping !== null) {
+        if ($this->guest || $this->nicknameEditor !== null || $this->shareApproval !== null || $sessionId === null || $this->recapping !== null) {
             return;
         }
         $cancellation = new Cancellation();
@@ -1713,6 +1798,7 @@ final class Chat
             } finally {
                 if (--$this->pluginRuns === 0) {
                     $this->pluginRun = null;
+                    $this->drainGuests();
                 }
                 $this->draw();
             }
@@ -1985,7 +2071,7 @@ final class Chat
             $this->openMenu('command', '', new SelectList($items, 8, filters: false));
             return;
         }
-        if (preg_match('/(?:^|\s)@(\S*)$/u', $before, $match) === 1) {
+        if (!$this->guest && preg_match('/(?:^|\s)@(\S*)$/u', $before, $match) === 1) {
             $this->replace = mb_strlen($match[1], 'UTF-8') + 1;
             $files = $this->files->get(function (): void {
                 $this->suggest();
@@ -2046,6 +2132,7 @@ final class Chat
 
     private function draw(): void
     {
+        $this->offerShareApproval();
         // The live lines keep the output's margin; their rules span the screen, as shaded rows do.
         $margin = Screen::MARGIN;
         $columns = max(20, $this->terminal->columns());
@@ -2059,7 +2146,22 @@ final class Chat
         }
         $rule = Style::dim(str_repeat('─', $columns));
         $cursor = null;
-        if ($this->usageBy !== null) {
+        if ($this->nicknameEditor !== null) {
+            $lines[] = $rule;
+            $lines[] = 'Your sharing nickname';
+            foreach (Style::wrap('Visible to the other person · saved for next time', $width) as $part) { $lines[] = Style::dim($part); }
+            [$rows, [$row, $column]] = $this->nicknameEditor->render($width, 'Nickname');
+            $cursor = [count($lines) + $row, $column];
+            array_push($lines, ...$rows);
+            $lines[] = Style::dim('Enter save · Esc cancel');
+        } elseif ($this->menuKind === 'share-approve') {
+            $lines[] = $rule;
+            foreach (Style::wrap($this->menuTitle, $width) as $part) { $lines[] = $part; }
+            foreach (Style::wrap('Can see this conversation and direct tools on your machine.', $width) as $part) { $lines[] = Style::dim($part); }
+            foreach (Style::wrap('Unverified nickname · ' . substr($this->shareApproval ?? '', 0, 12), $width) as $part) { $lines[] = Style::dim($part); }
+            array_push($lines, ...($this->menu?->render($width) ?? []));
+            $lines[] = Style::dim('↑/↓ select · Enter confirm · Esc deny');
+        } elseif ($this->usageBy !== null) {
             array_push($lines, $rule, ...$this->usagePanel($width));
         } elseif ($this->menuKind === 'choice') {
             // The model's question, its answers numbered, then a line for the user's own.
@@ -2086,6 +2188,8 @@ final class Chat
             [$rows, [$row, $column]] = $this->editor->render(
                 $width,
                 match (true) {
+                    $this->guest && $this->sharing?->ready() === true => 'Message ' . $this->sharing->peerNickname() . ' · /share stop to leave',
+                    $this->guest => 'Remote session · /share stop to leave',
                 $this->viewing !== null && in_array($this->viewing, array_column(array_filter($this->subagents?->all() ?? [], static fn (array $agent): bool => $agent['state'] === 'working'), 'name'), true) => "Steer {$this->viewing}",
                     $this->turn === null => 'Cook anything · / commands · @ files',
                     default => 'Steer the turn',
@@ -2109,6 +2213,8 @@ final class Chat
                 $lines[] = Style::dim(Style::truncate(implode(' · ', $stats), $width)); // inline: no corner stays
             }
         }
+        $shareLine = $this->shareStatusLine(max(1, $columns - 2 * $margin));
+        if ($shareLine !== null) { $lines[] = $shareLine; }
         $lines[] = $this->status(max(1, $columns - 2 * $margin)); // the real room: a row too long would wrap
         $agents = $this->agentLines($width);
         $this->agentRows = count($agents);
@@ -2196,9 +2302,8 @@ final class Chat
     }
 
     /**
-     * The status line: the workspace on the left, the model and how full
-     * its context is on the right; read from the start, and cut with … at
-     * the end where the screen is too narrow for it all.
+     * The workspace, model and context, separated by dots. On narrow
+     * screens, shorten the context and parent folders, keeping the branch.
      */
     private function status(int $width): string
     {
@@ -2208,14 +2313,29 @@ final class Chat
         if ($this->pluginRun !== null && $this->turn === null && microtime(true) - $this->pluginRunSince >= 1.0) {
             return Style::dim(Style::truncate("Running /{$this->pluginRunName} · Esc to stop", $width));
         }
+        $effort = $this->config->effort();
         $right = $this->modelShown();
+        $short = $this->guest ? 'Remote session' : (string) $this->config->get('model.name') . ($effort !== null ? " · {$effort}" : '');
         $window = (int) $this->config->get('model.context_window');
         if ($this->contextTokens !== null && $window > 0) {
-            $right .= ' · ' . self::thousands($this->contextTokens) . '/' . self::thousands($window)
-                . ' (' . (int) round($this->contextTokens * 100 / $window) . '%)';
+            $percent = (int) round($this->contextTokens * 100 / $window) . '%';
+            $right .= ' · ' . self::thousands($this->contextTokens) . '/' . self::thousands($window) . " ({$percent})";
+            $short .= ' · ' . $percent;
         }
-        $gap = max(2, $width - mb_strwidth($this->place, 'UTF-8') - mb_strwidth($right, 'UTF-8'));
-        return Style::dim(Style::truncate($this->place . str_repeat(' ', $gap) . $right, $width));
+        $branch = preg_match('/ \([^()]*\)$/', $this->place, $match) === 1 ? $match[0] : '';
+        $path = substr($this->place, 0, strlen($this->place) - strlen($branch));
+        // Each folder by its first character, the last in full: ~/Code/crabphp/bia is ~/C/c/bia.
+        $parts = explode('/', $path);
+        $last = array_pop($parts);
+        $folder = implode('/', [...array_map(static fn (string $part): string => $part === '~' ? $part : mb_substr($part, 0, str_starts_with($part, '.') ? 2 : 1, 'UTF-8'), $parts), $last]);
+        $line = '';
+        foreach ([[$this->place, $right], [$this->place, $short], [$folder . $branch, $short]] as [$left, $end]) {
+            $line = $left . ' · ' . $end;
+            if (mb_strwidth($line, 'UTF-8') <= $width) {
+                break;
+            }
+        }
+        return Style::dim(Style::truncate($line, $width));
     }
 
     private function startTicker(): void

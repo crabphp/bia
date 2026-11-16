@@ -30,7 +30,7 @@ final readonly class Config
     ) {}
 
     /** Settings chosen inside a conversation, kept in the user's config.php for the next ones. */
-    public const REMEMBERED_KEYS = ['model.name', 'model.reasoning_effort', 'tui.render'];
+    public const REMEMBERED_KEYS = ['model.name', 'model.reasoning_effort', 'tui.render', 'sharing.nickname'];
 
     /** How hard a reasoning model thinks; default sends none and leaves it to the provider. */
     public const EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
@@ -296,6 +296,10 @@ final readonly class Config
                 'fullscreen' => true,
                 // How answers appear: normal, as they arrive; smooth, a steady flow; power, dropping into place.
                 'render' => 'normal',
+            ],
+            'sharing' => [
+                // Asked once on /share or /join when empty; a display label, not a verified identity.
+                'nickname' => '',
             ],
             'memory' => [
                 // What Bia keeps between sessions: a diary and facts about you, and each project's memories.
@@ -584,6 +588,9 @@ final readonly class Config
                 //     'render' => 'normal',
                 // ],
 
+                // Asked once on /share or /join; /nickname changes it later.
+                // 'sharing' => ['nickname' => ''],
+
                 /*
                 |--------------------------------------------------------------------------
                 | Updates
@@ -806,6 +813,10 @@ final readonly class Config
         $render = $values['tui']['render'] ?? 'normal';
         if (!in_array($render, ['normal', 'smooth', 'power'], true)) {
             throw new \InvalidArgumentException('tui.render must be normal, smooth, or power.');
+        }
+        $sharing = $values['sharing'] ?? [];
+        if (!is_array($sharing) || !is_string($sharing['nickname'] ?? '') || strlen($sharing['nickname'] ?? '') > 128) {
+            throw new \InvalidArgumentException('sharing.nickname must be a short string.');
         }
         $fallback = $values['fallback'] ?? [];
         if (!is_array($fallback) || !array_is_list($fallback['models'] ?? []) || array_filter((array) ($fallback['models'] ?? []), static fn (mixed $name): bool => !is_string($name) || $name === '') !== []) {
