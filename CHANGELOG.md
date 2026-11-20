@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.1.9 (2026-11-21)
+
+- Remote session sharing over encrypted Nostr relays: `/share` prints a
+  12-character invite code with `bia join <code>` and `/join <code>`, asks
+  for a nickname once, and opens an Allow/Deny approval picker on the host
+  (defaulting to Deny). Approved guests see the last 40 entries, live output,
+  and edit diffs, and can steer the host's agent without needing a model API
+  key. `/share status` shows relay and fingerprint details; `/share stop`
+  revokes access and cancels any active guest-origin turn or prompt.
+- `bia join <code> [relay-url ...]` opens Bia directly into the join flow
+  without starting local MCP servers or `.mcp.json` prompts.
+- Terminal tab and window titles now show the session name once generated
+  (and restore the previous title on exit).
+- Retries on timed-out model requests (idle/connect timeouts, HTTP 408/504)
+  are capped at 2 attempts instead of looping up to 22 times after tool
+  calls. Invested-turn patience now counts failed request duration as well
+  as backoff sleeps, and retry notices show the specific network failure
+  reason instead of a generic "connection failed".
+
 ## 0.1.8 (2026-11-13)
 
 - Interactive sessions get a short, agent-written name after the first
