@@ -9,13 +9,16 @@ use Bia\Config\Config;
 use Bia\Contracts\{Image, Message, Model, ModelEvent, ModelRequest, ModelResult, Renderer, Tool, ToolCall, ToolContext, ToolDefinition, ToolResult};
 use Bia\Model\ModelCatalog;
 use Bia\Session\SqliteStore;
-use Bia\Share\{Records, Session};
+use Bia\Share\{Records, Relay, Session};
 use Bia\Terminal\{Chat, Files, History, TuiRenderer};
 use Bia\Tool\{AskTool, ProcessRunner, Registry};
 use Bia\Tui\{Key, Screen, Style, Terminal};
 use Crab\Engine\Async\{Async, Cancellation, Task};
 use Crab\Engine\EventLoop;
 use Crab\Engine\EventLoop\StreamSelectEventLoop;
+use Crab\Engine\Network\Connection;
+use Crab\Engine\Server\WebSocketServer;
+use Crab\Engine\WebSocket\WebSocketSession;
 use Crab\HttpClient\Client;
 use PHPUnit\Framework\TestCase;
 
@@ -200,6 +203,148 @@ final class ShareRegressionTest extends TestCase
         self::assertStringNotContainsString("\e", implode('', $data['diff']) . $data['path']);
         self::assertStringNotContainsString("\u{202e}", implode('', $data['diff']));
         self::assertContains('Diff truncated for sharing', $received->notes);
+    }
+
+    public function testRunningRecordStaysBoundedAndDoesNotKillSession(): void
+    {
+        $call = new ToolCall('run-1', 'shell', ['command' => str_repeat('"', 1000)]);
+        $record = Records::running($call, str_repeat('"', 8000));
+        self::assertLessThanOrEqual(18000, strlen(json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)));
+        $host = new Session(true, static fn () => null, static fn () => null);
+        $guest = new Session(false, static fn () => null, static fn () => null, $host->invite);
+        try {
+            $host->receive($guest->packet());
+            $host->approve($guest->identity->publicKey());
+            $host->publish($record);
+            self::assertTrue($host->active(), 'Escaped running tool output must stay inside Session\'s packet limit.');
+        } finally {
+            $host->stop(); $guest->stop();
+        }
+    }
+
+    public function testStreamingBurstCoalescesInsteadOfOverflowingOutbox(): void
+    {
+        $received = [];
+        $host = new Session(true, static fn () => null, static fn () => null);
+        $guest = new Session(false, static fn () => null, function (array $r) use (&$received): void { $received[] = $r; }, $host->invite);
+        try {
+            $host->receive($guest->packet());
+            $host->approve($guest->identity->publicKey());
+            for ($i = 0; $i < 400; $i++) {
+                $host->publish(['type' => 'text', 'text' => "chunk-{$i} "]);
+                $host->packet(); // Simulate repeated 0.5s ticks before the peer ACKs seq 1.
+            }
+            self::assertTrue($host->active(), 'Streaming chunks should coalesce in the batch instead of hitting the 256-packet cap.');
+            $outbox = (new \ReflectionProperty($host, 'outbox'))->getValue($host);
+            self::assertLessThan(10, count($outbox));
+            for ($round = 0; $round < 20 && count($received) < 400; $round++) {
+                $guest->receive($host->packet());
+                $host->receive($guest->packet());
+            }
+            self::assertCount(400, $received);
+            self::assertSame('chunk-399 ', $received[399]['text']);
+
+            // Also verify >1,000 tiny records split into batches of at most 1,000 records.
+            $finishes = 0;
+            $received = [];
+            for ($i = 0; $i < 1200; $i++) { $host->publish(['type' => 'finish']); }
+            for ($round = 0; $round < 10 && $finishes < 1200; $round++) {
+                $packet = $host->packet();
+                $payload = $guest->identity->open($packet)['payload'];
+                self::assertLessThanOrEqual(1000, count($payload['records']));
+                $guest->receive($packet);
+                $host->receive($guest->packet());
+                $finishes = count($received);
+            }
+            self::assertSame(1200, $finishes);
+        } finally {
+            $host->stop(); $guest->stop();
+        }
+    }
+
+    public function testRelayDoesNotReceiveDuplicateIdleEventsAndToleratesDuplicateOk(): void
+    {
+        $loop = EventLoop::current();
+        $clients = [];
+        $connections = [];
+        $counts = [];
+        $okMode = 'duplicate'; // 'duplicate' replies OK false duplicate: on first repeat; 'blocked' rejects all.
+        $server = new WebSocketServer(function (WebSocketSession $socket, string $wire) use (&$clients, &$counts, &$okMode): void {
+            $m = json_decode($wire, true);
+            if (($m[0] ?? '') === 'REQ') {
+                $clients[spl_object_id($socket)] = [$socket, $m[1], $m[2]];
+                $socket->sendText(json_encode(['EOSE', $m[1]]));
+            } elseif (($m[0] ?? '') === 'EVENT') {
+                $e = $m[1];
+                $id = $e['id'];
+                $counts[$id] = ($counts[$id] ?? 0) + 1;
+                if ($okMode === 'blocked') {
+                    $socket->sendText(json_encode(['OK', $id, false, 'blocked: policy']));
+                    return;
+                }
+                // Even if the relay says duplicate: on an event, the session must stay connected.
+                $socket->sendText(json_encode(['OK', $id, false, 'duplicate: already have this event']));
+                foreach ($clients as [$peer, $sub, $filter]) {
+                    if (!$peer->isClosed() && in_array($e['kind'], $filter['kinds'] ?? [], true)
+                        && in_array($e['tags'][0][1] ?? '', $filter['#p'] ?? [], true)) {
+                        $peer->sendText(json_encode(['EVENT', $sub, $e]));
+                    }
+                }
+            }
+        }, onClose: static function (WebSocketSession $socket) use (&$clients): void { unset($clients[spl_object_id($socket)]); });
+        $listener = stream_socket_server('tcp://127.0.0.1:0');
+        stream_set_blocking($listener, false);
+        $url = 'ws://' . stream_socket_get_name($listener, false);
+        $watcher = $loop->onReadable($listener, static function () use ($loop, $listener, $server, &$connections): void {
+            while (($stream = @stream_socket_accept($listener, 0)) !== false) {
+                $conn = new Connection($loop, $stream);
+                $id = spl_object_id($conn);
+                $connections[$id] = $conn;
+                $conn->onClose(static function () use (&$connections, $id): void { unset($connections[$id]); });
+                $server->attach($conn);
+            }
+        });
+        $host = new Session(true, static fn () => null, static fn () => null, relays: [$url]);
+        $guest = new Session(false, static fn () => null, static fn () => null, $host->invite);
+        try {
+            $host->start();
+            $guest->start();
+            $deadline = microtime(true) + 10;
+            while (!$host->approve($guest->identity->publicKey()) && microtime(true) < $deadline) {
+                Task::spawn($loop, static fn () => Async::sleep($loop, 0.1))->await();
+            }
+            self::assertTrue($host->ready());
+            // Let several 0.5s ticks elapse while idle: no event ID should be sent twice to the same relay connection.
+            Task::spawn($loop, static fn () => Async::sleep($loop, 2.2))->await();
+            self::assertSame('Connected', $host->relayStatus()[$url], 'A duplicate: OK reply must not drop the relay.');
+            self::assertSame('Connected', $guest->relayStatus()[$url]);
+            self::assertSame(1, max($counts), 'Idle ticks must not spam duplicate event IDs to a connected relay.');
+
+            // A genuine rejection (non-duplicate OK false) still drops and marks the relay unavailable.
+            $okMode = 'blocked';
+            $host->publish(['type' => 'text', 'text' => 'trigger rejection']);
+            $deadline = microtime(true) + 5;
+            while ($host->relayStatus()[$url] === 'Connected' && microtime(true) < $deadline) {
+                Task::spawn($loop, static fn () => Async::sleep($loop, 0.1))->await();
+            }
+            self::assertNotSame('Connected', $host->relayStatus()[$url]);
+        } finally {
+            $host->stop();
+            $guest->stop();
+            $loop->cancel($watcher);
+            foreach ($connections as $conn) { $conn->close(); }
+            fclose($listener);
+        }
+    }
+
+    public function testRelayHostHeaderOmitsDefaultPortsAndKeepsExplicitPorts(): void
+    {
+        self::assertSame('relay.damus.io', Relay::hostHeader('wss://relay.damus.io'));
+        self::assertSame('relay.damus.io', Relay::hostHeader('wss://relay.damus.io:443/nostr'));
+        self::assertSame('relay.example:8443', Relay::hostHeader('wss://relay.example:8443/nostr'));
+        self::assertSame('127.0.0.1', Relay::hostHeader('ws://127.0.0.1:80'));
+        self::assertSame('127.0.0.1:39977', Relay::hostHeader('ws://127.0.0.1:39977'));
+        self::assertSame('[::1]:8080', Relay::hostHeader('ws://[::1]:8080'));
     }
 
     private function chat(Registry $tools): array

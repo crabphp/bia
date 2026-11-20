@@ -34,6 +34,7 @@ use Bia\Plugin\Installer;
 use Bia\Plugin\Observed;
 use Bia\Plugin\Plugins;
 use Bia\Session\SqliteStore;
+use Bia\Share\Discovery;
 use Bia\Skill\Catalog;
 use Bia\Skill\SkillTool;
 use Bia\Terminal\AnsiRenderer;
@@ -127,6 +128,10 @@ final class Application
             if ($command === 'init') {
                 return ($options['global'] ?? false) === true ? self::initGlobal() : self::init();
             }
+            if ($command === 'join') {
+                array_shift($words);
+                return self::join($words, $options);
+            }
             if ($command === 'resume') {
                 array_shift($words);
                 // Without an id, a conversation opens on the session picker.
@@ -150,6 +155,7 @@ final class Application
               bia [options] [prompt]
               bia ask [options] <prompt>
               bia resume [session-id] [prompt]
+              bia join <code> [relay-url ...]
               bia doctor
               bia config [--json]
               bia sessions
@@ -528,7 +534,31 @@ final class Application
      * @param list<string> $words
      * @param array<string, string|bool> $options
      */
-    private static function ask(array $words, array $options): int
+    private static function join(array $words, array $options): int
+    {
+        if (trim($words[0] ?? '') === '' || count($words) > 4) {
+            throw new \InvalidArgumentException('Usage: bia join <code> [relay-url ...]');
+        }
+        if (($options['json'] ?? false) || isset($options['resume'])) {
+            throw new \InvalidArgumentException('bia join cannot be used with --json or --resume.');
+        }
+        $input = implode(' ', $words);
+        Discovery::parseJoin($input);
+        if (!Terminal::interactive()) {
+            throw new \RuntimeException('bia join needs an interactive terminal.');
+        }
+        if (!extension_loaded('gmp') || !extension_loaded('sodium')) {
+            throw new \RuntimeException('Sharing needs the PHP gmp and sodium extensions');
+        }
+        // The invite is a startup action, never a model prompt or a history entry.
+        return self::ask([], $options, $input);
+    }
+
+    /**
+     * @param list<string> $words
+     * @param array<string, string|bool> $options
+     */
+    private static function ask(array $words, array $options, ?string $join = null): int
     {
         $overrides = [];
         foreach (['model' => 'name', 'base-url' => 'base_url', 'api-key' => 'api_key', 'effort' => 'reasoning_effort'] as $option => $key) {
@@ -681,7 +711,7 @@ final class Application
                     return ['config' => $config, ...$setup($config)];
                 },
             );
-            $loop->execute($chat->run(...));
+            $loop->execute(static fn (Cancellation $cancellation) => $chat->run($cancellation, $join));
             return 0;
         }
         $memory = self::memory($config, $workspace);

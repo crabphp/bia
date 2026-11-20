@@ -22,6 +22,16 @@ final class Relay
 
     public function __construct(private readonly \Closure $message) {}
 
+    public static function hostHeader(string $url): string
+    {
+        $p = parse_url($url);
+        $secure = ($p['scheme'] ?? '') === 'wss';
+        $host = (string) ($p['host'] ?? '');
+        $defaultPort = $secure ? 443 : 80;
+        $port = $p['port'] ?? $defaultPort;
+        return $port === $defaultPort ? $host : "{$host}:{$port}";
+    }
+
     public function connect(string $url, Cancellation $cancel): void
     {
         Invite::relay($url);
@@ -29,6 +39,7 @@ final class Relay
         $secure = $p['scheme'] === 'wss';
         $host = $p['host'];
         $port = $p['port'] ?? ($secure ? 443 : 80);
+        $hostHeader = self::hostHeader($url);
         $loop = EventLoop::current();
         $connection = $this->connection = (new Connector())->connect($loop, trim($host, '[]'), $port,
             hrtime(true) / 1e9 + 10, $cancel, $secure ? trim($host, '[]') : null);
@@ -36,7 +47,7 @@ final class Relay
         $path = ($p['path'] ?? '/') ?: '/';
         $path .= isset($p['query']) ? '?' . $p['query'] : '';
         try {
-            Async::await($loop, function (\Closure $resume, \Closure $fail) use ($loop, $connection, $key, $host, $port, $path): \Closure {
+            Async::await($loop, function (\Closure $resume, \Closure $fail) use ($loop, $connection, $key, $hostHeader, $path): \Closure {
                 $timer = $loop->delay(10, fn () => $fail(new \RuntimeException('Relay handshake timed out')));
                 $connection->onClose(fn () => $fail(new \RuntimeException('Relay closed during handshake')));
                 $connection->onData(function (Connection $_, string $bytes) use ($key, $resume, $fail, $connection): void {
@@ -62,8 +73,10 @@ final class Relay
                     $connection->pauseRead();
                     $resume();
                 });
-                $request = "GET {$path} HTTP/1.1\r\nHost: {$host}:{$port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {$key}\r\nSec-WebSocket-Version: 13\r\nUser-Agent: Bia\r\n\r\n";
-                $connection->tryWrite($request);
+                $request = "GET {$path} HTTP/1.1\r\nHost: {$hostHeader}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {$key}\r\nSec-WebSocket-Version: 13\r\nUser-Agent: Bia\r\n\r\n";
+                if ($connection->tryWrite($request) !== WriteResult::Accepted) {
+                    $fail(new \RuntimeException('Relay write queue full or disconnected'));
+                }
                 return fn () => $loop->cancel($timer);
             }, $cancel);
             $this->received = microtime(true);

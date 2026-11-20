@@ -347,7 +347,8 @@ final class Chat
         }
     }
 
-    public function run(Cancellation $cancellation): void
+    /** A CLI join starts through the same flow as /join, without submitting or saving its invite. */
+    public function run(Cancellation $cancellation, ?string $join = null): void
     {
         Style::enable(getenv('NO_COLOR') === false);
         $this->terminal->enter();
@@ -382,10 +383,15 @@ final class Chat
         } elseif ($this->pickSession) {
             $this->resume('');
         }
+        if ($join !== null) {
+            $this->joinShare($join);
+        }
         $this->draw();
         $this->report('idle');
-        // After the first screen: no server keeps Bia from being ready.
-        Task::spawn(EventLoop::current(), $this->startMcp(...));
+        // After the first screen: no server keeps Bia from being ready. Direct `bia join` skips local MCP startup.
+        if ($join === null) {
+            Task::spawn(EventLoop::current(), $this->startMcp(...));
+        }
         $checking = $this->update !== null ? Task::spawn(EventLoop::current(), $this->checkUpdate(...)) : null;
         try {
             while ($this->running) {
@@ -1508,6 +1514,9 @@ final class Chat
      */
     private function startMcp(): void
     {
+        if ($this->guest || $this->nicknameEditor !== null) {
+            return;
+        }
         $manager = $this->mcp['manager'] ?? null;
         if ($manager === null) {
             return;

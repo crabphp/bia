@@ -29,7 +29,7 @@ final class ShareUiTest extends TestCase
         $this->home = sys_get_temp_dir() . '/bia-nickname-' . bin2hex(random_bytes(6));
         mkdir($this->home, 0700);
         putenv('BIA_HOME=' . $this->home);
-        $this->ui = new ShareUiFixture(Config::load($this->home));
+        $this->ui = new ShareUiFixture(Config::load($this->home, overrides: ['model' => ['api_key' => 'fixture']]));
     }
 
     protected function tearDown(): void
@@ -52,6 +52,8 @@ final class ShareUiTest extends TestCase
         $this->ui->keyboard(new Key('enter'));
         self::assertFalse($this->ui->askingName());
         self::assertSame('Billy', $this->ui->session()->nickname);
+        self::assertStringContainsString('bia join ' . $this->ui->session()->code, end($this->ui->notes));
+        self::assertStringContainsString('/join ' . $this->ui->session()->code, end($this->ui->notes));
         self::assertSame('Billy', Config::load($this->home)->get('sharing.nickname'));
         self::assertSame([], $this->ui->asked);
         $this->ui->rename('William');
@@ -62,12 +64,25 @@ final class ShareUiTest extends TestCase
         $this->ui->start('');
         self::assertFalse($this->ui->askingName());
         self::assertSame('William', $this->ui->session()->nickname);
-        $other = new ShareUiFixture(Config::load($this->home));
+        $other = new ShareUiFixture(Config::load($this->home, overrides: ['model' => ['api_key' => 'fixture']]));
         try {
             $other->start('');
             self::assertFalse($other->askingName(), 'Restart must not ask again');
             self::assertSame('William', $other->session()->nickname);
         } finally { $other->leave(); }
+    }
+
+    public function testKeylessHostCannotShareWhileGuestCanStillJoin(): void
+    {
+        $keyless = new ShareUiFixture(Config::load($this->home));
+        try {
+            $keyless->start('');
+            self::assertNull($keyless->session());
+            self::assertFalse($keyless->askingName());
+            self::assertStringContainsString('Cannot share without a model API key', end($keyless->notes));
+            $keyless->join('a7K2m9Q4x8Lp');
+            self::assertTrue($keyless->askingName(), 'Guests do not need a model API key to join.');
+        } finally { $keyless->leave(); }
     }
 
     public function testFirstJoinNamePromptCanBeCanceledWithoutConnectingOrSaving(): void

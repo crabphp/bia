@@ -32,6 +32,7 @@ final class Session
     private array $seen = [];
     private array $incoming = [];
     private array $relays = [];
+    private array $sentTo = [];
     private array $relayStates = [];
     private bool $connectedOnce = false;
     private ?Cancellation $cancel = null;
@@ -140,7 +141,8 @@ final class Session
                                 $this->incoming[] = $message[2];
                             }
                         } elseif (($message[0] ?? null) === 'CLOSED' || ($message[0] ?? null) === 'AUTH'
-                            || (($message[0] ?? null) === 'OK' && ($message[2] ?? null) === false)) {
+                            || (($message[0] ?? null) === 'OK' && ($message[2] ?? null) === false
+                                && !str_starts_with(strtolower(is_string($message[3] ?? null) ? $message[3] : ''), 'duplicate:'))) {
                             // Never echo arbitrary relay text (or authentication challenges) into the terminal.
                             throw new \RuntimeException('Relay rejected sharing events');
                         }
@@ -158,7 +160,7 @@ final class Session
                     } catch (\Throwable) {
                         $this->relayStates[$url] = 'Unavailable or rejected events · retrying';
                     } finally {
-                        unset($this->relays[$url]);
+                        unset($this->relays[$url], $this->sentTo[spl_object_id($relay)]);
                         if ($this->relayStates[$url] === 'Connected') { $this->relayStates[$url] = 'Reconnecting'; }
                         $relay->close();
                     }
@@ -229,7 +231,7 @@ final class Session
             ($this->notice)('Share ended · record exceeds transport limit');
             return;
         }
-        if ($this->batchBytes + $bytes > 18000) { $this->flush(); }
+        if ($this->batchBytes + $bytes > 18000 || count($this->batch) >= 1000) { $this->flush(); }
         $this->batch[] = $record;
         $this->batchBytes += $bytes;
         if ($this->queuedBytes + $this->batchBytes > 2 * 1024 * 1024 || count($this->outbox) > 256) {
@@ -251,7 +253,8 @@ final class Session
     public function packet(): ?array
     {
         if ($this->closed || $this->peer === null) { return null; }
-        $this->flush();
+        // Only cut a new numbered packet when the window is free; otherwise keep coalescing in $batch.
+        if ($this->outbox === []) { $this->flush(); }
         $sequence = array_key_first($this->outbox);
         $payload = [
             'v' => 1, 'token' => $this->invite->token, 'nickname' => $this->nickname,
@@ -344,8 +347,20 @@ final class Session
 
     private function broadcast(array $event): void
     {
+        $id = $event['id'] ?? null;
         foreach ($this->relays as $relay) {
-            try { $relay->send(['EVENT', $event]); } catch (\Throwable) { $relay->close(); }
+            $key = spl_object_id($relay);
+            // A relay already deduplicates by event id; avoid spamming identical cached events every tick.
+            if (is_string($id) && isset($this->sentTo[$key][$id])) { continue; }
+            try {
+                $relay->send(['EVENT', $event]);
+                if (is_string($id)) {
+                    $this->sentTo[$key][$id] = true;
+                    if (count($this->sentTo[$key]) > 64) { array_shift($this->sentTo[$key]); }
+                }
+            } catch (\Throwable) {
+                $relay->close();
+            }
         }
     }
 
@@ -360,6 +375,6 @@ final class Session
         $this->closed = true;
         $this->cancel?->cancel();
         foreach ($this->relays as $relay) { $relay->close(); }
-        $this->relays = $this->outbox = $this->incoming = $this->batch = $this->requests = $this->denied = $this->admissions = [];
+        $this->relays = $this->sentTo = $this->outbox = $this->incoming = $this->batch = $this->requests = $this->denied = $this->admissions = [];
     }
 }

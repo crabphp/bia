@@ -174,6 +174,7 @@ See [Configuration](#configuration) for every setting.
 bia [options] [prompt]              One prompt, or a conversation when run without one
 bia ask [options] <prompt>          The same, explicitly
 bia resume [session-id] [prompt]    Continue a session; without an id, pick one
+bia join <code> [relay-url ...]     Open Bia and join a shared session directly
 bia fork <session-id>               Start a new session from another's latest point
 bia sessions [--json]               List recent sessions
 bia export <session-id>             Write a session as JSONL
@@ -294,8 +295,9 @@ prompt.
 ### Sharing a session
 
 On the host, run `/share` and send the 12-character code privately. The guest runs
-`/join <code>` in their Bia, for example `/join a7K2m9Q4x8Lp` (codes are
-case-sensitive). Each person is asked for a nickname once if they haven't set one;
+`bia join <code>` from their shell, for example `bia join a7K2m9Q4x8Lp`, or
+`/join <code>` inside Bia (codes are case-sensitive). No model API key is needed
+to join. Each person is asked for a nickname once if they haven't set one;
 `/nickname billy` changes it later. On the host, **“Billy wants to join”** opens an
 Allow/Deny list: use ↑/↓ and Enter; Esc denies. It waits until you're idle and not
 typing. Nicknames are unverified—compare the fingerprint with your friend

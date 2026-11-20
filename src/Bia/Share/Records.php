@@ -39,6 +39,16 @@ final class Records
         return $record;
     }
 
+    /** Running tool output, bounded to stay inside Session's record limit after JSON escaping. */
+    public static function running(ToolCall $call, string $output): array
+    {
+        $record = ['type' => 'running', 'call' => self::call($call), 'text' => self::clean($output)];
+        if (strlen(json_encode($record, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES)) > 18000) {
+            $record['text'] = self::clean($output, 4000);
+        }
+        return $record;
+    }
+
     /** A small allowlist, sanitized both before sending and before rendering untrusted records. */
     private static function displayData(array $data): array
     {

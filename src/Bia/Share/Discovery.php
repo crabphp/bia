@@ -33,6 +33,34 @@ final class Discovery
         return hash('sha256', self::DOMAIN . "\0" . $code);
     }
 
+    /**
+     * Parses a short code + optional relay URLs, or a legacy self-contained bia1. invite.
+     *
+     * @return array{invite: ?Invite, code: string, relays: list<string>}
+     */
+    public static function parseJoin(string $input): array
+    {
+        $trimmed = trim($input);
+        if ($trimmed === '') {
+            throw new \InvalidArgumentException('Expected a 12-character share code (case-sensitive)');
+        }
+        if (str_starts_with($trimmed, 'bia1.')) {
+            $invite = Invite::parse($trimmed);
+            return ['invite' => $invite, 'code' => '', 'relays' => $invite->relays];
+        }
+        $parts = preg_split('/\s+/', $trimmed);
+        $code = array_shift($parts);
+        $relays = $parts === [] ? Invite::RELAYS : $parts;
+        self::tag($code);
+        if (count($relays) > 3) {
+            throw new \InvalidArgumentException('Use up to three relay URLs');
+        }
+        foreach ($relays as $relay) {
+            Invite::relay($relay);
+        }
+        return ['invite' => null, 'code' => $code, 'relays' => $relays];
+    }
+
     private static function key(string $code): string
     {
         // Separate from the public lookup hash: knowing the relay tag must not reveal the encryption key.

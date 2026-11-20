@@ -15,8 +15,17 @@ Either: /nickname billy
 Either: /share stop
 ```
 
-`/share` prints a fresh, case-sensitive 12-character code and a ready-to-copy
-`/join` command. Send it privately. The host must stay online during lookup;
+To join directly from your shell, run `bia join a7K2m9Q4x8Lp`. It validates the
+code and relays before opening Bia, skips local MCP server startup and
+`.mcp.json` prompts, and starts the same nickname, lookup, and host-approval
+flow as `/join`, without a model API key. Custom relays work too:
+`bia join <code> wss://relay.example`. It requires an interactive terminal and
+cannot be combined with `--json` or `--resume`. The invite is not added to Bia's
+prompt history; your shell may keep the command in its own history.
+
+`/share` requires a configured model API key and prints a fresh, case-sensitive
+12-character code with ready-to-copy `bia join` and `/join` commands. Send it
+privately. The host must stay online during lookup;
 lookup takes up to 30 seconds and Esc cancels it. On a failed or canceled lookup,
 `/share stop` leaves remote mode so you can retry. Old `bia1.…` invites still work.
 

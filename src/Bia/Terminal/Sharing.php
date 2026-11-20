@@ -195,6 +195,10 @@ trait Sharing
             $this->say('Usage: /share [relay-url ...] | status | stop');
             return;
         }
+        if ((string) $this->config->get('model.api_key', '') === '') {
+            $this->note('Cannot share without a model API key · ' . $this->config->keyHelp());
+            return;
+        }
         try {
             $relays = $rest === '' ? Invite::RELAYS : preg_split('/\s+/', $rest);
             foreach ($relays as $relay) { Invite::relay($relay); }
@@ -203,10 +207,11 @@ trait Sharing
             $this->sharePromptTimer = EventLoop::current()->repeat(1.0, fn () => $this->draw());
             $this->observeShare();
             $this->sharing->start();
-            $command = '/join ' . $this->sharing->code;
-            if ($relays !== Invite::RELAYS) { $command .= ' ' . implode(' ', $relays); }
+            $args = $this->sharing->code . ($relays !== Invite::RELAYS ? ' ' . implode(' ', $relays) : '');
+            $wrap = max(8, $this->region->width() - 2);
             $this->note("Share invite · expires in 1h · approval required\n  "
-                . wordwrap($command, max(8, $this->region->width() - 2), "\n  ", true));
+                . wordwrap("bia join {$args}", $wrap, "\n  ", true) . "\n  "
+                . wordwrap("/join {$args}", $wrap, "\n  ", true));
         } catch (\Throwable $error) {
             $this->endShare();
             $this->note('Share failed · ' . $error->getMessage());
@@ -220,16 +225,7 @@ trait Sharing
             return;
         }
         try {
-            // Old self-contained invites still work; only new short codes need discovery.
-            $invite = str_starts_with($input, 'bia1.') ? Invite::parse($input) : null;
-            $parts = preg_split('/\s+/', trim($input));
-            $code = array_shift($parts);
-            $relays = $parts === [] ? Invite::RELAYS : $parts;
-            if ($invite === null) {
-                Discovery::tag($code);
-                if (count($relays) > 3) { throw new \InvalidArgumentException('Use up to three relay URLs'); }
-                foreach ($relays as $relay) { Invite::relay($relay); }
-            }
+            ['invite' => $invite, 'code' => $code, 'relays' => $relays] = Discovery::parseJoin($input);
         } catch (\Throwable $error) {
             $this->note('Join failed · ' . $error->getMessage());
             return;
@@ -294,7 +290,7 @@ trait Sharing
             } elseif ($type === 'tool') {
                 $this->sharing->publish(Records::tool($args[0], $args[1]));
             } elseif ($type === 'running') {
-                $this->sharing->publish(['type' => 'running', 'call' => Records::call($args[0]), 'text' => Records::clean($args[1])]);
+                $this->sharing->publish(Records::running($args[0], $args[1]));
             } elseif ($type === 'notice') {
                 $this->sharing->publish(['type' => 'note', 'text' => Records::clean($args[0])]);
             } elseif ($type === 'finish') {
