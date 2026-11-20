@@ -84,7 +84,7 @@ final class Doctor
             'process groups' => [\Crab\Engine\Process\ProcessGroup::wrap(['true']) !== null, "a command's children may outlive it · install php's posix extension, and setsid or perl"],
             'pcntl' => [function_exists('pcntl_exec'), "Ctrl-C needs it · install php's pcntl extension"],
             'readline' => [extension_loaded('readline'), "line editing is plainer · install php's readline extension"],
-            'sharing crypto' => [extension_loaded('gmp') && extension_loaded('sodium') && extension_loaded('intl'), '/share and /join need PHP gmp, sodium and intl'],
+            'sharing crypto' => [extension_loaded('openssl') && in_array('chacha20', openssl_get_cipher_methods(), true) && in_array('chacha20-poly1305', openssl_get_cipher_methods(), true), '/share and /join need PHP openssl with ChaCha20 support'],
         ];
         $have = array_keys(array_filter($optional, static fn (array $check): bool => $check[0]));
         if ($have !== []) {

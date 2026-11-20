@@ -78,7 +78,7 @@ use Crab\HttpClient\Client;
  */
 final class Application
 {
-    public const VERSION = '0.1.9';
+    public const VERSION = '0.1.10';
 
     /**
      * @param list<string> $arguments
@@ -547,8 +547,8 @@ final class Application
         if (!Terminal::interactive()) {
             throw new \RuntimeException('bia join needs an interactive terminal.');
         }
-        if (!extension_loaded('gmp') || !extension_loaded('sodium')) {
-            throw new \RuntimeException('Sharing needs the PHP gmp and sodium extensions');
+        if (!extension_loaded('openssl') || !in_array('chacha20', openssl_get_cipher_methods(), true)) {
+            throw new \RuntimeException('Sharing needs the PHP openssl extension with ChaCha20 support');
         }
         // The invite is a startup action, never a model prompt or a history entry.
         return self::ask([], $options, $input);

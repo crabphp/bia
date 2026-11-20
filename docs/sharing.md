@@ -127,9 +127,9 @@ cannot approve or deliver anything.
 
 The announcement contains an encrypted `bia1.` descriptor: the ephemeral host
 public key, random 256-bit admission secret, relay URLs, and expiration. It uses
-libsodium's XChaCha20-Poly1305 AEAD with a fresh 24-byte nonce and a key derived
-from the code via HKDF-SHA-256, with a different domain from the public lookup
-hash. Associated data binds the format, lookup tag, and host key. Guests verify
+XChaCha20-Poly1305 AEAD (HChaCha20 subkey + OpenSSL `chacha20-poly1305`) with a
+fresh 24-byte nonce and a key derived from the code via HKDF-SHA-256, with a
+different domain from the public lookup hash. Associated data binds the format, lookup tag, and host key. Guests verify
 the signature, age, expiration and host-key binding before requesting admission.
 A short code never directly grants tool access or becomes the session's signing
 key. Host and guest each generate fresh secp256k1 keys, kept only in memory.
@@ -182,21 +182,21 @@ semantic observation, not terminal frames. Playback uses the existing renderer
 and Surface in fullscreen and inline modes. Transport-control notices are never
 rebroadcast. Nothing connects until `/share` or `/join`.
 
-The Nostr crypto dependency is `innis/nostr-core`; its explicit pure-PHP signer
-and ECDH implementation require GMP and sodium, with Composer also requiring intl.
-Its GMP secret-key operations are **not constant-time** and the library does not
-claim an independent security audit. This initial implementation uses only
-short-lived session keys, not valuable long-lived signing keys. This limitation
-matters on hostile shared hosts; do not treat this experimental feature as an
-audited high-assurance remote-access product. No homegrown cryptographic algorithm
-is used. The static build configuration includes the required extensions.
+Encryption and hashing run in native C via PHP's built-in `openssl` (`chacha20`,
+`chacha20-poly1305`) and `hash` (`sha256`, HMAC, HKDF) extensions—no `gmp`,
+`sodium`, or `intl` extensions are required. BIP-340 Schnorr signing/verification
+and secp256k1 ECDH live in `Bia\Share\Secp256k1` using 64-bit integer limb
+arithmetic, verified against official BIP-340 and NIP-44 test vectors. Those
+pure-PHP secp256k1 operations are **not constant-time** and have not had an
+independent security audit. Sharing uses only short-lived per-session keys, never
+long-lived signing keys; do not treat this experimental feature as an audited
+high-assurance remote-access product on hostile shared hosts.
 
 The WebSocket client runs on Crab's cancellable Connector and event loop because
 Crab's existing WebSocket session is server-only and its HTTP client does not
 expose socket upgrades. There is no blocking HTTP client or helper daemon.
 
-Run `composer test` with GMP and sodium enabled for the crypto/integration tests.
+Run `composer test` for the crypto, vector, and integration tests.
 `tests/Fixtures/share-server.php` prints loopback relay and scripted
 OpenAI-compatible URLs for real-terminal checks. It is a test fixture, not a
-production relay. Crypto tests skip with a clear reason if those extensions are
-missing; ordinary Bia startup and help do not initialize sharing.
+production relay. Ordinary Bia startup and help do not initialize sharing.

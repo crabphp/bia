@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 0.1.10 (2026-11-21)
+
+- Dropped `innis/nostr-core` and the `gmp`, `intl`, and `sodium` PHP
+  extension requirements for session sharing. Sharing now uses PHP's
+  built-in `openssl` (`chacha20`, `chacha20-poly1305`) and `hash` extensions
+  plus a self-contained pure-PHP `secp256k1` implementation, staying
+  wire-compatible with `0.1.9` while shrinking `bia.phar` from ~6 MB back to
+  ~2 MB and the standalone binaries from ~22 MB back to ~6 MB.
+
 ## 0.1.9 (2026-11-21)
 
 - Remote session sharing over encrypted Nostr relays: `/share` prints a

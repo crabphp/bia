@@ -1,7 +1,7 @@
 # Bia
 
 ```text
-▙▄▄▄▄▄▟   bia 0.1.9 · provider/model
+▙▄▄▄▄▄▟   bia 0.1.10 · provider/model
 █▙███▟█   ~/code/my-project
 ```
 
@@ -65,8 +65,7 @@ bia "find why the login test fails and fix it"
 - Linux or macOS. On Windows, run Bia in
   [WSL](https://learn.microsoft.com/windows/wsl/install).
 - The prebuilt binary includes PHP 8.4. A source checkout needs PHP 8.4 with
-  `pdo_sqlite`, `mbstring`, `openssl`, `gmp`, `intl`, and `sodium` (the last
-  three are dependencies of sharing's Nostr crypto library); `pcntl` and `posix` are recommended (Ctrl-C
+  `pdo_sqlite`, `mbstring`, and `openssl`; `pcntl` and `posix` are recommended (Ctrl-C
   handling and process groups), and `readline` gives line editing and history.
 - `git` for `apply_patch` and `git_diff`.
 - [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) for `search`;
@@ -867,7 +866,7 @@ provider.
 
 ## Status and limits
 
-Bia is at 0.1.9. Not yet built:
+Bia is at 0.1.10. Not yet built:
 - **Only OpenAI-compatible wire formats.** Native Anthropic Messages and
   Gemini adapters are planned.
 - **No native Windows.** Bia runs in WSL there.

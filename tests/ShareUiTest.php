@@ -22,7 +22,7 @@ final class ShareUiTest extends TestCase
 
     protected function setUp(): void
     {
-        if (!extension_loaded('gmp') || !extension_loaded('sodium')) { self::markTestSkipped('Sharing requires crypto extensions'); }
+        if (!extension_loaded('openssl') || !in_array('chacha20', openssl_get_cipher_methods(), true)) { self::markTestSkipped('Sharing requires openssl with ChaCha20'); }
         EventLoop::install(new StreamSelectEventLoop());
         Style::enable(false);
         $this->oldHome = getenv('BIA_HOME');

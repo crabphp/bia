@@ -73,8 +73,8 @@ final class Discovery
             throw new \InvalidArgumentException('Invite does not belong to this host');
         }
         $tag = self::tag($code);
-        $nonce = random_bytes(SODIUM_CRYPTO_AEAD_XCHACHA20POLY1305_IETF_NPUBBYTES);
-        $ciphertext = sodium_crypto_aead_xchacha20poly1305_ietf_encrypt(
+        $nonce = random_bytes(24);
+        $ciphertext = Nip44::xchachaEncrypt(
             $invite->code(), self::DOMAIN . $tag . $invite->host, $nonce, self::key($code),
         );
         return $identity->sign(self::KIND, base64_encode($nonce . $ciphertext), [['p', $tag]]);
@@ -92,10 +92,10 @@ final class Discovery
             $bytes = base64_decode($data['content'], true);
             if ($bytes === false || strlen($bytes) < 40) { return null; }
             // Reject unknown-code traffic cheaply, before doing signature arithmetic.
-            $plain = sodium_crypto_aead_xchacha20poly1305_ietf_decrypt(
+            $plain = Nip44::xchachaDecrypt(
                 substr($bytes, 24), self::DOMAIN . $tag . $data['pubkey'], substr($bytes, 0, 24), self::key($code),
             );
-            if ($plain === false || $verifier->verified($data, self::KIND, [['p', $tag]]) === null) { return null; }
+            if ($plain === null || $verifier->verified($data, self::KIND, [['p', $tag]]) === null) { return null; }
             $invite = Invite::parse($plain);
             return $invite->host === $data['pubkey'] ? $invite : null;
         } catch (\Throwable) {

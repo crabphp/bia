@@ -8,7 +8,9 @@ use Bia\Share\Discovery;
 use Bia\Share\Identity;
 use Bia\Share\Invite;
 use Bia\Share\Nickname;
+use Bia\Share\Nip44;
 use Bia\Share\Records;
+use Bia\Share\Secp256k1;
 use Bia\Share\Session;
 use Bia\Terminal\Loop;
 use Crab\Engine\Async\Async;
@@ -19,9 +21,92 @@ final class ShareTest extends TestCase
 {
     private function crypto(): void
     {
-        if (!extension_loaded('gmp') || !extension_loaded('sodium')) {
-            self::markTestSkipped('Sharing requires gmp and sodium');
+        if (!extension_loaded('openssl') || !in_array('chacha20', openssl_get_cipher_methods(), true)) {
+            self::markTestSkipped('Sharing requires openssl with ChaCha20');
         }
+    }
+
+    public function testBip340SchnorrVectorsAndInvalidInputs(): void
+    {
+        // Official BIP-340 test vectors 0 and 1 (signing + verification).
+        foreach ([
+            [
+                '0000000000000000000000000000000000000000000000000000000000000003',
+                'f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9',
+                '0000000000000000000000000000000000000000000000000000000000000000',
+                '0000000000000000000000000000000000000000000000000000000000000000',
+                'e907831f80848d1069a5371b402410364bdf1c5f8307b0084c55f1ce2dca821525f66a4a85ea8b71e482a74f382d2ce5ebeee8fdb2172f477df4900d310536c0',
+            ],
+            [
+                'b7e151628aed2a6abf7158809cf4f3c762e7160f38b4da56a784d9045190cfef',
+                'dff1d77f2a671c5f36183726db2341be58feae1da2deced843240f7b502ba659',
+                '0000000000000000000000000000000000000000000000000000000000000001',
+                '243f6a8885a308d313198a2e03707344a4093822299f31d0082efa98ec4e6c89',
+                '6896bd60eeae296db48a229ff71dfe071bde413e6d43f917dc8dcf8c78de33418906d11ac976abccb20b091292bff4ea897efcb639ea871cfa95f6de339e4b0a',
+            ],
+        ] as [$sk, $pk, $aux, $msg, $sig]) {
+            self::assertSame($pk, bin2hex(Secp256k1::publicKey(hex2bin($sk))));
+            self::assertSame($sig, bin2hex(Secp256k1::sign(hex2bin($sk), hex2bin($msg), hex2bin($aux))));
+            self::assertTrue(Secp256k1::verify(hex2bin($pk), hex2bin($msg), hex2bin($sig)));
+            // Flipping any bit in message or signature must fail verification.
+            $badMsg = hex2bin($msg) ^ ("\x01" . str_repeat("\0", 31));
+            self::assertFalse(Secp256k1::verify(hex2bin($pk), $badMsg, hex2bin($sig)));
+        }
+        // Negative BIP-340 edge cases: pubkey >= p, r >= p, s >= n, non-square x^3 + 7.
+        $msg = str_repeat("\0", 32);
+        $validPub = hex2bin('f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9');
+        $pHex = 'fffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f';
+        $nHex = 'fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141';
+        self::assertFalse(Secp256k1::verify(hex2bin($pHex), $msg, str_repeat("\x01", 64)));
+        self::assertFalse(Secp256k1::verify($validPub, $msg, hex2bin($pHex . str_repeat('00', 31) . '01')));
+        self::assertFalse(Secp256k1::verify($validPub, $msg, hex2bin(str_repeat('00', 31) . '01' . $nHex)));
+        // x = 5: 5^3 + 7 = 132 is a non-residue mod p (invalid curve x-coordinate).
+        self::assertFalse(Secp256k1::verify(str_repeat("\0", 31) . "\x05", $msg, str_repeat("\x01", 64)));
+    }
+
+    public function testNip44AndXChaCha20VectorsAndTamperChecks(): void
+    {
+        $this->crypto();
+        // Official NIP-44 v2 conversation key vector: sec1 = 1, sec2 = 2.
+        $sec1 = str_repeat("\0", 31) . "\x01";
+        $sec2 = str_repeat("\0", 31) . "\x02";
+        $pub1 = Secp256k1::publicKey($sec1);
+        $pub2 = Secp256k1::publicKey($sec2);
+        $conv = Nip44::conversationKey($sec1, $pub2);
+        self::assertSame('c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d', bin2hex($conv));
+        self::assertSame($conv, Nip44::conversationKey($sec2, $pub1), 'ECDH conversation key must be symmetric.');
+
+        // Round-trip across NIP-44 padding boundaries (1, 32, 33, 64, 256, 257, 4096 bytes).
+        foreach ([1, 32, 33, 64, 256, 257, 4096] as $len) {
+            $plain = str_repeat('a', $len);
+            $payload = Nip44::encrypt($plain, $conv);
+            self::assertSame($plain, Nip44::decrypt($payload, $conv));
+        }
+        // Tampered payload, unsupported version, and '#' non-base64 payload must fail.
+        $payload = Nip44::encrypt('secret', $conv);
+        $raw = base64_decode($payload, true);
+        foreach ([
+            base64_encode($raw ^ ("\0" . str_repeat("\0", strlen($raw) - 2) . "\x01")),
+            base64_encode("\x01" . substr($raw, 1)),
+            '#' . substr($payload, 1),
+            'short',
+        ] as $bad) {
+            try { Nip44::decrypt($bad, $conv); self::fail('Accepted invalid NIP-44 payload'); } catch (\RuntimeException) { self::assertTrue(true); }
+        }
+
+        // XChaCha20-Poly1305 RFC draft test vector (draft-irtf-cfrg-xchacha-03 Appendix A.3.1).
+        $key = hex2bin('808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f');
+        $nonce = hex2bin('404142434445464748494a4b4c4d4e4f5051525354555657');
+        $aad = hex2bin('50515253c0c1c2c3c4c5c6c7');
+        $plain = "Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
+        $expected = hex2bin(
+            'bd6d179d3e83d43b9576579493c0e939572a1700252bfaccbed2902c21396cbb731c7f1b0b4aa6440bf3a82f4eda7e39ae64c6708c54c216cb96b72e1213b4522f8c9ba40db5d945b11b69b982c1bb9e3f3fac2bc369488f76b2383565d3fff921f9664c97637da9768812f615c68b13b52e'
+            . 'c0875924c1c7987947deafd8780acf49'
+        );
+        self::assertSame($expected, Nip44::xchachaEncrypt($plain, $aad, $nonce, $key));
+        self::assertSame($plain, Nip44::xchachaDecrypt($expected, $aad, $nonce, $key));
+        self::assertNull(Nip44::xchachaDecrypt($expected, $aad . 'x', $nonce, $key));
+        self::assertNull(Nip44::xchachaDecrypt($expected ^ ("\x01" . str_repeat("\0", strlen($expected) - 1)), $aad, $nonce, $key));
     }
 
     public function testInvitesRoundTripAndContainNoPrivateKey(): void

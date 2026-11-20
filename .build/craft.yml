@@ -7,7 +7,7 @@
 #   openssl: HTTPS to model and MCP servers
 #   phar: the binary carries Bia as one
 php-version: 8.4
-extensions: ctype,filter,gmp,intl,mbstring,openssl,pcntl,pdo,pdo_sqlite,phar,posix,readline,sodium,tokenizer,zlib
+extensions: ctype,filter,mbstring,openssl,pcntl,pdo,pdo_sqlite,phar,posix,readline,tokenizer,zlib
 sapi: micro
 build-options:
   # Not UPX: a packed binary unpacks itself on every start, ~150 ms.
