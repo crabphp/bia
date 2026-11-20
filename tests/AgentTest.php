@@ -24,6 +24,9 @@ use Bia\Tool\Registry;
 use Crab\Engine\Async\Async;
 use Crab\Engine\Async\Cancellation;
 use Crab\Engine\EventLoop;
+use Crab\Http\Request;
+use Crab\HttpClient\NetworkException;
+use Crab\HttpClient\TimedOut;
 use PHPUnit\Framework\TestCase;
 
 final class AgentTest extends TestCase
@@ -226,6 +229,98 @@ final class AgentTest extends TestCase
             self::fail('A fresh prompt is not waited on past its delays.');
         } catch (ModelException) {
             self::assertSame(2, $fresh->calls, 'The patience is for work already done, not a prompt just asked.');
+        }
+    }
+
+    public function testTimeoutsStopAfterTwoRetriesEvenOnInvestedTurnsAndReportTheRealReason(): void
+    {
+        $request = new Request('POST', 'https://secret.example.test/v1/chat/completions');
+        $idleTimeout = new NetworkException(
+            'POST https://secret.example.test/v1/chat/completions failed: nothing arrived for 120 seconds while reading the answer.',
+            $request,
+            new TimedOut('reading the answer'),
+        );
+        [$store, $session] = $this->session();
+        $model = new ToolThenFlakyModel(array_fill(0, 10, $idleTimeout));
+        $renderer = new FakeRenderer();
+        $agent = new Agent($model, 'fake', (new Registry())->add(new EchoTool()), $store, $renderer, '/workspace', retryDelays: [0.001, 0.001, 0.001, 0.001, 0.001], patience: 1.0);
+        try {
+            $agent->run($session, 'run the tool');
+            self::fail('A repeatedly timing-out request should stop after two retries.');
+        } catch (NetworkException) {
+            // 1 tool step + 1 initial attempt + 2 retries = 4 calls total (never 22 retries).
+            self::assertSame(4, $model->calls);
+        }
+        self::assertSame([
+            'timed out after 120s · retry 1/2 in 0.0s',
+            'timed out after 120s · retry 2/2 in 0.0s',
+        ], $renderer->notices);
+
+        // HTTP 504 gateway timeouts are also capped at two retries on an invested turn.
+        [$store, $session] = $this->session();
+        $gateway = new ToolThenFlakyModel(array_fill(0, 10, new ModelException('gateway timeout', 504)));
+        $renderer = new FakeRenderer();
+        $agent = new Agent($gateway, 'fake', (new Registry())->add(new EchoTool()), $store, $renderer, '/workspace', retryDelays: [0.001, 0.001, 0.001, 0.001], patience: 1.0);
+        try {
+            $agent->run($session, 'run the tool');
+            self::fail('504 timeouts should stop after two retries.');
+        } catch (ModelException $error) {
+            self::assertSame(504, $error->status);
+            self::assertSame(4, $gateway->calls);
+        }
+        self::assertSame([
+            '504 · retry 1/2 in 0.0s',
+            '504 · retry 2/2 in 0.0s',
+        ], $renderer->notices);
+    }
+
+    public function testPatienceCountsFailedRequestTimeNotJustBackoffSleeps(): void
+    {
+        [$store, $session] = $this->session();
+        $model = new class implements Model {
+            public int $calls = 0;
+
+            public function stream(ModelRequest $request, callable $emit, ?Cancellation $cancellation = null): ModelResult
+            {
+                if (++$this->calls === 1) {
+                    return new ModelResult('', 'tool_calls', toolCalls: [new ToolCall('call-1', 'echo', ['value' => 'hi'])]);
+                }
+                usleep(25_000); // Simulate a slow upstream failure (25ms each).
+                throw new ModelException('bad gateway', 502);
+            }
+        };
+        $renderer = new FakeRenderer();
+        // With 0.001s backoff and 0.04s patience, sleep-only math would allow 40 retries; wall-time budget stops after 1 retry.
+        $agent = new Agent($model, 'fake', (new Registry())->add(new EchoTool()), $store, $renderer, '/workspace', retryDelays: [0.001], patience: 0.04);
+        try {
+            $agent->run($session, 'run the tool');
+            self::fail('Slow failures should exhaust patience quickly.');
+        } catch (ModelException $error) {
+            self::assertSame(502, $error->status);
+            self::assertSame(3, $model->calls, '1 tool step + 1 initial slow fail (25ms) + 1 retry (25ms -> 51ms > 40ms patience).');
+        }
+    }
+
+    public function testNetworkFailureNoticesShowSpecificReasonWithoutLeakingUrls(): void
+    {
+        $request = new Request('POST', 'https://private.proxy.example/v1/chat/completions');
+        [$store, $session] = $this->session();
+        $model = new FlakyModel([
+            [new NetworkException('POST https://private.proxy.example/v1/chat/completions failed: the connection was lost in the middle of the answer.', $request), ''],
+            [new NetworkException('timeout', $request, new TimedOut('connecting')), ''],
+            [new NetworkException('', $request), ''],
+        ]);
+        $renderer = new FakeRenderer();
+        $agent = new Agent($model, 'fake', new Registry(), $store, $renderer, '/workspace', retryDelays: [0.0, 0.0, 0.0]);
+
+        self::assertSame('done', $agent->run($session, 'hi')->text);
+        self::assertSame([
+            'the connection was lost in the middle of the answer · retry 1/3 in 0s',
+            'timed out while connecting · retry 2/3 in 0s',
+            'connection failed · retry 3/3 in 0s',
+        ], $renderer->notices);
+        foreach ($renderer->notices as $notice) {
+            self::assertStringNotContainsString('private.proxy.example', $notice);
         }
     }
 

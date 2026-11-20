@@ -23,6 +23,7 @@ use Crab\Engine\Async\Cancellation;
 use Crab\Engine\Async\Task;
 use Crab\Engine\EventLoop;
 use Crab\HttpClient\NetworkException;
+use Crab\HttpClient\TimedOut;
 
 /**
  * Runs the model/tool turn loop and appends every message and tool result to
@@ -53,8 +54,16 @@ final readonly class Agent
      * Seconds of waiting, in all, that a turn with tool results behind it
      * keeps trying a failing provider: abandoning the turn throws that work
      * away, so it is tried at the last delay long past a fresh prompt.
+     * Counts both failed request time and backoff waits.
      */
     private const PATIENCE = 300.0;
+
+    /**
+     * How many times a timed-out request (idle/connect timeout, 408, 504) is
+     * retried, even on an invested turn: a stalling request should fail fast
+     * instead of repeating multi-minute waits dozens of times.
+     */
+    private const TIMEOUT_RETRIES = 2;
 
     /**
      * @param list<float> $retryDelays Waits before each new try of a request that failed for a passing reason.
@@ -271,9 +280,12 @@ final readonly class Agent
     private function attempts(ModelRequest $request, ?Cancellation $cancellation, bool $invested): ModelResult
     {
         $delays = $this->delays($invested);
+        $spent = 0.0;
+        $timeouts = 0;
         for ($attempt = 0; ; $attempt++) {
             $started = false;
             $shown = false;
+            $attemptStart = hrtime(true);
             try {
                 return $this->model->stream(
                     $request,
@@ -294,18 +306,58 @@ final readonly class Agent
                 if (!$transient || $attempt >= count($delays)) {
                     throw $error;
                 }
+                $timedOut = self::timedOut($error);
+                if ($timedOut && ++$timeouts > self::TIMEOUT_RETRIES) {
+                    throw $error;
+                }
                 $wait = $delays[$attempt];
                 if ($error instanceof ModelException && $error->retryAfter !== null) {
                     $wait = min(max($wait, $error->retryAfter), self::RETRY_AFTER_LIMIT);
                 }
-                $why = $error instanceof ModelException ? (string) $error->status : 'connection failed';
-                $notice = "{$why} · retry " . ($attempt + 1) . '/' . count($delays) . ' in ' . self::seconds($wait)
+                // Count actual failed request time as well as backoff sleeps against the patience budget.
+                $spent += (hrtime(true) - $attemptStart) / 1_000_000_000;
+                if ($this->patience > 0.0 && $spent + $wait > $this->patience) {
+                    throw $error;
+                }
+                $spent += $wait;
+                $cap = $timedOut ? min(count($delays), $attempt + (self::TIMEOUT_RETRIES - $timeouts + 1)) : count($delays);
+                $why = self::failureReason($error);
+                $notice = "{$why} · retry " . ($attempt + 1) . "/{$cap} in " . self::seconds($wait)
                     . ($shown ? ' · the answer starts over' : '');
                 $this->inspection?->event($notice);
                 $this->renderer->notice($notice);
                 self::wait($wait, $cancellation);
             }
         }
+    }
+
+    private static function timedOut(ModelException | NetworkException $error): bool
+    {
+        if ($error instanceof ModelException) {
+            return in_array($error->status, [408, 504], true);
+        }
+        return $error->getPrevious() instanceof TimedOut;
+    }
+
+    private static function failureReason(ModelException | NetworkException $error): string
+    {
+        if ($error instanceof ModelException) {
+            return (string) $error->status;
+        }
+        $message = $error->getMessage();
+        $previous = $error->getPrevious();
+        if ($previous instanceof TimedOut) {
+            if (preg_match('/(?:nothing arrived for|took more than) (\d+(?:\.\d+)?) seconds/i', $message, $match) === 1) {
+                return 'timed out after ' . self::seconds((float) $match[1]);
+            }
+            return $previous->doing !== '' ? 'timed out while ' . $previous->doing : 'timed out';
+        }
+        $reason = ($pos = strpos($message, 'failed: ')) !== false ? substr($message, $pos + 8) : $message;
+        $reason = rtrim(trim((string) preg_replace('/[\x00-\x1f\x7f]+/', ' ', $reason)), '.');
+        if ($reason === '') {
+            return 'connection failed';
+        }
+        return mb_strlen($reason, 'UTF-8') > 80 ? rtrim(mb_substr($reason, 0, 79, 'UTF-8')) . '…' : $reason;
     }
 
     /**
