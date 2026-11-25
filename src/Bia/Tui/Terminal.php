@@ -100,8 +100,10 @@ final class Terminal
         shell_exec('stty -icanon -echo -isig -iexten -icrnl -ixon min 1 time 0 < /dev/tty 2>/dev/null');
         stream_set_blocking($this->input, false);
         Style::light($this->lightBackground());
-        // Pasting bracketed; the window's focus told, as focus-in and focus-out keys.
-        $this->write("\e[?2004h\e[?1004h");
+        // Pasting bracketed; the window's focus told, as focus-in and focus-out keys; and
+        // modifyOtherKeys 1, which tells Ctrl-Enter and Shift-Enter from Enter and changes
+        // no key that has a code of its own, where the terminal knows it.
+        $this->write("\e[?2004h\e[?1004h\e[>4;1m");
         register_shutdown_function($this->leave(...));
     }
 
@@ -176,7 +178,7 @@ final class Terminal
         }
         $this->alternate(false);
         $this->title(null);
-        $this->write("\e[?1004l\e[?2004l\e[?25h");
+        $this->write("\e[>4;0m\e[?1004l\e[?2004l\e[?25h");
         shell_exec('stty ' . escapeshellarg($this->saved) . ' < /dev/tty 2>/dev/null');
         stream_set_blocking($this->input, true);
         $this->saved = null;

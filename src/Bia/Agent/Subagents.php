@@ -119,6 +119,7 @@ final class Subagents
                     }
                     return $steer;
                 },
+                steered: fn (): ?float => ($this->agents[$name]['steer'] ?? []) !== [] ? \Bia\Tool\Shells::GRACE : null,
             );
             $this->agents[$name]['state'] = 'done';
             $answer = trim($result->text);

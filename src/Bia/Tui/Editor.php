@@ -109,6 +109,8 @@ final class Editor
             case 'paste':
                 $this->insert(str_replace("\t", '    ', $key->text));
                 return false;
+            case 'ctrl-enter': // sends as Enter does; Chat takes it, while Bia works, to send now
+                return true;
             case 'enter':
                 if ($this->column > 0 && $this->column === $length && str_ends_with($line, '\\')) {
                     $this->lines[$this->row] = substr($line, 0, -1);
@@ -141,6 +143,7 @@ final class Editor
                 }
                 return false;
             case 'left':
+            case 'ctrl-b': // as in Emacs, unless Chat takes it for a command running
                 if ($this->column > 0) {
                     $this->column--;
                 } elseif ($this->row > 0) {

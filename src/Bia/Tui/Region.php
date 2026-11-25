@@ -268,12 +268,12 @@ final class Region implements Surface
         $text = $this->partial . $this->pending;
         $this->pending = '';
         $end = strrpos($text, "\n");
-        $finished = $end === false ? '' : self::margin(substr($text, 0, $end + 1));
+        $finished = $end === false ? '' : self::wrap(substr($text, 0, $end), $columns) . "\n";
         $this->partial = $end === false ? $text : substr($text, $end + 1);
 
         $rows = [];
         foreach ($this->partial . $this->draft === '' ? [] : explode("\n", $this->partial . $this->draft) as $part) {
-            array_push($rows, ...Style::wrapAnsi(self::margin($part), $columns)); // a draft may span lines
+            array_push($rows, ...Screen::lineRows($part, $columns)); // a draft may span lines
         }
         $offset = count($rows);
         array_push($rows, ...$this->lines);
@@ -318,17 +318,17 @@ final class Region implements Surface
     }
 
     /**
-     * Whole lines set in by the margin, as the Screen sets them: a plain line
-     * after a column of space, a shaded one with that space inside its colour.
+     * Whole lines set as the Screen sets them: wrapped inside the margins,
+     * the rows after a marker's under its text, so none is left for the
+     * terminal to break mid-word at its edge; a shaded one edge to edge.
      */
-    private static function margin(string $lines): string
+    private static function wrap(string $lines, int $columns): string
     {
-        $space = str_repeat(' ', Screen::MARGIN);
-        return (string) preg_replace_callback(
-            '/^((?:\e\[[0-9;]*m)*)(?=[^\n])/m',
-            static fn (array $m): string => $m[1] . $space,
-            $lines,
-        );
+        $rows = [];
+        foreach (explode("\n", $lines) as $line) {
+            array_push($rows, ...($line === '' ? [''] : Screen::lineRows($line, $columns)));
+        }
+        return implode("\n", $rows);
     }
 
     /**

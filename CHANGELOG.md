@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 0.1.11 (2026-11-26)
+
+- A command still running two seconds after you steer Bia goes on in the
+  background instead of holding your message until it ends or times out;
+  one that ends within those seconds still gives its result whole. The
+  model is told its shell number and reads or stops it with `shell_output`.
+  Ctrl-B moves a running command to the background at once, with nothing
+  typed; Ctrl-Enter sends what you typed and what waits now (Bia asks the
+  terminal for xterm's `modifyOtherKeys` to tell it from Enter; where it
+  cannot, Enter on an empty input does the same).
+- Commands in the background are shown: a dim row above the status line
+  while any run, `/shells` to list them, `/shells stop [number]` to stop.
+- Inline mode wraps long lines at a word inside the margins, as fullscreen
+  does, instead of leaving the terminal to break them mid-word.
+
 ## 0.1.10 (2026-11-21)
 
 - Dropped `innis/nostr-core` and the `gmp`, `intl`, and `sodium` PHP

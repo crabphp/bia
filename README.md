@@ -1,7 +1,7 @@
 # Bia
 
 ```text
-▙▄▄▄▄▄▟   bia 0.1.10 · provider/model
+▙▄▄▄▄▄▟   bia 0.1.11 · provider/model
 █▙███▟█   ~/code/my-project
 ```
 
@@ -248,6 +248,8 @@ completes.
 | `/join <code> [relay-url ...]` | Find the host using its 12-character code, then request access |
 | `/share stop` | Disconnect, discard queued guest messages, and cancel a guest-origin turn |
 | `/compact` | Summarize the conversation so far now |
+| `/shells` | The commands running in the background: each its number, command, and how long it has run. While any run, a row above the status line says how many |
+| `/shells stop [number]` | Stop one, or all |
 | `/memory` | What Bia keeps between sessions, and where: the facts about you, the diary's days, this project's memories, and the file its rules go in |
 | `/reload` | Read the config, instructions (`AGENTS.md`), plugins and MCP servers again, on the same session, model and effort, without restarting. Background commands go on. A config with an error leaves everything as it was. For new Bia code, quit and `bia resume` |
 | `/stats` | Show or hide live stats at the top right: drawing (fps, ms a frame), first token and tokens a second, tokens in and out, memory |
@@ -261,7 +263,9 @@ the highlighted one.
 
 | Key | Effect |
 |---|---|
-| Enter | Send; while Bia works, steer it: the message reaches Bia at its next step |
+| Enter | Send; while Bia works, steer it: the message reaches Bia at its next step. A command still running two seconds later goes on in the background, so it never holds your message |
+| Ctrl-Enter | While Bia works, send now: what you typed and what waits, the command holding it moved to the background at once. Where the terminal cannot tell it from Enter, Enter on an empty input does the same |
+| Ctrl-B | While a command runs, move it to the background and let the turn go on; otherwise, a character left |
 | Ctrl-J, Alt-Enter, or `\` then Enter | New line; a paste keeps its lines |
 | Up / Down | Move between lines, then through earlier prompts (kept across runs) |
 | Esc | Stop the turn, or close a menu |
@@ -866,7 +870,7 @@ provider.
 
 ## Status and limits
 
-Bia is at 0.1.10. Not yet built:
+Bia is at 0.1.11. Not yet built:
 - **Only OpenAI-compatible wire formats.** Native Anthropic Messages and
   Gemini adapters are planned.
 - **No native Windows.** Bia runs in WSL there.

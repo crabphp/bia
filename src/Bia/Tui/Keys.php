@@ -22,11 +22,12 @@ final class Keys
         "\e[1;5A" => 'up', "\e[1;5B" => 'down',
         "\e[I" => 'focus-in', "\e[O" => 'focus-out', // the terminal's window gained or lost focus
         "\e[13;2u" => 'alt-enter', "\e[27;2;13~" => 'alt-enter', // shift-enter, where the terminal tells it apart
+        "\e[13;5u" => 'ctrl-enter', "\e[27;5;13~" => 'ctrl-enter', // likewise
     ];
 
     private const CONTROLS = [
         "\r" => 'enter', "\n" => 'ctrl-j', "\t" => 'tab', "\x7f" => 'backspace', "\x08" => 'backspace',
-        "\x01" => 'ctrl-a', "\x02" => 'left', "\x03" => 'ctrl-c', "\x04" => 'ctrl-d', "\x05" => 'ctrl-e',
+        "\x01" => 'ctrl-a', "\x02" => 'ctrl-b', "\x03" => 'ctrl-c', "\x04" => 'ctrl-d', "\x05" => 'ctrl-e',
         "\x06" => 'right', "\x0b" => 'ctrl-k', "\x0c" => 'ctrl-l', "\x0e" => 'down', "\x10" => 'up',
         "\x15" => 'ctrl-u', "\x17" => 'ctrl-w', "\x1a" => 'ctrl-z', "\x00" => 'ctrl-space',
     ];

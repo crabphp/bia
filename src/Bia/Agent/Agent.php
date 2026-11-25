@@ -100,15 +100,17 @@ final readonly class Agent
      *        meanwhile: each message joins the conversation there, before the model's next step.
      * @param list<\Bia\Contracts\Image> $images The prompt's images.
      * @param bool $inheritImages Whether tools may reuse earlier attachments; kept with the message for resume.
+     * @param (\Closure(): ?float)|null $steered Asked while a tool runs: once the user has written, or asked for it,
+     *        the seconds a command may still take before it goes on in the background, for $steer to be asked.
      */
-    public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null, array $images = [], bool $inheritImages = true): ModelResult
+    public function run(string $sessionId, string $prompt, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null, array $images = [], bool $inheritImages = true, ?\Closure $steered = null): ModelResult
     {
         $entries = $this->sessions->path($sessionId);
         $this->recoverExecutions($sessionId, $entries);
         // How long the conversation rested before this prompt: past the cache's life, compacting is nearly free.
         $idle = $this->compactor?->idle($entries) ?? 0.0;
         $entries[] = $this->sessions->append($sessionId, $this->user(self::clean($prompt), $images, $inheritImages));
-        return $this->loop($sessionId, $entries, $idle, $system, $cancellation, $steer, $images, continued: false);
+        return $this->loop($sessionId, $entries, $idle, $system, $cancellation, $steer, $images, continued: false, steered: $steered);
     }
 
     /**
@@ -117,12 +119,13 @@ final readonly class Agent
      * request, and the model is asked again with nothing new added.
      *
      * @param \Closure(): list<string|Message>|null $steer As in run().
+     * @param (\Closure(): ?float)|null $steered As in run().
      */
-    public function resume(string $sessionId, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null): ModelResult
+    public function resume(string $sessionId, string $system = '', ?Cancellation $cancellation = null, ?\Closure $steer = null, ?\Closure $steered = null): ModelResult
     {
         $entries = $this->sessions->path($sessionId);
         $idle = $this->compactor?->idle($entries) ?? 0.0;
-        return $this->loop($sessionId, $entries, $idle, $system, $cancellation, $steer, [], continued: true);
+        return $this->loop($sessionId, $entries, $idle, $system, $cancellation, $steer, [], continued: true, steered: $steered);
     }
 
     /**
@@ -130,8 +133,9 @@ final readonly class Agent
      * @param \Closure(): list<string|Message>|null $steer
      * @param list<\Bia\Contracts\Image> $images
      * @param bool $continued Whether this turn continues work already done, worth more patience with a failing provider.
+     * @param (\Closure(): ?float)|null $steered
      */
-    private function loop(string $sessionId, array $entries, float $idle, string $system, ?Cancellation $cancellation, ?\Closure $steer, array $images, bool $continued): ModelResult
+    private function loop(string $sessionId, array $entries, float $idle, string $system, ?Cancellation $cancellation, ?\Closure $steer, array $images, bool $continued, ?\Closure $steered = null): ModelResult
     {
         $this->recoverExecutions($sessionId, $entries);
         // A short follow-up such as "do it" still refers to the image in the
@@ -213,7 +217,7 @@ final readonly class Agent
                 return $result;
             }
 
-            $toolContext = new ToolContext($this->workspace, $sessionId, images: $attachments);
+            $toolContext = new ToolContext($this->workspace, $sessionId, images: $attachments, steered: $steered);
             foreach ($this->batches($result->toolCalls) as $batch) {
                 foreach ($this->execute($batch, $toolContext, $cancellation) as $index => $execution) {
                     $call = $batch[$index];
@@ -617,6 +621,7 @@ final readonly class Agent
                 $context->metadata,
                 fn (string $output) => $this->renderer->running($call, $output),
                 $context->images,
+                $context->steered,
             );
             return $this->tools->execute($call->name, $call->arguments, $context, $cancellation);
         } catch (\Throwable $error) {

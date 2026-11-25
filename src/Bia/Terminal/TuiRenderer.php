@@ -361,6 +361,7 @@ final class TuiRenderer implements Renderer
         $command = $firstLine . ($firstLine !== rtrim($command) ? ' …' : '');
         $title = match (true) {
             $call->name === 'shell' && ($arguments['background'] ?? false) === true => 'Started ' . $command . ' in the background',
+            $call->name === 'shell' && !$running && isset($data['background']) => 'Moved ' . $command . ' to the background',
             $call->name === 'shell' => ($running ? 'Running ' : 'Ran ') . $command
                 . (is_string($arguments['workdir'] ?? null) && !in_array($arguments['workdir'], ['', '.'], true) ? ' in ' . $arguments['workdir'] : ''),
             $call->name === 'shell_output' => (($arguments['kill'] ?? false) === true ? 'Stopped' : 'Read') . ' background shell ' . ($arguments['id'] ?? ''),

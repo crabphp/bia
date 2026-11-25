@@ -7,6 +7,7 @@ namespace Bia\Terminal;
 use Bia\Agent\Agent;
 use Bia\Agent\Inspection;
 use Bia\Agent\Subagents;
+use Bia\Tool\Shells;
 use Bia\Tui\Transcript;
 use Bia\Config\Config;
 use Bia\Contracts\Image;
@@ -98,6 +99,8 @@ final class Chat
     /** Counts as things happen, shown or not, so turning /stats on shows the whole session. */
     private readonly Stats $stats;
     private bool $showStats = false;
+    /** Ctrl-B asked for the commands running in the foreground to go on in the background, at once. */
+    private bool $backgroundNow = false;
     /** The usage panel open in the input's place, on this tab; null when closed. */
     private ?string $usageBy = null;
     /** @var array{lines: list<string>, total: bool} The tab's table, read as it opened. */
@@ -174,10 +177,13 @@ final class Chat
         private readonly ?\Closure $reload = null,
         private readonly ?\Closure $update = null,
         private readonly ?\Bia\Plugin\Plugins $plugins = null,
+        private readonly ?Shells $shells = null,
     ) {
         if ((string) $this->config->get('model.api_key', '') !== '') {
             $this->agent ??= ($this->makeAgent)($this->config);
         }
+        // What runs in the background shows under the input as it starts and ends.
+        $this->shells?->onChange(fn () => $this->draw());
         $this->naming = $sessions instanceof \Bia\Session\SqliteStore ? new \Bia\Session\Naming($sessions) : null;
         $this->away = new RecapSchedule(microtime(true));
         $this->stats = new Stats();
@@ -230,6 +236,7 @@ final class Chat
             ->add('usage', 'Tokens and speed by day, model and provider', $this->usage(...), '[day|models|providers]')
             ->add('mcp', 'MCP servers and their tools', $this->showMcp(...), '[login|logout|restart <server>]')
             ->add('plugins', 'Plugins installed', $this->showPlugins(...))
+            ->add('shells', 'Background shells, or stop them', $this->showShells(...), '[stop [number]]')
             ->add('render', 'How answers appear', $this->render(...), '[normal|smooth|power]')
             ->add('help', 'Commands and keys', $this->help(...))
             ->add('reload', 'Read config, instructions, plugins and MCP again', $this->reloadConfig(...))
@@ -574,6 +581,13 @@ final class Chat
             $this->region->clear();
             return;
         }
+        if ($key->is('ctrl-b')) {
+            // A command holding the turn goes on in the background, and the turn goes on.
+            if ($this->turn !== null && ($this->shells?->foreground() ?? 0) > 0) {
+                $this->backgroundNow = true;
+                return;
+            }
+        }
         if ($key->is('ctrl-o')) {
             // Every tool call's output, opened or closed again.
             $this->opened = !$this->opened;
@@ -619,6 +633,16 @@ final class Chat
         if ($key->is('down') && $this->menu === null && $this->agentRows > 0 && $this->editor->atBottom()) {
             // Below the input's last line: the list of agents, on the one on screen.
             $this->agentRow = (int) array_search($this->viewing, $this->agentNames(), true);
+            return;
+        }
+        if ($key->is('ctrl-enter') && $this->turn !== null && $this->menu === null) {
+            // Sent now: what is typed and what waits, without the grace for the command holding them.
+            if (trim($this->editor->text()) !== '') {
+                $this->submit($this->editor->text());
+            }
+            if ($this->steering !== [] && ($this->shells?->foreground() ?? 0) > 0) {
+                $this->backgroundNow = true;
+            }
             return;
         }
         if ($this->editor->key($key) === true) {
@@ -885,6 +909,9 @@ final class Chat
             // Enter on nothing picks an unanswered turn back up, as after a failed request.
             if (!$this->guest && $this->turn === null && $this->viewing === null) {
                 $this->pickUp();
+            } elseif ($this->turn !== null && $this->steering !== [] && ($this->shells?->foreground() ?? 0) > 0) {
+                // Enter again on a message waiting sends it now: no grace for the command holding it.
+                $this->backgroundNow = true;
             }
             return;
         }
@@ -941,7 +968,7 @@ final class Chat
                 }
             }
             // A model or effort chosen while Bia works is for the next message: the turn running ends on its own.
-            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp', 'model', 'effort', 'share', 'nickname'], true)) {
+            if ($this->turn !== null && !in_array($name, ['exit', 'quit', 'help', 'stats', 'mcp', 'model', 'effort', 'share', 'nickname', 'shells'], true)) {
                 $this->say("Busy · Esc to stop");
                 return;
             }
@@ -992,7 +1019,7 @@ final class Chat
         $images = $remote ? [] : $this->imagesIn($text);
         $this->work('Thinking', function (Cancellation $cancellation) use ($sessionId, $text, $images, $remote): void {
             $this->plugins?->emit('turn.start', ['text' => $text]);
-            $result = $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images, inheritImages: !$remote);
+            $result = $this->agent?->run($sessionId, $text, $this->system, $cancellation, $this->steer(...), $images, inheritImages: !$remote, steered: $this->handOver(...));
             $this->away->turnDone();
             $this->plugins?->emit('turn.done', ['text' => (string) $result?->text]);
         });
@@ -1030,7 +1057,7 @@ final class Chat
         $this->used = true;
         $this->renderer->collapse();
         $this->work('Thinking', function (Cancellation $cancellation) use ($sessionId): void {
-            $this->agent?->resume($sessionId, $this->system, $cancellation, $this->steer(...));
+            $this->agent?->resume($sessionId, $this->system, $cancellation, $this->steer(...), $this->handOver(...));
             $this->away->turnDone();
         });
     }
@@ -1043,6 +1070,7 @@ final class Chat
      */
     private function steer(): array
     {
+        $this->backgroundNow = false; // the step it asked to end has ended
         $messages = $this->steering;
         $this->steering = [];
         if ($messages !== []) {
@@ -1113,6 +1141,7 @@ final class Chat
                 $state = 'error';
             } finally {
                 $this->turn = null;
+                $this->backgroundNow = false;
                 $this->remoteTurn = false;
                 $this->spinner = null;
                 $this->revision++;
@@ -1836,6 +1865,77 @@ final class Chat
     }
 
     /**
+     * Seconds the commands running in the foreground have left before they
+     * go on in the background: none once Ctrl-B asked, a grace once the
+     * user wrote, so one nearly done still gives its result; null till then.
+     */
+    private function handOver(): ?float
+    {
+        return match (true) {
+            $this->backgroundNow => 0.0,
+            $this->steering !== [] => Shells::GRACE,
+            default => null,
+        };
+    }
+
+    /**
+     * The row above the status line while commands run in the background:
+     * how many, and what, dim.
+     */
+    private function shellsLine(int $width): ?string
+    {
+        $shells = $this->shells?->all() ?? [];
+        if ($shells === []) {
+            return null;
+        }
+        $count = count($shells);
+        $commands = implode(', ', array_map(static fn (array $shell): string => strtok($shell['command'], "\n") ?: '', $shells));
+        return Style::dim(Style::truncate("● {$count} background shell" . ($count === 1 ? '' : 's') . " · {$commands}", $width));
+    }
+
+    /**
+     * The commands running in the background, each its number, what it is
+     * and how long it has run; `stop` stops one, or all.
+     */
+    private function showShells(string $arguments): void
+    {
+        $shells = $this->shells?->all() ?? [];
+        $words = preg_split('/\s+/', trim($arguments), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        if (($words[0] ?? '') === 'stop') {
+            $ids = isset($words[1]) ? [(int) $words[1]] : array_keys($shells);
+            $ids = array_values(array_filter($ids, static fn (int $id): bool => isset($shells[$id])));
+            if ($ids === []) {
+                $this->note(isset($words[1]) ? "No background shell {$words[1]}" : 'No background shells');
+                return;
+            }
+            foreach ($ids as $id) {
+                $this->shells?->stop($id);
+            }
+            $this->note('Stopped ' . (count($ids) === 1 ? "shell {$ids[0]}" : count($ids) . ' shells'));
+            return;
+        }
+        if ($words !== []) {
+            $this->say('Usage: /shells [stop [number]]');
+            return;
+        }
+        if ($shells === []) {
+            $this->note('No background shells');
+            return;
+        }
+        $width = strlen((string) max(array_keys($shells))) + 2;
+        $now = microtime(true);
+        $lines = [Style::dim('· Background shells')];
+        foreach ($shells as $id => $shell) {
+            $took = self::duration($now - $shell['started']);
+            $room = max(10, $this->region->width() - 2 - $width - strlen($took) - 3);
+            $lines[] = '  ' . str_pad((string) $id, $width) . Style::truncate(strtok($shell['command'], "\n") ?: '', $room) . Style::dim(' · ' . $took);
+        }
+        $lines[] = '  ' . Style::dim('/shells stop [number] to stop');
+        $this->region->gap();
+        $this->region->print(implode("\n", $lines) . "\n");
+    }
+
+    /**
      * The plugins installed and what each adds: its commands, tools, events,
      * skills and MCP servers, or why it is off.
      */
@@ -2148,10 +2248,12 @@ final class Chat
         $width = max(20, $columns - 2 * $margin);
         $lines = [];
         if ($this->spinner !== null) {
-            $lines[] = $this->spinner->render($width, hint: 'esc to stop');
+            $lines[] = $this->spinner->render($width, hint: ($this->shells?->foreground() ?? 0) > 0 && !$this->backgroundNow ? 'esc to stop · ctrl+b to background' : 'esc to stop');
         }
-        foreach ($this->steering as $waiting) {
-            $lines[] = Style::dim(Style::truncate('  ↳ ' . strtok($waiting, "\n"), $width));
+        $now = !$this->backgroundNow && ($this->shells?->foreground() ?? 0) > 0 ? ' · ctrl+enter to send now' : '';
+        foreach ($this->steering as $index => $waiting) {
+            $hint = $index === array_key_last($this->steering) ? $now : '';
+            $lines[] = Style::dim(Style::truncate('  ↳ ' . strtok($waiting, "\n"), max(1, $width - strlen($hint))) . $hint);
         }
         $rule = Style::dim(str_repeat('─', $columns));
         $cursor = null;
@@ -2222,6 +2324,8 @@ final class Chat
                 $lines[] = Style::dim(Style::truncate(implode(' · ', $stats), $width)); // inline: no corner stays
             }
         }
+        $shellsLine = $this->shellsLine(max(1, $columns - 2 * $margin));
+        if ($shellsLine !== null) { $lines[] = $shellsLine; }
         $shareLine = $this->shareStatusLine(max(1, $columns - 2 * $margin));
         if ($shareLine !== null) { $lines[] = $shareLine; }
         $lines[] = $this->status(max(1, $columns - 2 * $margin)); // the real room: a row too long would wrap

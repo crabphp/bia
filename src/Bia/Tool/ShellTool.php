@@ -9,6 +9,7 @@ use Bia\Contracts\ToolContext;
 use Bia\Contracts\ToolDefinition;
 use Bia\Contracts\ToolResult;
 use Crab\Engine\Async\Cancellation;
+use Crab\Engine\Process\SubprocessResult;
 
 /**
  * Runs a command in the user's shell (bash or zsh; bash, or sh, otherwise)
@@ -25,7 +26,9 @@ use Crab\Engine\Async\Cancellation;
  * without colour codes or progress redrawn over itself. The agent cuts what
  * is long and saves it whole; the cap here only guards memory. A command
  * still running at its timeout is stopped; one meant to keep running goes
- * in the background, and shell_output reads it.
+ * in the background, and shell_output reads it. One still running two
+ * seconds after the user writes goes on in the background too, so their
+ * message is not held.
  */
 final readonly class ShellTool implements Tool
 {
@@ -106,15 +109,27 @@ final readonly class ShellTool implements Tool
             return new ToolResult("Started in the background as shell {$id}. Read its output with shell_output (id {$id}); stop it with kill: true.", true, ['background' => $id]);
         }
         $timeout = max(1.0, min(self::MOST_SECONDS, (float) ($arguments['timeout'] ?? $this->defaultTimeout)));
-        $result = $this->process->run(
-            $this->argv('', $command, $cancellation),
-            $directory,
-            $timeout,
-            self::MOST_BYTES,
-            cancellation: $cancellation,
-            output: $context->output,
-            environment: self::ENVIRONMENT,
-        );
+        if ($this->shells !== null && $context->steered !== null) {
+            // Run so that it can go on in the background when the user writes, rather than hold their message.
+            $run = $this->shells->run($this->argv("exec </dev/null\n", $command, $cancellation), $command, $directory, self::ENVIRONMENT, $timeout, self::MOST_BYTES, $context->steered, $cancellation, $context->output);
+            if ($run['background'] !== null) {
+                $text = self::clean($run['output']);
+                $text .= ($text === '' || str_ends_with($text, "\n") ? '' : "\n")
+                    . "[still running: moved to the background for the user, as shell {$run['background']}. Read its output with shell_output (id {$run['background']}); stop it with kill: true.]";
+                return new ToolResult($text, true, ['background' => $run['background']]);
+            }
+            $result = new SubprocessResult($run['exit'], '', '', $run['output'], $run['timedOut'], $run['truncated']);
+        } else {
+            $result = $this->process->run(
+                $this->argv('', $command, $cancellation),
+                $directory,
+                $timeout,
+                self::MOST_BYTES,
+                cancellation: $cancellation,
+                output: $context->output,
+                environment: self::ENVIRONMENT,
+            );
+        }
         $text = self::clean($result->output);
         $end = match (true) {
             $result->timedOut => "[stopped after {$timeout}s, its timeout"

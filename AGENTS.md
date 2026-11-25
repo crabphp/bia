@@ -119,6 +119,16 @@ the rule here first, with the user's agreement.
   (`Exploring` while one runs), a line under it for each kind: the files
   read, the places listed, each search.
 - Running: `• Running …` with its last three lines, live.
+- A command still running two seconds after the user writes, or at once
+  on Ctrl-B, or on Ctrl-Enter (Enter with the input empty where the terminal
+  cannot tell them apart) to send what waits now (the spinner's hint and the
+  waiting message's, dim, say so while one runs), goes on in the background:
+  `• Moved … to the background`, its output so far under it.
+  While any run in the background, one dim row sits above the status line
+  (and the sharing row), `● 2 background shells · npm run dev, sleep 60`,
+  cut with `…`; `/shells` lists them as `/plugins` does, set in two
+  columns, each its number, command and, dim, how long it has run, and
+  `/shells stop [number]` stops one or all.
 - Once a turn is done, or the next message starts, each of its runs of
   tool calls collapses into one line of counts, `• Ran 2 commands, edited
   1 file (+2 −1), read 2 files · 1 failed`, its dot red if any failed.

@@ -78,7 +78,7 @@ use Crab\HttpClient\Client;
  */
 final class Application
 {
-    public const VERSION = '0.1.10';
+    public const VERSION = '0.1.11';
 
     /**
      * @param list<string> $arguments
@@ -698,6 +698,7 @@ final class Application
                 memory: $built['memory'],
                 update: self::updates($config),
                 plugins: $plugins,
+                shells: $shells,
                 reload: static function (Config $current) use ($overrides, $setup, $plugins): array {
                     // Read again as at the start, on the model and effort chosen since.
                     $config = Config::load(overrides: $overrides);

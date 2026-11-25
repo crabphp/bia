@@ -438,16 +438,27 @@ final class Screen implements Surface
      */
     private function wrap(string $line): array
     {
+        return self::lineRows($line, $this->width);
+    }
+
+    /**
+     * A line as rows on a screen $columns wide, as wrap() sets them; Region
+     * sets its lines so too.
+     *
+     * @return list<string>
+     */
+    public static function lineRows(string $line, int $columns): array
+    {
         $space = str_repeat(' ', self::MARGIN);
         if (str_contains($line, "\e[K")) {
             // Shaded: the whole width, the margin's space inside the colour, on every row it takes.
             preg_match('/^(?:\e\[[0-9;]*m)*/', $line, $style);
             $padded = $style[0] . $space . substr($line, strlen($style[0]));
-            return Style::wrapAnsi($padded, max(1, $this->width), max(self::MARGIN, self::hang($padded)));
+            return Style::wrapAnsi($padded, max(1, $columns), max(self::MARGIN, self::hang($padded)));
         }
         return array_map(
             static fn (string $row): string => $row === '' ? '' : $space . $row,
-            Style::wrapAnsi($line, max(1, $this->width - 2 * self::MARGIN), self::hang($line)),
+            Style::wrapAnsi($line, max(1, $columns - 2 * self::MARGIN), self::hang($line)),
         );
     }
 

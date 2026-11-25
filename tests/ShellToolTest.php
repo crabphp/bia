@@ -99,6 +99,54 @@ final class ShellToolTest extends TestCase
         self::assertFalse($this->read(['id' => 9])->ok, 'No such shell.');
     }
 
+    public function testWhileTheUserHasNotWrittenACommandRunsAsInTheForeground(): void
+    {
+        $quiet = static fn (): ?float => null;
+        self::assertSame("cat cat true 0\n", $this->call(['command' => 'cat; echo "$PAGER $GIT_PAGER $GIT_EDITOR $GIT_TERMINAL_PROMPT"', 'timeout' => 5], $quiet)->text, 'stdin is empty here too.');
+        self::assertSame("green\n100%\n", $this->call(['command' => "printf '\\033[32mgreen\\033[0m\\n 10%%\\r100%%\\n'"], $quiet)->text);
+        $failed = $this->call(['command' => 'echo oops >&2; exit 3'], $quiet);
+        self::assertSame("oops\n[exit code 3]", $failed->text);
+        $slow = $this->call(['command' => 'echo begun; sleep 5', 'timeout' => 1], $quiet);
+        self::assertFalse($slow->ok);
+        self::assertStringStartsWith("begun\n[stopped after 1s, its timeout", $slow->text);
+        self::assertSame([], (new \ReflectionProperty(Shells::class, 'shells'))->getValue((new \ReflectionProperty(ShellOutputTool::class, 'shells'))->getValue($this->output)), 'None of them is left as a background shell.');
+    }
+
+    public function testACommandNearlyDoneWhenTheUserWritesStillGivesItsResult(): void
+    {
+        $result = $this->call(['command' => 'echo first; sleep 0.5; echo second; exit 5', 'timeout' => 30], static fn (): ?float => Shells::GRACE);
+        self::assertSame("first\nsecond\n[exit code 5]", $result->text, 'It ended within the grace: its result whole, nothing in the background.');
+        self::assertArrayNotHasKey('background', $result->data);
+    }
+
+    public function testACommandStillRunningAfterTheGraceGoesOnInTheBackground(): void
+    {
+        $started = microtime(true);
+        $result = $this->call(['command' => 'echo first; sleep ' . (Shells::GRACE + 1) . '; echo second; exit 5', 'timeout' => 30], static fn (): ?float => Shells::GRACE);
+        self::assertLessThan(Shells::GRACE + 0.5, microtime(true) - $started, 'It did not wait for the command.');
+        self::assertTrue($result->ok);
+        self::assertSame(1, $result->data['background']);
+        self::assertStringStartsWith("first\n[still running: moved to the background for the user, as shell 1.", $result->text);
+
+        $text = '';
+        do {
+            $read = $this->read(['id' => 1, 'wait' => 5]);
+            $text .= $read->text;
+        } while (str_contains($read->text, 'still running'));
+        self::assertStringContainsString('second', $text, 'What it printed afterwards is kept for shell_output.');
+        self::assertStringNotContainsString('first', $text, 'What the result already had is not read again.');
+        self::assertStringEndsWith('[shell 1 exited with code 5]', $text);
+    }
+
+    public function testAskedToAtOnceACommandGoesOnInTheBackgroundWithoutTheGrace(): void
+    {
+        $started = microtime(true);
+        $result = $this->call(['command' => 'sleep 5', 'timeout' => 30], static fn (): ?float => microtime(true) - $started > 0.2 ? 0.0 : null);
+        self::assertLessThan(0.6, microtime(true) - $started);
+        self::assertSame(1, $result->data['background']);
+        self::assertStringEndsWith('[shell 1 was stopped]', $this->read(['id' => 1, 'kill' => true])->text);
+    }
+
     /**
      * @return iterable<string, array{string}>
      */
@@ -156,9 +204,9 @@ final class ShellToolTest extends TestCase
     /**
      * @param array<string, mixed> $arguments
      */
-    private function call(array $arguments): ToolResult
+    private function call(array $arguments, ?\Closure $steered = null): ToolResult
     {
-        return Task::spawn(EventLoop::current(), fn (): ToolResult => $this->shell->execute($arguments, new ToolContext($this->root, 'test')))->await();
+        return Task::spawn(EventLoop::current(), fn (): ToolResult => $this->shell->execute($arguments, new ToolContext($this->root, 'test', steered: $steered)))->await();
     }
 
     /**

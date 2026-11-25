@@ -103,6 +103,27 @@ final class TuiTest extends TestCase
         self::assertSame(['char:a', 'up', 'enter', 'backspace', 'ctrl-c', 'ctrl-left', 'ctrl-left', 'alt-enter', "paste:one\ntwo", 'char:é', 'unknown', 'ctrl-w'], $names);
     }
 
+    public function testCtrlEnterIsToldFromEnterWhereTheTerminalTellsIt(): void
+    {
+        foreach (["\e[27;5;13~", "\e[13;5u"] as $buffer) {
+            self::assertSame('ctrl-enter', Keys::take($buffer)?->name, 'modifyOtherKeys, and CSI u.');
+        }
+        $editor = new Editor();
+        $editor->key(new Key('char', 'a'));
+        self::assertTrue($editor->key(new Key('ctrl-enter')), 'It sends, as Enter does.');
+    }
+
+    public function testCtrlBIsAKeyOfItsOwnAndLeftInTheEditor(): void
+    {
+        $buffer = "\x02";
+        self::assertSame('ctrl-b', Keys::take($buffer)?->name, 'Chat takes it to move a command to the background.');
+        $editor = new Editor();
+        $editor->key(new Key('char', 'a'));
+        $editor->key(new Key('ctrl-b'));
+        $editor->key(new Key('char', 'b'));
+        self::assertSame('ba', $editor->text(), 'Otherwise it moves left, as in Emacs.');
+    }
+
     public function testEscapeFollowedByAControlKeyIsTwoKeys(): void
     {
         $buffer = "\e\x04\ex";
@@ -262,6 +283,19 @@ final class TuiTest extends TestCase
         self::assertStringContainsString(" hello world\r\n partial\r\ninput", $screen, 'The unfinished line stays above the region, set in by the margin as all output is.');
         self::assertStringContainsString("\e[1A\e[J", $screen, 'Redrawing goes back to the top of the region and clears it.');
         self::assertStringEndsWith(" partial\r\n\e[?25l\e[?2026l\e[?25h", $screen, 'Closing finishes the line and removes the region.');
+    }
+
+    public function testInlineALongLineIsWrappedAtAWordInsideTheMargins(): void
+    {
+        EventLoop::install(new StreamSelectEventLoop());
+        $output = fopen('php://memory', 'w+');
+        $region = new Region(new Terminal(STDIN, $output, [20, 20]));
+        $region->print("Read its output with shell_output now\n• a bullet that wraps over\n");
+        $region->close();
+        rewind($output);
+        $screen = (string) stream_get_contents($output);
+        self::assertStringContainsString(" Read its output\r\n with shell_output\r\n now\r\n", $screen, 'Wrapped by Bia at a word, each row set in: none left for the terminal to break at its edge.');
+        self::assertStringContainsString(" • a bullet that\r\n   wraps over\r\n", $screen, 'Under the text after its marker, as fullscreen hangs it.');
     }
 
     public function testSlashCommandsRunAndComplete(): void
